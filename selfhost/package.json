@@ -1,0 +1,19 @@
+{
+  "name": "relic-selfhost",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hostable Relic sync server. Runs the exact same worker code as Relic Cloud, backed by local SQLite + local-disk blobs instead of Cloudflare D1/R2. Account-less, passphrase-only, zero-knowledge.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "smoke": "tsx test/smoke.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.0",
+    "jose": "^6.2.3",
+    "tsx": "^4.19.2"
+  }
+}

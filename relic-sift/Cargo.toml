@@ -1,0 +1,56 @@
+# relic-sift — Relic's classification pipeline (spec: relic-sift-classification-pipeline-spec.md).
+# Three-stage cascade: Stage A deterministic rules -> Stage B small local ONNX models -> Stage C fusion.
+# Local-only: no network on the classification hot path (downloads happen only via `sift models download`).
+[package]
+name = "relic-sift"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Relic's local classification pipeline: deterministic rules + small ONNX models."
+
+[lib]
+name = "relic_sift"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sift"
+path = "src/bin/sift.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+regex = "1"
+infer = "0.16"
+blake3 = "1"
+image = "0.25.10"
+kamadak-exif = "0.6.1"
+ureq = "3.3.0"
+anyhow = "1.0.102"
+pdf-extract = "0.10.0"
+zip = "8.6.0"
+clap = { version = "4.6.1", features = ["derive"] }
+time = { version = "0.3.47", features = ["formatting"] }
+tokenizers = "0.23.1"
+ocrs = "0.12.2"
+rten = "0.24.0"
+# Qwen3.5's hybrid state cache (conv + recurrent + KV) is fp16 on the wire,
+# unlike every other model here, whose graph tensors are f32. `half` gives us
+# the element type; the `half` feature on `ort` below is what lets a
+# Tensor<f16> be built and extracted at all.
+half = "2.7.1"
+
+# load-dynamic: the ONNX Runtime shared library is fetched by `sift models
+# download` — the static pyke binaries need a newer MSVC STL than many machines
+# have, and on macOS the dylib ships inside the .app. The DirectML execution
+# provider is a Windows/DX12 concept, so that feature is target-gated
+# (docs/macos-port.md Phase 3); stage_b::make_session_dml has a non-Windows
+# stub to match.
+[target.'cfg(windows)'.dependencies]
+# SetPriorityClass only — so the background passes yield to whatever the user
+# is actually doing instead of competing with it at normal priority.
+windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_Foundation"] }
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["load-dynamic", "ndarray", "std", "api-24", "directml", "half"] }
+
+[target.'cfg(not(windows))'.dependencies]
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["load-dynamic", "ndarray", "std", "api-24", "half"] }

@@ -1,0 +1,2 @@
+203.0.113.42 - - [11/Jun/2026:14:55:02 +0000] "GET /api/v1/relics?cursor=abc HTTP/1.1" 200 4821 "-" "relic-app/0.1"
+203.0.113.42 - - [11/Jun/2026:14:55:09 +0000] "POST /api/v1/relics HTTP/1.1" 201 89 "-" "relic-app/0.1"

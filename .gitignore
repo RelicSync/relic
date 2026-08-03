@@ -1,0 +1,38 @@
+# Rust
+target/
+
+# Node / Worker
+node_modules/
+.wrangler/
+.dev.vars
+worker/dev-*.log
+
+# Live wrangler configs hold real resource ids — copy from
+# worker/wrangler.example.toml and keep your real one out of git.
+wrangler.toml
+
+# Secrets / env — never commit
+.env
+.env.*
+
+# Flutter / Dart
+.dart_tool/
+build/
+
+# IDE
+.idea/
+.vscode/
+
+# Local artifacts
+*.db
+*.sqlite
+.DS_Store
+
+# Release installer output (app/scripts/build_release.ps1)
+dist/
+
+# Android release build artifacts and signing material (never source)
+*.aab
+*.apk
+*.jks
+key.properties

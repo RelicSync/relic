@@ -1,0 +1,1167 @@
+{
+  "items": [
+    {
+      "path": "text/aws_key.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "api_key",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "secret"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/github_token.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "api_key",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "secret"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/stripe_key.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "api_key",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "secret"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/google_api_key.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "api_key",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "secret"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/slack_token.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "api_key",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "secret"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/jwt.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "secret_other",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "secret"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/pem_key.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "secret_other",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "secret"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/high_entropy_token.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "secret_other",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "secret"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/env_file.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "api_key",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "secret"
+        ]
+      },
+      "note": "assigned secret inside an .env blob"
+    },
+    {
+      "path": "text/url_plain.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "url",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "url"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/url_long_query.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "url",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "url"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/email_address.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "unsorted",
+        "any_of": [
+          "chat_message",
+          "note_prose",
+          "structured_data",
+          "log_line"
+        ],
+        "labels": [
+          "pii_present"
+        ],
+        "relic_tags": [
+          "email",
+          "pii"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/phone_number.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "unsorted",
+        "any_of": [
+          "chat_message",
+          "note_prose",
+          "structured_data",
+          "log_line"
+        ],
+        "labels": [
+          "pii_present"
+        ],
+        "relic_tags": [
+          "phone",
+          "pii"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/ipv4.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "unsorted",
+        "any_of": [
+          "chat_message",
+          "note_prose",
+          "structured_data",
+          "log_line"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "ip"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/hex_color.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "unsorted",
+        "any_of": [
+          "chat_message",
+          "note_prose",
+          "structured_data",
+          "log_line"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "color"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/win_path.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "unsorted",
+        "any_of": [
+          "chat_message",
+          "note_prose",
+          "structured_data",
+          "log_line"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "path"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/python_code.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "code",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "code",
+          "python"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/rust_code.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "code",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "code",
+          "rust"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/js_code.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "code",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "code",
+          "javascript"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/sql_query.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "code",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "sql"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/log_server.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "log_line",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "log"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/log_syslog.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "log_line",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "log"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/stack_trace_python.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "log_line",
+        "any_of": [
+          "code"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "log"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/chat_short.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "chat_message",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "chat"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/chat_thread.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "chat_message",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "chat"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/email_body_work.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "email_body",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "mail"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/email_body_support.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "email_body",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "mail"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/note_meeting.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "note_prose",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "note"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/note_grocery.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "note_prose",
+        "any_of": [
+          "chat_message",
+          "todo_list"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "note"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/note_essay.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "note_prose",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "note"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/markdown_doc.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "note_prose",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "markdown",
+          "note"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/json_payload.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "structured_data",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "json",
+          "data"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/yaml_config.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "structured_data",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "data",
+          "yaml"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/xml_snippet.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "structured_data",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "data",
+          "xml"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/csv_table.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "structured_data",
+        "any_of": [],
+        "labels": [
+          "pii_present"
+        ],
+        "relic_tags": [
+          "data",
+          "csv",
+          "pii"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/credit_card_note.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "note_prose",
+        "any_of": [
+          "chat_message",
+          "unsorted",
+          "structured_data"
+        ],
+        "labels": [
+          "pii_present"
+        ],
+        "relic_tags": [
+          "pii"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/tracking_ups.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "tracking_number",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "tracking"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/tracking_usps.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "tracking_number",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "tracking"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/otp_sms.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "otp_code",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "otp"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/otp_bare.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "otp_code",
+        "any_of": [
+          "unsorted"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "otp"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/address_office.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "address",
+        "any_of": [
+          "note_prose",
+          "unsorted"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "address"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/address_shipping.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "address",
+        "any_of": [
+          "note_prose",
+          "structured_data"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "address"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/todo_checkbox.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "todo_list",
+        "any_of": [
+          "note_prose"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "todo"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/todo_numbered.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "todo_list",
+        "any_of": [
+          "note_prose"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "todo"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/uuid.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "unsorted",
+        "any_of": [
+          "chat_message",
+          "note_prose",
+          "structured_data",
+          "log_line"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "uuid"
+        ]
+      },
+      "note": "must NOT tag secret (public identifier)"
+    },
+    {
+      "path": "text/version_string.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "unsorted",
+        "any_of": [
+          "chat_message",
+          "note_prose",
+          "structured_data",
+          "log_line"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "version"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/eth_address.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "unsorted",
+        "any_of": [
+          "chat_message",
+          "note_prose",
+          "structured_data",
+          "log_line"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "crypto"
+        ]
+      },
+      "note": "must NOT tag secret (public address)"
+    },
+    {
+      "path": "text/geo_coords.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "unsorted",
+        "any_of": [
+          "chat_message",
+          "note_prose",
+          "structured_data",
+          "log_line"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "geo"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/iban.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "unsorted",
+        "any_of": [
+          "chat_message",
+          "note_prose",
+          "structured_data",
+          "log_line"
+        ],
+        "labels": [
+          "pii_present"
+        ],
+        "relic_tags": [
+          "iban",
+          "pii"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "files/report.pdf",
+      "kind": "file",
+      "gold": {
+        "primary": "note_prose",
+        "any_of": [
+          "email_body",
+          "file_pdf"
+        ],
+        "labels": [],
+        "relic_tags": []
+      },
+      "note": "prose pdf"
+    },
+    {
+      "path": "files/letter.pdf",
+      "kind": "file",
+      "gold": {
+        "primary": "email_body",
+        "any_of": [
+          "note_prose",
+          "file_pdf"
+        ],
+        "labels": [],
+        "relic_tags": []
+      },
+      "note": "letter pdf"
+    },
+    {
+      "path": "files/spec.docx",
+      "kind": "file",
+      "gold": {
+        "primary": "note_prose",
+        "any_of": [
+          "email_body",
+          "file_office"
+        ],
+        "labels": [],
+        "relic_tags": []
+      },
+      "note": "docx prose"
+    },
+    {
+      "path": "files/page.html",
+      "kind": "file",
+      "gold": {
+        "primary": "note_prose",
+        "any_of": [
+          "email_body"
+        ],
+        "labels": [],
+        "relic_tags": []
+      },
+      "note": "html article"
+    },
+    {
+      "path": "files/readme.md",
+      "kind": "file",
+      "gold": {
+        "primary": "note_prose",
+        "any_of": [
+          "code",
+          "structured_data"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "markdown"
+        ]
+      },
+      "note": "markdown readme"
+    },
+    {
+      "path": "files/config.json",
+      "kind": "file",
+      "gold": {
+        "primary": "structured_data",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "json",
+          "data"
+        ]
+      },
+      "note": "json config file"
+    },
+    {
+      "path": "files/data.csv",
+      "kind": "file",
+      "gold": {
+        "primary": "structured_data",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "data",
+          "csv"
+        ]
+      },
+      "note": "csv inventory"
+    },
+    {
+      "path": "files/app_config.yaml",
+      "kind": "file",
+      "gold": {
+        "primary": "structured_data",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "data",
+          "yaml"
+        ]
+      },
+      "note": "yaml config"
+    },
+    {
+      "path": "files/archive.zip",
+      "kind": "file",
+      "gold": {
+        "primary": "file_archive",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "file",
+          "archive"
+        ]
+      },
+      "note": "zip archive"
+    },
+    {
+      "path": "files/random.bin",
+      "kind": "file",
+      "gold": {
+        "primary": "file_binary",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "file"
+        ]
+      },
+      "note": "opaque binary"
+    },
+    {
+      "path": "images/screenshot_desktop_full.png",
+      "kind": "image",
+      "gold": {
+        "primary": "screenshot",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "screenshot"
+        ]
+      },
+      "note": "real full-desktop capture"
+    },
+    {
+      "path": "images/screenshot_code_editor.png",
+      "kind": "image",
+      "gold": {
+        "primary": "screenshot",
+        "any_of": [
+          "api_key"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "screenshot"
+        ]
+      },
+      "note": "synthetic IDE screenshot"
+    },
+    {
+      "path": "images/screenshot_chat_app.png",
+      "kind": "image",
+      "gold": {
+        "primary": "screenshot",
+        "any_of": [
+          "chat_message"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "screenshot"
+        ]
+      },
+      "note": "synthetic phone chat screenshot"
+    },
+    {
+      "path": "images/screenshot_terminal_apikey.png",
+      "kind": "image",
+      "gold": {
+        "primary": "api_key",
+        "any_of": [
+          "secret_other"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "secret"
+        ]
+      },
+      "note": "spec \u00a76.2: a screenshot of an API key must still be caught as api_key (OCR \u2192 Stage A)"
+    },
+    {
+      "path": "images/receipt_grocery.png",
+      "kind": "image",
+      "gold": {
+        "primary": "receipt",
+        "any_of": [
+          "document_scan"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "receipt"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "images/receipt_cafe.png",
+      "kind": "image",
+      "gold": {
+        "primary": "receipt",
+        "any_of": [
+          "document_scan"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "receipt"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "images/receipt_hardware.png",
+      "kind": "image",
+      "gold": {
+        "primary": "receipt",
+        "any_of": [
+          "document_scan"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "receipt"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "images/scan_letter.png",
+      "kind": "image",
+      "gold": {
+        "primary": "document_scan",
+        "any_of": [
+          "screenshot",
+          "receipt"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "scan"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "images/scan_recipe.png",
+      "kind": "image",
+      "gold": {
+        "primary": "document_scan",
+        "any_of": [
+          "screenshot",
+          "receipt"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "scan"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "images/diagram_flowchart.png",
+      "kind": "image",
+      "gold": {
+        "primary": "diagram",
+        "any_of": [
+          "screenshot"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "diagram"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "images/diagram_barchart.png",
+      "kind": "image",
+      "gold": {
+        "primary": "diagram",
+        "any_of": [
+          "screenshot"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "diagram"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "images/photo_01_mountain.jpg",
+      "kind": "image",
+      "gold": {
+        "primary": "photo",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "photo",
+          "animal"
+        ]
+      },
+      "note": "picsum seed relic-mountain"
+    },
+    {
+      "path": "images/photo_02_city.jpg",
+      "kind": "image",
+      "gold": {
+        "primary": "photo",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "photo"
+        ]
+      },
+      "note": "picsum seed relic-city"
+    },
+    {
+      "path": "images/photo_03_forest.jpg",
+      "kind": "image",
+      "gold": {
+        "primary": "photo",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "photo"
+        ]
+      },
+      "note": "picsum seed relic-forest"
+    },
+    {
+      "path": "images/photo_04_coast.jpg",
+      "kind": "image",
+      "gold": {
+        "primary": "photo",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "photo"
+        ]
+      },
+      "note": "picsum seed relic-coast"
+    },
+    {
+      "path": "images/photo_05_meadow.jpg",
+      "kind": "image",
+      "gold": {
+        "primary": "photo",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "photo"
+        ]
+      },
+      "note": "picsum seed relic-meadow"
+    },
+    {
+      "path": "images/photo_06_river.jpg",
+      "kind": "image",
+      "gold": {
+        "primary": "photo",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "photo"
+        ]
+      },
+      "note": "picsum seed relic-river"
+    },
+    {
+      "path": "images/meme_deploy.png",
+      "kind": "image",
+      "gold": {
+        "primary": "meme",
+        "any_of": [
+          "photo"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "meme"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "images/meme_classifier.png",
+      "kind": "image",
+      "gold": {
+        "primary": "meme",
+        "any_of": [
+          "photo"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "meme"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "images/qr_pairing.png",
+      "kind": "image",
+      "gold": {
+        "primary": "unsorted",
+        "any_of": [
+          "screenshot",
+          "diagram",
+          "meme",
+          "document_scan",
+          "photo"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "qrcode"
+        ]
+      },
+      "note": "content tag is the point; the category of a bare QR is honestly ambiguous"
+    }
+  ]
+}

@@ -1,0 +1,367 @@
+{
+  "items": 17,
+  "correct": 17,
+  "accuracy": 1.0,
+  "macro_f1": 1.0,
+  "secret_recall": 1.0,
+  "secret_items": 3,
+  "pii_precision": 1.0,
+  "pii_recall": 1.0,
+  "tag_recall": 1.0,
+  "needs_review_rate": 0.0,
+  "p50_ms": 9,
+  "p95_ms": 412,
+  "per_category": {
+    "api_key": {
+      "tp": 2,
+      "fp": 0,
+      "fn_": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "chat_message": {
+      "tp": 1,
+      "fp": 0,
+      "fn_": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "code": {
+      "tp": 1,
+      "fp": 0,
+      "fn_": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "email_body": {
+      "tp": 1,
+      "fp": 0,
+      "fn_": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "log_line": {
+      "tp": 1,
+      "fp": 0,
+      "fn_": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "note_prose": {
+      "tp": 3,
+      "fp": 0,
+      "fn_": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "photo": {
+      "tp": 3,
+      "fp": 0,
+      "fn_": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "receipt": {
+      "tp": 1,
+      "fp": 0,
+      "fn_": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "screenshot": {
+      "tp": 1,
+      "fp": 0,
+      "fn_": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "secret_other": {
+      "tp": 1,
+      "fp": 0,
+      "fn_": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "structured_data": {
+      "tp": 1,
+      "fp": 0,
+      "fn_": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "url": {
+      "tp": 1,
+      "fp": 0,
+      "fn_": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    }
+  },
+  "rows": [
+    {
+      "path": "text/gitlab_pat.txt",
+      "gold": "api_key",
+      "predicted": "api_key",
+      "confidence": 0.97,
+      "ok": true,
+      "needs_review": false,
+      "missing_tags": [],
+      "label_ok": true,
+      "total_ms": 25,
+      "top_signals": [
+        "rule:gitlab_pat=0.97",
+        "deterministic_win:rule:gitlab_pat=0.97"
+      ]
+    },
+    {
+      "path": "text/sendgrid_key.txt",
+      "gold": "api_key",
+      "predicted": "api_key",
+      "confidence": 0.97,
+      "ok": true,
+      "needs_review": false,
+      "missing_tags": [],
+      "label_ok": true,
+      "total_ms": 0,
+      "top_signals": [
+        "rule:sendgrid_key=0.97",
+        "deterministic_win:rule:sendgrid_key=0.97"
+      ]
+    },
+    {
+      "path": "text/ssh_private_key.txt",
+      "gold": "secret_other",
+      "predicted": "secret_other",
+      "confidence": 0.97,
+      "ok": true,
+      "needs_review": false,
+      "missing_tags": [],
+      "label_ok": true,
+      "total_ms": 0,
+      "top_signals": [
+        "rule:private_key_pem=0.97",
+        "deterministic_win:rule:private_key_pem=0.97"
+      ]
+    },
+    {
+      "path": "text/go_code.txt",
+      "gold": "code",
+      "predicted": "code",
+      "confidence": 0.653,
+      "ok": true,
+      "needs_review": false,
+      "missing_tags": [],
+      "label_ok": true,
+      "total_ms": 11,
+      "top_signals": [
+        "format:code_density=0.60",
+        "head:note_prose=0.32",
+        "disagreement:a=code,b=note_prose->code=0.65"
+      ]
+    },
+    {
+      "path": "text/nginx_log.txt",
+      "gold": "log_line",
+      "predicted": "log_line",
+      "confidence": 0.471,
+      "ok": true,
+      "needs_review": false,
+      "missing_tags": [],
+      "label_ok": true,
+      "total_ms": 19,
+      "top_signals": [
+        "head:log_line=0.47",
+        "head:structured_data=0.36"
+      ]
+    },
+    {
+      "path": "text/whatsapp_chat.txt",
+      "gold": "chat_message",
+      "predicted": "chat_message",
+      "confidence": 0.651,
+      "ok": true,
+      "needs_review": false,
+      "missing_tags": [],
+      "label_ok": true,
+      "total_ms": 5,
+      "top_signals": [
+        "head:chat_message=0.65"
+      ]
+    },
+    {
+      "path": "text/email_reply.txt",
+      "gold": "email_body",
+      "predicted": "email_body",
+      "confidence": 0.608,
+      "ok": true,
+      "needs_review": false,
+      "missing_tags": [],
+      "label_ok": true,
+      "total_ms": 8,
+      "top_signals": [
+        "head:email_body=0.61"
+      ]
+    },
+    {
+      "path": "text/recipe_note.txt",
+      "gold": "note_prose",
+      "predicted": "note_prose",
+      "confidence": 0.603,
+      "ok": true,
+      "needs_review": false,
+      "missing_tags": [],
+      "label_ok": true,
+      "total_ms": 7,
+      "top_signals": [
+        "head:note_prose=0.60"
+      ]
+    },
+    {
+      "path": "text/toml_config.txt",
+      "gold": "structured_data",
+      "predicted": "structured_data",
+      "confidence": 0.763,
+      "ok": true,
+      "needs_review": false,
+      "missing_tags": [],
+      "label_ok": true,
+      "total_ms": 7,
+      "top_signals": [
+        "format:toml=0.60",
+        "head:structured_data=0.41"
+      ]
+    },
+    {
+      "path": "text/url_fragment.txt",
+      "gold": "url",
+      "predicted": "url",
+      "confidence": 0.97,
+      "ok": true,
+      "needs_review": false,
+      "missing_tags": [],
+      "label_ok": true,
+      "total_ms": 0,
+      "top_signals": [
+        "rule:url=0.97",
+        "deterministic_win:rule:url=0.97"
+      ]
+    },
+    {
+      "path": "text/address_pii.txt",
+      "gold": "note_prose",
+      "predicted": "address",
+      "confidence": 0.902,
+      "ok": true,
+      "needs_review": false,
+      "missing_tags": [],
+      "label_ok": true,
+      "total_ms": 6,
+      "top_signals": [
+        "head:address=0.90"
+      ]
+    },
+    {
+      "path": "files/minutes.pdf",
+      "gold": "note_prose",
+      "predicted": "note_prose",
+      "confidence": 0.604,
+      "ok": true,
+      "needs_review": false,
+      "missing_tags": [],
+      "label_ok": true,
+      "total_ms": 9,
+      "top_signals": [
+        "magic:pdf:fallback=0.35",
+        "head:note_prose=0.60"
+      ]
+    },
+    {
+      "path": "images/photo_h1.jpg",
+      "gold": "photo",
+      "predicted": "photo",
+      "confidence": 0.96,
+      "ok": true,
+      "needs_review": false,
+      "missing_tags": [],
+      "label_ok": true,
+      "total_ms": 361,
+      "top_signals": [
+        "jpeg_no_exif=0.50",
+        "clip:photo=0.92"
+      ]
+    },
+    {
+      "path": "images/photo_h2.jpg",
+      "gold": "photo",
+      "predicted": "photo",
+      "confidence": 0.862,
+      "ok": true,
+      "needs_review": false,
+      "missing_tags": [],
+      "label_ok": true,
+      "total_ms": 492,
+      "top_signals": [
+        "jpeg_no_exif=0.50",
+        "clip:photo=0.72"
+      ]
+    },
+    {
+      "path": "images/photo_h3.jpg",
+      "gold": "photo",
+      "predicted": "photo",
+      "confidence": 0.775,
+      "ok": true,
+      "needs_review": false,
+      "missing_tags": [],
+      "label_ok": true,
+      "total_ms": 278,
+      "top_signals": [
+        "jpeg_no_exif=0.50",
+        "clip:photo=0.55"
+      ]
+    },
+    {
+      "path": "images/receipt_pharmacy.png",
+      "gold": "receipt",
+      "predicted": "receipt",
+      "confidence": 0.968,
+      "ok": true,
+      "needs_review": false,
+      "missing_tags": [],
+      "label_ok": true,
+      "total_ms": 412,
+      "top_signals": [
+        "png_no_exif=0.55",
+        "ocr:receipt_keywords=0.60",
+        "clip:receipt=0.92"
+      ]
+    },
+    {
+      "path": "images/screenshot_browser.png",
+      "gold": "screenshot",
+      "predicted": "screenshot",
+      "confidence": 0.948,
+      "ok": true,
+      "needs_review": false,
+      "missing_tags": [],
+      "label_ok": true,
+      "total_ms": 401,
+      "top_signals": [
+        "no_exif+screen_dims=0.70",
+        "clip:screenshot=0.82"
+      ]
+    }
+  ]
+}

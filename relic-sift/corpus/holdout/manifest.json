@@ -1,0 +1,240 @@
+{
+  "items": [
+    {
+      "path": "text/gitlab_pat.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "api_key",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "secret"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/sendgrid_key.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "api_key",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "secret"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/ssh_private_key.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "secret_other",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "secret"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/go_code.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "code",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "code"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/nginx_log.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "log_line",
+        "any_of": [
+          "structured_data",
+          "code"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "log"
+        ]
+      },
+      "note": "nginx access log has no ISO-timestamp line starts \u2014 harder"
+    },
+    {
+      "path": "text/whatsapp_chat.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "chat_message",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "chat"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/email_reply.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "email_body",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "mail"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/recipe_note.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "note_prose",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "note"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/toml_config.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "structured_data",
+        "any_of": [
+          "code"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "data"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/url_fragment.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "url",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "url"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "text/address_pii.txt",
+      "kind": "string",
+      "gold": {
+        "primary": "note_prose",
+        "any_of": [
+          "chat_message",
+          "structured_data",
+          "unsorted",
+          "address"
+        ],
+        "labels": [
+          "pii_present"
+        ],
+        "relic_tags": [
+          "pii"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "files/minutes.pdf",
+      "kind": "file",
+      "gold": {
+        "primary": "note_prose",
+        "any_of": [
+          "email_body",
+          "file_pdf"
+        ],
+        "labels": [],
+        "relic_tags": []
+      },
+      "note": "held-out pdf"
+    },
+    {
+      "path": "images/photo_h1.jpg",
+      "kind": "image",
+      "gold": {
+        "primary": "photo",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "photo"
+        ]
+      },
+      "note": "holdout picsum relic-h-alpha"
+    },
+    {
+      "path": "images/photo_h2.jpg",
+      "kind": "image",
+      "gold": {
+        "primary": "photo",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "photo"
+        ]
+      },
+      "note": "holdout picsum relic-h-beta"
+    },
+    {
+      "path": "images/photo_h3.jpg",
+      "kind": "image",
+      "gold": {
+        "primary": "photo",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "photo"
+        ]
+      },
+      "note": "holdout picsum relic-h-gamma"
+    },
+    {
+      "path": "images/receipt_pharmacy.png",
+      "kind": "image",
+      "gold": {
+        "primary": "receipt",
+        "any_of": [
+          "document_scan"
+        ],
+        "labels": [],
+        "relic_tags": [
+          "receipt"
+        ]
+      },
+      "note": ""
+    },
+    {
+      "path": "images/screenshot_browser.png",
+      "kind": "image",
+      "gold": {
+        "primary": "screenshot",
+        "any_of": [],
+        "labels": [],
+        "relic_tags": [
+          "screenshot"
+        ]
+      },
+      "note": "synthetic browser screenshot"
+    }
+  ]
+}

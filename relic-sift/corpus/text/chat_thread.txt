@@ -1,0 +1,4 @@
+[10:42] mike: did you push the fix yet
+[10:43] ana: yeah it's on main
+[10:43] mike: nice, deploying now
+[10:45] ana: 🤞

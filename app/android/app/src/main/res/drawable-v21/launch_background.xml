@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pre-Android-12 splash: Relic's base surface color (day/night variants of
+     @color/launch_bg), matching Flutter's boot frame so launch never flashes. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/launch_bg" />
+</layer-list>

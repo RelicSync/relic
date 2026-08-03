@@ -1,0 +1,7 @@
+fn parse_header(input: &[u8]) -> Result<Header, ParseError> {
+    let magic = u32::from_le_bytes(input[..4].try_into()?);
+    if magic != MAGIC {
+        return Err(ParseError::BadMagic);
+    }
+    Ok(Header { magic, version: input[4] })
+}

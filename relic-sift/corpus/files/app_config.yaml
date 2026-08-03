@@ -1,0 +1,7 @@
+database:
+  url: postgres://localhost:5432/relic
+  pool_size: 8
+cache:
+  backend: redis
+  ttl_seconds: 600
+workers: 4

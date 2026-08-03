@@ -1,0 +1,4 @@
+- [ ] book flights
+- [ ] renew passport before May
+- [x] request time off
+- [ ] travel insurance quotes

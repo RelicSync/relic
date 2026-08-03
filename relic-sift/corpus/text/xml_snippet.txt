@@ -1,0 +1,6 @@
+<configuration>
+  <appSettings>
+    <add key="timeout" value="30"/>
+    <add key="retries" value="3"/>
+  </appSettings>
+</configuration>

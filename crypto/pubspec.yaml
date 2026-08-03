@@ -1,0 +1,20 @@
+name: relic_crypto
+description: >-
+  The client-side encryption for Relic (relic.space) — the exact code that seals
+  your clipboard on your device before it is ever sent. Published so anyone can
+  read it and verify the zero-knowledge claim.
+version: 1.0.0
+repository: https://github.com/RelicSync/relic
+issue_tracker: https://github.com/RelicSync/relic/issues
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+
+dependencies:
+  # XChaCha20-Poly1305 (vault + backups) and AES-GCM (share links).
+  cryptography: ^2.9.0
+  # Argon2id key derivation + SHA-256.
+  hashlib: ^2.3.4
+
+dev_dependencies:
+  test: ^1.25.0

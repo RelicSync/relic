@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- No app-sandbox: Relic ships via Developer ID (docs/macos-port.md D1) —
+	     CGEvent injection, the sift sidecar and the OAuth loopback listener all
+	     need the unsandboxed profile. JIT + network.server stay for Flutter
+	     debug/hot-reload. -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
+</dict>
+</plist>

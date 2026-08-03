@@ -1,0 +1,12 @@
+name = "relic-tmp-mirror"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+workers_dev = true
+account_id = "YOUR_CLOUDFLARE_ACCOUNT_ID"
+
+[vars]
+UPLOAD_TOKEN = "replace-me-generate-a-random-one"
+
+[[r2_buckets]]
+binding = "MODELS"
+bucket_name = "relic-models"

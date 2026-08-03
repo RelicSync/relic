@@ -1,0 +1,30 @@
+# relic-cli — a thin shim over the Relic desktop app's on-device data.
+# No crypto/keys/network: it reads and writes the app's local plaintext SQLite
+# vault and blob cache directly, and lets the app handle sync + ML enrichment.
+[package]
+name = "relic-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "relic"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
+anyhow = "1"
+uuid = { version = "1", features = ["v7"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+dirs = "5"
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+] }

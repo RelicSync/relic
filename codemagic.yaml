@@ -1,0 +1,156 @@
+# Cloud macOS builds for Relic — two workflows on Codemagic's Mac minis:
+#   ios-testflight  Flutter iOS → TestFlight (docs/ios-port.md)
+#   macos-dmg       Flutter macOS desktop + sift sidecar → DMG (docs/macos-port.md)
+#
+# ── One-time setup in the Codemagic UI before the first run ──────────────────
+# 1. codemagic.io → Applications → Add application → connect this GitHub repo.
+# 2. Get an Apple Developer Program membership ($99/yr) if you don't have one.
+# 3. App Store Connect (web, no Mac) → Users and Access → Integrations →
+#    App Store Connect API → create a key (App Manager access). Download the .p8
+#    once; note the Issuer ID and Key ID.
+# 4. Codemagic → Team settings → Integrations → Developer Portal → Manage keys →
+#    add that key. Name it EXACTLY `relic_app_store` (referenced below).
+# 5. App Store Connect → Apps → + → create an app with bundle id
+#    `app.relic.relicApp` (and register that id under Certificates, Identifiers
+#    & Profiles → Identifiers if prompted). This is what TestFlight uploads into.
+# Then: open the app in Codemagic, pick this workflow, Start build. When it's
+# green it auto-uploads to TestFlight → install via the TestFlight app on your
+# iPhone.
+
+workflows:
+  ios-testflight:
+    name: Relic iOS → TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      app_store_connect: relic_app_store   # the API key name from step 4
+    environment:
+      ios_signing:
+        distribution_type: app_store        # TestFlight + App Store
+        bundle_identifier: app.relic.relicApp
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Add Rust iOS targets (super_clipboard / cargokit native ext)
+        script: |
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios || true
+      - name: Flutter pub get
+        script: |
+          cd app
+          flutter pub get
+      - name: Set up code signing (fetch & apply provisioning profiles)
+        script: |
+          cd app
+          xcode-project use-profiles
+      - name: Build signed IPA
+        script: |
+          cd app
+          # Connect to a vault via the in-app Connect screen after install;
+          # no build-time configuration is needed.
+          flutter build ipa --release \
+            --build-number=$BUILD_NUMBER \
+            --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      - app/build/ios/ipa/*.ipa
+      - app/build/ios/ipa/*.app.dSYM.zip
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        # Internal testers only = no Apple beta review wait. Add yourself to an
+        # internal TestFlight group in App Store Connect to get the build instantly.
+
+  # ── macOS desktop build (docs/macos-port.md Phase 6) ───────────────────────
+  # Unsigned by default: builds the .app + the arm64 `sift` sidecar and packages
+  # an ad-hoc-signed DMG — enough to verify the Swift bridges compile, the Rust
+  # `ort` gating builds on Apple Silicon, and to download and smoke-test on any
+  # Mac (right-click → Open past Gatekeeper).
+  #
+  # To ship SIGNED + NOTARIZED builds from this lane later:
+  # 1. Apple Developer portal → Certificates → create a *Developer ID
+  #    Application* certificate; export it (with its private key) as a .p12.
+  # 2. Codemagic → this app's Environment variables → group `macos_signing`:
+  #      RELIC_MAC_CERT_P12        base64 of the .p12            (Secret)
+  #      RELIC_MAC_CERT_PASSWORD   the .p12 password             (Secret)
+  #      RELIC_MAC_SIGN_IDENTITY   e.g. "Developer ID Application: Jordan … (TEAMID)"
+  # 3. Set up the App Store Connect API key integration named `relic_app_store`
+  #    (steps 3–4 of the iOS header above), then uncomment BOTH the
+  #    `groups: [macos_signing]` line and the `integrations:` block below —
+  #    notarytool authenticates with that key, no extra secrets needed.
+  # 4. Publish steps (manual, printed at the end of the build log): upload the
+  #    DMG to R2 `relic-downloads/macos/`, add the macos entry + bump version in
+  #    website/public/latest.json, deploy the website.
+  macos-dmg:
+    name: Relic macOS → DMG
+    instance_type: mac_mini_m2
+    max_build_duration: 75
+    # integrations:                         # uncomment with signing (step 3)
+    #   app_store_connect: relic_app_store  # used by notarytool
+    environment:
+      # groups:
+      #   - macos_signing                   # uncomment once the cert vars exist (step 2)
+      flutter: stable
+      xcode: latest
+    cache:
+      cache_paths:
+        - ~/.cargo
+        - ~/.rustup
+        - $CM_BUILD_DIR/target
+    scripts:
+      - name: Flutter pub get + tests
+        script: |
+          cd app
+          flutter config --enable-macos-desktop
+          flutter pub get
+          flutter test
+      - name: Install Rust (not preinstalled on the macOS image)
+        script: |
+          if [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          fi
+          echo "PATH=$HOME/.cargo/bin:$PATH" >> $CM_ENV
+      - name: Import Developer ID certificate (skipped when unsigned)
+        script: |
+          if [ -z "${RELIC_MAC_CERT_P12:-}" ]; then
+            echo "macos_signing group not configured — producing an unsigned (ad-hoc) build"
+            exit 0
+          fi
+          keychain initialize
+          echo "$RELIC_MAC_CERT_P12" | base64 --decode > /tmp/relic_devid.p12
+          keychain add-certificates \
+            --certificate /tmp/relic_devid.p12 \
+            --certificate-password "${RELIC_MAC_CERT_PASSWORD:-}"
+      - name: Build app + sift sidecar, sign, package DMG
+        script: |
+          ARGS=()
+          if [ -n "${RELIC_MAC_SIGN_IDENTITY:-}" ]; then
+            ARGS+=(--identity "$RELIC_MAC_SIGN_IDENTITY")
+            # Notarize with the App Store Connect API key when the integration
+            # is wired up (header step 3); signed-but-unnotarized otherwise.
+            if [ -n "${APP_STORE_CONNECT_PRIVATE_KEY:-}" ]; then
+              echo "$APP_STORE_CONNECT_PRIVATE_KEY" > /tmp/asc_key.p8
+              ARGS+=(--notary-key /tmp/asc_key.p8 \
+                     --notary-key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+                     --notary-issuer "$APP_STORE_CONNECT_ISSUER_ID")
+            fi
+          fi
+          bash app/scripts/build_release_macos.sh "${ARGS[@]}"
+      - name: Zip the .app + stage artifacts
+        script: |
+          mkdir -p dist
+          ditto -c -k --keepParent \
+            app/build/macos/Build/Products/Release/relic_app.app \
+            dist/relic_app-macos.app.zip
+          # Codemagic's artifact collector skips bare .dmg files (proved in
+          # builds 4–5: the file existed at an exact listed path and was still
+          # not published) — ship the DMG inside a zip instead.
+          for dmg in dist/relic-*.dmg; do
+            [ -e "$dmg" ] && ditto -c -k "$dmg" dist/relic-macos-dmg.zip && break
+          done
+          ls -la dist target/release || true
+    artifacts:
+      - dist/relic-macos-dmg.zip
+      - dist/relic_app-macos.app.zip
+      - target/release/sift

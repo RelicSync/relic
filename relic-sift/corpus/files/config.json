@@ -1,0 +1,5 @@
+{
+  "sync": {"endpoint": "https://relic.example.com", "interval_s": 30},
+  "capture": {"max_bytes": 26214400, "skip_apps": ["KeePass", "1Password"]},
+  "ui": {"hotkey": "Ctrl+Shift+V", "theme": "dark"}
+}

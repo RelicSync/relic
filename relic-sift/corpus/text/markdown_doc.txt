@@ -1,0 +1,11 @@
+# Migration plan
+
+## Phase 1
+
+- Freeze schema changes
+- Snapshot prod into staging
+
+## Phase 2
+
+- Dual-write for one week
+- Cut over reads, watch [dashboards](https://grafana.example.com/d/abc)

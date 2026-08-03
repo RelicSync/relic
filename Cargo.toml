@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["relic-core", "relic-sift", "relic-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+# Flipped from "MIT OR Apache-2.0" for the open-source carve (oss plan D2):
+# never published under the old terms, sole author, so relicensing is clean.
+license = "AGPL-3.0-only"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"

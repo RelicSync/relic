@@ -1,0 +1,21 @@
+# Run your own Relic sync server with one command:  docker compose up -d
+#
+# This uses the prebuilt multi-arch image from GHCR (amd64 + arm64). All data
+# (SQLite + encrypted blobs) lives in the named volume, which is the only thing
+# to back up. To build from source instead of pulling, replace `image:` with
+# `build: { context: ., dockerfile: selfhost/Dockerfile }` (run from the repo root).
+services:
+  relic:
+    image: ghcr.io/relicsync/relic-selfhost:latest
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    volumes:
+      - relic-data:/data
+    # environment:
+    #   # Optional: require this on the FIRST enrollment so nobody can claim a
+    #   # fresh instance before you do. Not needed after the first device connects.
+    #   RELIC_ENROLL_SECRET: "choose-something-long"
+
+volumes:
+  relic-data:

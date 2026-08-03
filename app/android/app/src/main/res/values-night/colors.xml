@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- RelicColors.dark.base (app/lib/theme/tokens.dart): Relic's warm
+         charcoal, NOT the platform default pitch black that used to flash. -->
+    <color name="launch_bg">#16130E</color>
+</resources>

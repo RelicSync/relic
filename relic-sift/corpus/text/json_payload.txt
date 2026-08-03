@@ -1,0 +1,1 @@
+{"user": {"id": 4821, "name": "Ana", "roles": ["admin", "dev"]}, "active": true, "last_login": "2026-06-10T22:14:03Z"}

@@ -1,0 +1,4 @@
+DB_HOST=localhost
+DB_PORT=5432
+API_KEY=q7zP2vXr9kT4wY8mB3nF6hJ1dL5gC0aS
+DEBUG=false

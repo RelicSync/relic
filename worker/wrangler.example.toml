@@ -1,0 +1,109 @@
+# Relic backend Worker — example config for a Cloudflare deploy of Relic Cloud.
+#
+# This is a SANITIZED template. Copy it to `worker/wrangler.toml`, fill in your
+# own Cloudflare resource ids, and set secrets with `wrangler secret put` (never
+# commit real secrets). Self-hosters do NOT need this file at all — use the
+# Docker image in selfhost/ instead.
+name = "relic-worker"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+
+[[r2_buckets]]
+binding = "STORE"
+bucket_name = "relic-store"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "relic"
+database_id = "YOUR_D1_DATABASE_ID"
+
+# Pairing relay + device-revocation set. Key prefixes: `pair:` and `rev:`.
+[[kv_namespaces]]
+binding = "PAIR"
+id = "YOUR_KV_NAMESPACE_ID"
+preview_id = "YOUR_KV_PREVIEW_ID"
+
+# Non-secret config. Secrets (STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
+# SUPABASE_JWT_SECRET, RESEND_API_KEY) are set with `wrangler secret put`.
+[vars]
+APP_BASE_URL = "https://your-domain.example"
+# Supabase auth bridge (optional; uncomment and fill in to enable JWT auth.
+# Omitted -> the worker runs with legacy device-token auth only).
+# SUPABASE_URL = "https://YOUR-PROJECT.supabase.co"
+# Stripe price -> tier map (optional; omit to disable billing entirely).
+STRIPE_PRICE_MAP = '{"price_YOUR_PRO_MONTHLY":"pro","price_YOUR_PRO_YEARLY":"pro","price_YOUR_MAX_MONTHLY":"max","price_YOUR_MAX_YEARLY":"max"}'
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+# 6-hourly janitor: billing grace sweep + orphan-blob sweep + tombstone GC.
+[triggers]
+crons = ["0 */6 * * *"]
+
+# --- Live-sync doorbell (optional; needs the Workers Paid plan) ---------------
+# One Durable Object per account holding hibernatable WebSockets: a write pokes
+# the account's DO, which broadcasts a content-free "wake" nudge to its other
+# devices (src/notify.ts). Without this binding the worker still works —
+# /sync/socket returns 501 and clients silently fall back to polling.
+# [[durable_objects.bindings]]
+# name = "SYNC"
+# class_name = "SyncSocket"
+#
+# [[migrations]]
+# tag = "v1"
+# new_sqlite_classes = ["SyncSocket"]
+
+# --- Stripe billing queue (optional; webhook falls back to inline apply) ------
+[[queues.producers]]
+binding = "STRIPE_QUEUE"
+queue = "stripe-billing"
+
+[[queues.consumers]]
+queue = "stripe-billing"
+max_batch_size = 10
+max_retries = 5
+dead_letter_queue = "stripe-billing-dlq"
+
+# --- Rate limiting (native binding; namespace_id is any unique integer) --------
+[[unsafe.bindings]]
+name = "RL_BILLING"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 12, period = 60 }
+
+[[unsafe.bindings]]
+name = "RL_PAIR"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 40, period = 60 }
+
+[[unsafe.bindings]]
+name = "RL_DEVICE"
+type = "ratelimit"
+namespace_id = "1003"
+simple = { limit = 20, period = 60 }
+
+[[unsafe.bindings]]
+name = "RL_ACCOUNT"
+type = "ratelimit"
+namespace_id = "1004"
+simple = { limit = 3, period = 60 }
+
+[[unsafe.bindings]]
+name = "RL_PLANS"
+type = "ratelimit"
+namespace_id = "1005"
+simple = { limit = 30, period = 60 }
+
+[[unsafe.bindings]]
+name = "RL_SHARE"
+type = "ratelimit"
+namespace_id = "1006"
+simple = { limit = 10, period = 60 }
+
+[[unsafe.bindings]]
+name = "RL_SHARE_VIEW"
+type = "ratelimit"
+namespace_id = "1007"
+simple = { limit = 30, period = 60 }

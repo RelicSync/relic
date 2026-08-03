@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#16130E</color>
+    <!-- RelicColors.light.base (app/lib/theme/tokens.dart). The OS splash and
+         Flutter's boot frame must paint the SAME color, or launch flashes.
+         Keep in lockstep with tokens.dart if the palette ever changes. -->
+    <color name="launch_bg">#F4EEE2</color>
+</resources>

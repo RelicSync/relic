@@ -1,0 +1,241 @@
+# Relic CI — builds and tests everything in the public monorepo on clean
+# runners, from the public tree ONLY. That is the whole point: if this is green,
+# a stranger who clones the repo can build it too.
+#
+# No secrets are used anywhere in this workflow, so it runs identically on fork
+# pull requests. Deploys and release signing live in separate workflows that are
+# restricted to `main` and tags.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: '3.35.5'
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Rust workspace: relic-core, relic-sift, relic-cli.
+  # The ONNX Runtime is loaded dynamically at runtime (`sift models download`),
+  # so nothing here needs model weights or a GPU.
+  # --------------------------------------------------------------------------
+  rust:
+    name: rust (${{ matrix.crate }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: [workspace, relic-core, relic-sift, relic-cli]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.crate }}
+      - name: Build
+        run: |
+          if [ "${{ matrix.crate }}" = "workspace" ]; then
+            cargo build --workspace --locked
+          else
+            cargo build -p ${{ matrix.crate }} --locked
+          fi
+      - name: Test
+        run: |
+          if [ "${{ matrix.crate }}" = "workspace" ]; then
+            cargo test --workspace --locked
+          else
+            cargo test -p ${{ matrix.crate }} --locked
+          fi
+
+  rust-fmt-clippy:
+    name: rust lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+        continue-on-error: true
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+        continue-on-error: true
+
+  # --------------------------------------------------------------------------
+  # Cloudflare Worker (powers Relic Cloud). Tests run under
+  # @cloudflare/vitest-pool-workers, i.e. in a real workerd, with no account
+  # and no credentials.
+  # --------------------------------------------------------------------------
+  worker:
+    name: worker
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+
+  # --------------------------------------------------------------------------
+  # Self-host drift guard. The self-host build's entire promise is that it runs
+  # the UNCHANGED worker through local adapters (SQLite + disk + a KV shim), so
+  # this proves the adapters still satisfy the worker.
+  #
+  # The `cp selfhost/package.json package.json` step mirrors the Dockerfile:
+  # dependencies must install at the REPO ROOT so that both worker/ (which
+  # imports jose) and selfhost/ (which imports better-sqlite3) resolve their
+  # node_modules. Installing inside selfhost/ hides jose from the sibling
+  # worker/ directory and the smoke test fails on import.
+  # --------------------------------------------------------------------------
+  selfhost:
+    name: selfhost smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install deps at the repo root (mirrors the Dockerfile)
+        run: cp selfhost/package.json package.json && npm install --no-audit --no-fund
+      - name: In-process smoke test (full sync data plane)
+        working-directory: selfhost
+        run: npm run smoke
+
+  # --------------------------------------------------------------------------
+  # Flutter client: static analysis + unit/widget tests on Linux, and a real
+  # Windows desktop build (the primary shipping target).
+  # --------------------------------------------------------------------------
+  flutter-analyze:
+    name: flutter analyze + test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter --version
+      - run: flutter pub get
+      - name: Analyze
+        run: flutter analyze
+      - name: Test
+        run: flutter test
+
+  flutter-windows:
+    name: flutter build windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter config --enable-windows-desktop
+      - run: flutter pub get
+      - name: Build (unsigned)
+        run: flutter build windows --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relic-windows-unsigned
+          path: app/build/windows/x64/runner/Release/
+          retention-days: 7
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------------
+  # The Apache-2.0 crypto package: pinned test vectors, byte-verified against
+  # the Rust and JavaScript implementations. This is the "verify the crypto
+  # yourself" claim in the README, run on every commit.
+  #
+  # Guarded: the crypto/ path-dependency refactor may not have landed in a given
+  # checkout, and a missing directory should skip, not fail.
+  # --------------------------------------------------------------------------
+  crypto:
+    name: crypto (dart test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for crypto/
+        id: probe
+        run: |
+          if [ -f crypto/pubspec.yaml ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::crypto/ not present in this checkout — skipping dart test."
+          fi
+      - uses: dart-lang/setup-dart@v1
+        if: steps.probe.outputs.present == 'true'
+        with:
+          sdk: stable
+      - name: dart pub get
+        if: steps.probe.outputs.present == 'true'
+        working-directory: crypto
+        run: dart pub get
+      - name: dart test
+        if: steps.probe.outputs.present == 'true'
+        working-directory: crypto
+        run: dart test
+
+  # --------------------------------------------------------------------------
+  # Belt and braces: the same corpus-aware secret scan that gated the carve,
+  # now guarding day-to-day commits. The real protection is that secrets and
+  # business docs physically live in a different repository.
+  # --------------------------------------------------------------------------
+  secret-scan:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan for live-secret shapes
+        run: |
+          if [ -x .github/scan.sh ]; then
+            bash .github/scan.sh .
+          else
+            echo "::notice::no in-tree scanner yet; running the inline shape check."
+            PAT='sk_live_[0-9A-Za-z]{16,}|rk_live_[0-9A-Za-z]{16,}|whsec_[0-9A-Za-z]{24,}'
+            PAT="$PAT"'|re_[0-9A-Za-z]{24,}|sb_secret_[0-9A-Za-z_-]{16,}'
+            PAT="$PAT"'|github_pat_[0-9A-Za-z_]{30,}|xox[baprs]-[0-9A-Za-z-]{20,}'
+            PAT="$PAT"'|-----BEGIN [A-Z ]*PRIVATE KEY|service_role'
+            # Relic is a secret DETECTOR: its corpus, detection rules and test
+            # fixtures are full of deliberately fake keys. Exclude those.
+            if grep -rIEn "$PAT" . \
+                 --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=target \
+                 --exclude-dir=build --exclude-dir=.dart_tool \
+                 --exclude-dir=corpus --exclude-dir=holdout --exclude-dir=test \
+                 --exclude=classify.rs --exclude=text.rs --exclude=pii.rs \
+                 --exclude=tags.rs --exclude=heuristic_tags.dart \
+                 --exclude=labeler.rs --exclude=pipeline.rs --exclude=sift.rs \
+                 --exclude=lib.rs --exclude=README.md --exclude=install-sift.ps1; then
+              echo "::error::possible live secret above — do not merge"
+              exit 1
+            fi
+            echo "clean"
+          fi

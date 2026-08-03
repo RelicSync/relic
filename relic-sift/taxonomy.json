@@ -1,0 +1,298 @@
+{
+  "version": "1.2",
+  "notes": "Seed taxonomy v1 from the sift spec §3, plus `structured_data` (text), the file_* fallbacks, and the v1.2 granular additions (tracking_number, otp_code, address, todo_list, image_tags). Each category: id, modality, threshold (per-category confidence floor, spec §7.2), relic_tags (what the ingest layer writes into Relic.tags — see docs/sift-integration.md), clip_prompts (zero-shot label strings for the image classifier, spec §6.2), prototypes (example texts embedded once to form the text head's class centroids, spec §6.1). Built-in relic_tags are single lowercase words on purpose: FTS5 column-filter syntax (`tags:foo`) only takes an unquoted bare token, so hyphenated tags would force users to type `tags:\"foo-bar\"`. (Hyphens are still legal — user-rule tags may have them — they just need quoting in column queries.) image_tags is a multi-label bank: each tag scores its prompts against background_prompts in the same CLIP pass; winners above threshold become extra relic tags, not categories.",
+  "categories": [
+    {
+      "id": "api_key",
+      "modality": "text",
+      "threshold": 0.35,
+      "relic_tags": ["secret"],
+      "prototypes": []
+    },
+    {
+      "id": "secret_other",
+      "modality": "text",
+      "threshold": 0.35,
+      "relic_tags": ["secret"],
+      "prototypes": []
+    },
+    {
+      "id": "url",
+      "modality": "text",
+      "threshold": 0.5,
+      "relic_tags": ["url"],
+      "prototypes": []
+    },
+    {
+      "id": "tracking_number",
+      "modality": "text",
+      "threshold": 0.5,
+      "relic_tags": ["tracking"],
+      "prototypes": []
+    },
+    {
+      "id": "otp_code",
+      "modality": "text",
+      "threshold": 0.5,
+      "relic_tags": ["otp"],
+      "prototypes": []
+    },
+    {
+      "id": "address",
+      "modality": "text",
+      "threshold": 0.4,
+      "relic_tags": ["address"],
+      "prototypes": [
+        "742 Evergreen Terrace, Springfield, IL 62704",
+        "Apt 4B, 221 Baker Street, London NW1 6XE, United Kingdom",
+        "1600 Amphitheatre Parkway, Mountain View, CA 94043",
+        "Shipping address:\nDana Whitfield\n442 Alder Lane\nPortland, OR 97214",
+        "Deliver to: 88 Colin P Kelly Jr St, San Francisco, CA 94107. Buzz unit 3."
+      ]
+    },
+    {
+      "id": "todo_list",
+      "modality": "text",
+      "threshold": 0.4,
+      "relic_tags": ["todo", "note"],
+      "prototypes": [
+        "- [ ] book flights\n- [ ] renew passport\n- [x] request time off\n- [ ] travel insurance",
+        "TODO: fix the login redirect\nTODO: bump the cache TTL\nTODO: write the migration doc",
+        "todo for saturday: clean the garage, return library books, oil change, call mom",
+        "1. send the invoice\n2. follow up with the vendor\n3. update the tracking spreadsheet\n4. archive closed tickets"
+      ]
+    },
+    {
+      "id": "email_body",
+      "modality": "text",
+      "threshold": 0.4,
+      "relic_tags": ["mail"],
+      "prototypes": [
+        "Hi Sarah,\n\nThanks for sending over the contract. I had a quick look and everything seems in order. Could we schedule a call on Thursday to walk through the final details?\n\nBest regards,\nMark",
+        "Dear team,\n\nPlease find attached the quarterly report. Let me know if you have any questions before Friday's meeting.\n\nKind regards,\nPriya",
+        "Hello John,\n\nI hope this email finds you well. I wanted to follow up on the invoice I sent last week. Could you confirm the payment date?\n\nThanks,\nAccounts team",
+        "Subject: Re: Project timeline\n\nHi all, quick update — the deadline has moved to the 15th. I'll send a revised schedule tomorrow morning. Cheers, Dan",
+        "Hi support,\n\nMy order #4821 arrived damaged. I'd like to request a replacement or a refund. I've attached photos of the box.\n\nThank you,\nEmily Carter"
+      ]
+    },
+    {
+      "id": "chat_message",
+      "modality": "text",
+      "threshold": 0.4,
+      "relic_tags": ["chat"],
+      "prototypes": [
+        "lol yeah i saw that 😂 ok see u at 8",
+        "hey are you coming tonight?",
+        "omg no way!! tell me everything",
+        "sure, sounds good 👍 ping me when you're outside",
+        "can u send me the address again? i lost it",
+        "running 10 min late sorry!!",
+        "[10:42] mike: did you push the fix yet\n[10:43] ana: yeah it's on main"
+      ]
+    },
+    {
+      "id": "code",
+      "modality": "text",
+      "threshold": 0.4,
+      "relic_tags": ["code"],
+      "prototypes": [
+        "def fibonacci(n):\n    if n <= 1:\n        return n\n    return fibonacci(n - 1) + fibonacci(n - 2)",
+        "fn main() {\n    let args: Vec<String> = std::env::args().collect();\n    println!(\"{:?}\", args);\n}",
+        "const handler = async (req, res) => {\n  const user = await db.users.findOne({ id: req.params.id });\n  res.json(user);\n};",
+        "SELECT id, name, created_at FROM users WHERE active = true ORDER BY created_at DESC LIMIT 50;",
+        "SELECT u.id, u.email, COUNT(o.id) AS orders\nFROM users u LEFT JOIN orders o ON o.user_id = u.id\nWHERE u.created_at > '2026-01-01'\nGROUP BY u.id, u.email HAVING COUNT(o.id) > 3",
+        "public class Main {\n    public static void main(String[] args) {\n        System.out.println(\"Hello\");\n    }\n}",
+        "#include <stdio.h>\nint main(void) {\n    printf(\"hello\\n\");\n    return 0;\n}"
+      ]
+    },
+    {
+      "id": "log_line",
+      "modality": "text",
+      "threshold": 0.55,
+      "relic_tags": ["log"],
+      "prototypes": [
+        "2026-06-11T14:23:01Z ERROR api.server request failed: connection reset by peer (retry 3/5)",
+        "[2026-06-11 09:14:55] INFO  worker-2 processed batch id=4821 items=500 elapsed=1.2s",
+        "Jun 11 03:12:44 host sshd[1023]: Failed password for invalid user admin from 203.0.113.7 port 53121 ssh2",
+        "WARN  2026/06/11 12:00:01 cache miss for key user:8843, falling back to db",
+        "Traceback (most recent call last):\n  File \"app.py\", line 42, in <module>\n    main()\nValueError: invalid literal for int() with base 10: 'abc'",
+        "thread 'main' panicked at src/main.rs:17:5:\nindex out of bounds: the len is 3 but the index is 7"
+      ]
+    },
+    {
+      "id": "note_prose",
+      "modality": "text",
+      "threshold": 0.35,
+      "relic_tags": ["note"],
+      "prototypes": [
+        "Remember to pick up the dry cleaning before 6pm and book the dentist appointment for next week.",
+        "Ideas for the trip: rent bikes the first day, museum pass is cheaper online, check if the ferry runs on Sundays.",
+        "The meeting moved to Thursday. Main takeaways: budget approved, hiring freeze lifted, new office space decision deferred to Q3.",
+        "Grocery list: eggs, oat milk, basil, chicken thighs, parmesan, sourdough.",
+        "Draft intro: Over the past decade, cities have quietly rebuilt themselves around delivery logistics rather than people.",
+        "# Meeting notes\n\n- Budget approved for Q3\n- Sarah owns the migration plan\n- Next sync on Friday",
+        "Design note: the importer should batch events and debounce duplicates within a short window. Open question: do we skip files above the size cap or chunk them?",
+        "Most recipes rush the resting step. Give the dough a full twelve hours at room temperature and the texture improves dramatically without changing anything else."
+      ]
+    },
+    {
+      "id": "structured_data",
+      "modality": "text",
+      "threshold": 0.4,
+      "relic_tags": ["data"],
+      "prototypes": [
+        "{\"user\": {\"id\": 4821, \"name\": \"Ana\", \"roles\": [\"admin\", \"dev\"]}, \"active\": true}",
+        "server:\n  host: 0.0.0.0\n  port: 8080\nlogging:\n  level: info\n  format: json",
+        "<configuration><appSettings><add key=\"timeout\" value=\"30\"/></appSettings></configuration>",
+        "id,name,email,signup_date\n1,Ana,ana@example.com,2026-01-15\n2,Ben,ben@example.com,2026-02-20",
+        "product,qty,unit_price\napples,12,0.40\nflour,2,3.25\nsugar,1,2.10\nbutter,3,1.80",
+        "[server]\nhost = \"0.0.0.0\"\nport = 8080\n\n[logging]\nlevel = \"info\"",
+        "database:\n  url: postgres://localhost:5432/app\n  pool_size: 8\ncache:\n  backend: redis\n  ttl_seconds: 600"
+      ]
+    },
+    {
+      "id": "screenshot",
+      "modality": "image",
+      "threshold": 0.4,
+      "relic_tags": ["screenshot"],
+      "clip_prompts": [
+        "a screenshot of a computer screen",
+        "a screenshot of a software application window",
+        "a screenshot of a website in a web browser",
+        "a screenshot of a code editor with source code",
+        "a screenshot of a chat conversation on a phone"
+      ]
+    },
+    {
+      "id": "photo",
+      "modality": "image",
+      "threshold": 0.4,
+      "relic_tags": ["photo"],
+      "clip_prompts": [
+        "a photograph taken with a camera",
+        "a photo of people or a person",
+        "a photo of a landscape or nature scene",
+        "a photo of food on a table",
+        "a photo of a building or city street",
+        "a photo of an animal"
+      ]
+    },
+    {
+      "id": "document_scan",
+      "modality": "image",
+      "threshold": 0.4,
+      "relic_tags": ["scan"],
+      "clip_prompts": [
+        "a scanned page of a printed document",
+        "a scan of a paper form with text",
+        "a photo of a printed letter or contract page"
+      ]
+    },
+    {
+      "id": "receipt",
+      "modality": "image",
+      "threshold": 0.4,
+      "relic_tags": ["receipt"],
+      "clip_prompts": [
+        "a store receipt with a list of prices",
+        "a printed shopping receipt from a cash register",
+        "an invoice with line items and a total amount"
+      ]
+    },
+    {
+      "id": "diagram",
+      "modality": "image",
+      "threshold": 0.4,
+      "relic_tags": ["diagram"],
+      "clip_prompts": [
+        "a diagram with boxes and arrows",
+        "a flowchart or architecture diagram",
+        "a chart or graph visualizing data",
+        "a whiteboard sketch of a system design"
+      ]
+    },
+    {
+      "id": "meme",
+      "modality": "image",
+      "threshold": 0.4,
+      "relic_tags": ["meme"],
+      "clip_prompts": [
+        "a meme image with large caption text",
+        "a funny image with white impact-font text on top and bottom"
+      ]
+    },
+    {
+      "id": "file_pdf",
+      "modality": "file",
+      "threshold": 0.3,
+      "relic_tags": ["file"],
+      "prototypes": []
+    },
+    {
+      "id": "file_office",
+      "modality": "file",
+      "threshold": 0.3,
+      "relic_tags": ["file"],
+      "prototypes": []
+    },
+    {
+      "id": "file_archive",
+      "modality": "file",
+      "threshold": 0.3,
+      "relic_tags": ["file", "archive"],
+      "prototypes": []
+    },
+    {
+      "id": "file_binary",
+      "modality": "file",
+      "threshold": 0.2,
+      "relic_tags": ["file"],
+      "prototypes": []
+    },
+    {
+      "id": "unsorted",
+      "modality": "any",
+      "threshold": 0.0,
+      "relic_tags": [],
+      "prototypes": []
+    }
+  ],
+  "labels": [
+    {
+      "id": "pii_present",
+      "relic_tags": []
+    }
+  ],
+  "image_tags": {
+    "threshold": 0.6,
+    "temperature": 10.0,
+    "background_prompts": [
+      "a screenshot of a software user interface",
+      "a scanned page of a printed document",
+      "an abstract pattern or texture",
+      "a plain colored background"
+    ],
+    "tags": [
+      { "id": "people", "prompts": ["a photo of a person or group of people", "a portrait photograph of a face"] },
+      { "id": "animal", "prompts": ["a photo of an animal", "a photo of a pet dog or cat"] },
+      { "id": "food", "prompts": ["a photo of food on a plate or table"] },
+      { "id": "nature", "prompts": ["a photo of a natural landscape with trees, mountains, or water"] },
+      { "id": "city", "prompts": ["a photo of buildings or a city street"] },
+      { "id": "vehicle", "prompts": ["a photo of a car, truck, boat, or motorcycle"] },
+      { "id": "whiteboard", "prompts": ["a photo of a whiteboard with handwritten notes and diagrams"] },
+      { "id": "qrcode", "prompts": ["an image showing a QR code"] },
+      { "id": "chart", "prompts": ["a chart or graph visualizing data"] },
+      { "id": "product", "prompts": ["a commercial product photo of a single retail item", "a catalog product shot on a plain studio background"] },
+      { "id": "handwriting", "prompts": ["a photo of handwritten text or notes", "a page of cursive or printed handwriting"] },
+      { "id": "id-document", "prompts": ["a photo of an identity card, passport, or driver's license", "a government-issued ID document"] },
+      { "id": "map", "prompts": ["a map or navigation screenshot showing streets and locations", "a road map or satellite map view"] },
+      { "id": "art", "prompts": ["a painting or hand-drawn illustration", "a framed piece of fine art or a sketch"] },
+      { "id": "plant", "prompts": ["a close-up photo of a plant, flower, or houseplant", "a photo of garden foliage or leaves"] },
+      { "id": "logo", "prompts": ["a company or brand logo", "a logo or app icon on a plain background"] },
+      { "id": "sign", "prompts": ["a photo of a street sign or road sign", "a signboard or posted notice with text"] },
+      { "id": "device", "prompts": ["a photo of an electronic device or gadget", "a smartphone, laptop, or piece of consumer electronics"] },
+      { "id": "medical", "prompts": ["a medical x-ray or scan image", "a medical chart, prescription, or lab result"] },
+      { "id": "book", "prompts": ["a photo of a book cover", "an open book or printed book pages"] }
+    ]
+  }
+}

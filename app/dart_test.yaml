@@ -1,0 +1,7 @@
+# Tags used by the suite. `sidecar` marks tests that drive the real sift
+# binary as a child process: they are slow (model loads are seconds) and are
+# skipped automatically when no binary is present.
+#
+#   flutter test --exclude-tags sidecar   # skip them
+tags:
+  sidecar:

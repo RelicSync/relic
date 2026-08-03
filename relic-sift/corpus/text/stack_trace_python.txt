@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "app.py", line 42, in <module>
+    main()
+  File "app.py", line 31, in main
+    cfg = load_config(path)
+ValueError: invalid literal for int() with base 10: 'abc'
