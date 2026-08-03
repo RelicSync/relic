@@ -14,7 +14,7 @@ forever. On your devices, sealed before it leaves them.
 
 </div>
 
-<!-- demo.gif: agent-recall demo goes here -->
+https://github.com/user-attachments/assets/94e1c2f1-62f2-44ec-9939-7e35b497c9d1
 
 ## What it is
 
