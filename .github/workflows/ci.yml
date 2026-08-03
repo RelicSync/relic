@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 env:
-  FLUTTER_VERSION: '3.35.5'
+  FLUTTER_VERSION: '3.44.2'
 
 jobs:
   # --------------------------------------------------------------------------
@@ -225,15 +225,21 @@ jobs:
             PAT="$PAT"'|github_pat_[0-9A-Za-z_]{30,}|xox[baprs]-[0-9A-Za-z-]{20,}'
             PAT="$PAT"'|-----BEGIN [A-Z ]*PRIVATE KEY|service_role'
             # Relic is a secret DETECTOR: its corpus, detection rules and test
-            # fixtures are full of deliberately fake keys. Exclude those.
-            if grep -rIEn "$PAT" . \
+            # fixtures are full of deliberately fake keys. Exclude those, plus
+            # this workflow (it contains the patterns themselves) and any line
+            # carrying an explicit "scan-ok" marker.
+            hits="$(grep -rIEn "$PAT" . \
                  --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=target \
                  --exclude-dir=build --exclude-dir=.dart_tool \
                  --exclude-dir=corpus --exclude-dir=holdout --exclude-dir=test \
+                 --exclude=ci.yml \
                  --exclude=classify.rs --exclude=text.rs --exclude=pii.rs \
                  --exclude=tags.rs --exclude=heuristic_tags.dart \
                  --exclude=labeler.rs --exclude=pipeline.rs --exclude=sift.rs \
-                 --exclude=lib.rs --exclude=README.md --exclude=install-sift.ps1; then
+                 --exclude=lib.rs --exclude=README.md --exclude=install-sift.ps1 \
+                 | grep -v 'scan-ok' || true)"
+            if [ -n "$hits" ]; then
+              echo "$hits"
               echo "::error::possible live secret above — do not merge"
               exit 1
             fi

@@ -666,7 +666,7 @@ class MemoryRepo implements RelicRepo {
           '5',
           Kind.string,
           1200,
-          content: 'sk_live_51HbQ2eF8kLmZ9xRtY7nP4wV0aB6cD3eG',
+          content: 'sk_live_51HbQ2eF8kLmZ9xRtY7nP4wV0aB6cD3eG', // scan-ok: fake demo seed
           title: 'Stripe secret key',
           tags: ['secret'],
           device: 'iMac',
