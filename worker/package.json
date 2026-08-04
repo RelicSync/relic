@@ -11,11 +11,11 @@
     "jose": "^6.2.3"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.18.0",
-    "@cloudflare/workers-types": "^4.20260601.0",
+    "@cloudflare/vitest-pool-workers": "^0.20.1",
+    "@cloudflare/workers-types": "^5.20260804.1",
     "@vitest/runner": "^4.1.10",
     "typescript": "^5.8.0",
     "vitest": "^4.1.10",
-    "wrangler": "^4.100.0"
+    "wrangler": "^4.118.0"
   }
 }

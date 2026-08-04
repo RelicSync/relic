@@ -996,7 +996,15 @@ fn doctor() -> Result<(), String> {
         });
         check("image pipeline", !r.category.scores.is_empty())?;
     }
-    println!("  all checks passed.");
+    // "All checks passed" next to a column of MISSING models reads like a
+    // contradiction; say which mode the passing verdict is for.
+    if sift.has_text_model() || sift.has_image_model() {
+        println!("  all checks passed.");
+    } else {
+        println!(
+            "  all checks passed (deterministic pipeline; no models downloaded — run `sift models download` for ML)."
+        );
+    }
     Ok(())
 }
 

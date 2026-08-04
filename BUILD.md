@@ -169,6 +169,12 @@ fall back to polling. It requires a Workers Paid plan.
 If you would rather not run Cloudflare at all, use `selfhost/` instead. It is
 the same server code.
 
+`npm audit` may report findings inside the **dev toolchain** (wrangler /
+miniflare bundle their own undici and sharp). None of that ships: the worker
+runs on the Cloudflare runtime, and these packages only exist to test and
+deploy. We track upstream and keep the toolchain current; findings that remain
+at the latest wrangler are Cloudflare's to fix.
+
 ---
 
 ## `selfhost/` — the same worker on plain Node
