@@ -1189,7 +1189,7 @@ class _RealAppState extends State<RealApp>
   /// First line of the release notes for the update notification — writing
   /// notes into latest.json is finally visible to users.
   static String _updateBody(UpdateInfo info) {
-    final first = (info.notes ?? '')
+    final first = info.notes
         .split('\n')
         .map((l) => l.trim())
         .firstWhere((l) => l.isNotEmpty, orElse: () => '');

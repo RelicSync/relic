@@ -120,14 +120,6 @@ class _Raw {
   const _Raw(this.after, this.before);
 }
 
-/// A matched rule hit: the raw range and the char span it covered.
-class _Hit {
-  final _Raw raw;
-  final int start;
-  final int end;
-  const _Hit(this.raw, this.start, this.end);
-}
-
 /// Operand bucket for comparator / from…to rules.
 class _Bucket {
   final DateTime start;

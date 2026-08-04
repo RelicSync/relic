@@ -254,7 +254,7 @@ const _specificDigit = {
 // Zero-width / bidi control characters that ride along with web copies and
 // silently defeat the `$`-anchored whole-value regexes (a real phone ending in
 // U+202C detects as nothing).
-final _invisibles = RegExp(r'[​-‏‪-‮⁠﻿]');
+final _invisibles = RegExp(r'[\u200B-\u200F\u202A-\u202E\u2060\uFEFF]');
 
 String _unwrap(String s) {
   const open = '"\'`<(';

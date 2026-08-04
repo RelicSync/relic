@@ -206,7 +206,7 @@ void main() {
 
     test('detector re-audit round: unwrap + misc FPs', () {
       // Invisible bidi char (U+202C) from a web copy; trailing period.
-      expect(detectTags('(406) 530-5734‬'), contains('phone'));
+      expect(detectTags('(406) 530-5734\u202C'), contains('phone'));
       expect(detectTags('douglas.butabi@gmail.com.'), contains('email'));
       // env below a shouted note line still counts.
       expect(

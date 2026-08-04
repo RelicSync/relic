@@ -62,7 +62,7 @@ void main() {
       markTestSkipped('RELIC_DATA_DIR sandbox not set — skipping repo test');
       return;
     }
-    final sb = sandbox!;
+    final sb = sandbox;
     final repo = LocalDeskRepo();
     await repo.load();
     addTearDown(repo.dispose);
