@@ -1,0 +1,32 @@
+name: Feature request
+description: Something Relic should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that Relic makes hard or impossible today? Concrete beats abstract.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like
+      description: If you have a specific shape in mind. "I don't know, but the problem is real" is a fine answer.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Where does this matter most?
+      options:
+        - Windows
+        - Android
+        - Both / all platforms
+        - Web vault
+        - Self-host server
+        - CLI / agents
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do instead today
+      description: The workaround, if any. This tells us how much the feature is worth.

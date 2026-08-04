@@ -1,0 +1,75 @@
+name: Bug report
+description: Something broke or behaves wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Two notes before you start:
+        - **Security issues do not go here.** See [SECURITY.md](../blob/main/SECURITY.md) — report privately.
+        - Never paste clipboard contents, vault exports, or logs that contain personal data. Redact first.
+  - type: input
+    id: version
+    attributes:
+      label: Relic version
+      description: Settings → About, or `winget list relic`
+      placeholder: "1.0.31"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows
+        - Android
+        - Web vault (relic.space/vault)
+        - Self-host server
+        - CLI (relic)
+        - Sift sidecar
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - winget / installer from relic.space
+        - Google Play
+        - Built from source
+        - Docker (self-host)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: sync
+    attributes:
+      label: Sync mode
+      description: Some bugs only happen in one mode.
+      options:
+        - Local only (sync off)
+        - Relic Cloud
+        - Self-hosted server
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Copy a …
+        2. Open the popup …
+        3. …
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots (redacted)
+      description: Optional. Redact anything personal — this is a clipboard manager, logs can contain your clipboard.

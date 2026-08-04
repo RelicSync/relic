@@ -1,0 +1,50 @@
+# Tagged releases: build the unsigned artifacts and draft a GitHub Release.
+#
+# Deliberately unsigned: code signing (Azure Trusted Signing for Windows, the
+# Play keystore for Android) stays on the maintainer's machine and never enters
+# CI. What this workflow proves is that the tagged source builds the artifact —
+# the signed installers on relic.space are produced from the same tag.
+#
+# No secrets are used. The draft release is only visible to maintainers until
+# published.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: '3.44.2'
+
+jobs:
+  windows:
+    name: windows build (unsigned)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter config --enable-windows-desktop
+      - run: flutter pub get
+      - name: Build
+        run: flutter build windows --release
+      - name: Zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build\windows\x64\runner\Release\* `
+            -DestinationPath "relic-${{ github.ref_name }}-windows-x64-unsigned.zip"
+      - name: Draft release with artifact
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: app/relic-${{ github.ref_name }}-windows-x64-unsigned.zip
