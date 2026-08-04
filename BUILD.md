@@ -68,15 +68,22 @@ just not the signed artifact that ships to Google Play.
 Android also needs the Android SDK (platform + build-tools + NDK) and JDK 17.
 `flutter doctor` will tell you what is missing.
 
+Expect the **first** Android build to take 10–20+ minutes: cargokit
+cross-compiles Rust (for `super_native_extensions`) once per ABI before Gradle
+even starts, and a cold Gradle cache adds more. It is not hung. Later builds
+are much faster.
+
 ### Analyze and test
 
 ```sh
 cd app
-flutter analyze
+flutter analyze --no-fatal-infos
 flutter test
 ```
 
-Neither needs a secret or a network account.
+Neither needs a secret or a network account. The `--no-fatal-infos` flag
+matches CI: errors and warnings fail the check, info-level style lints do not
+(a clean checkout currently carries a few dozen of those, tracked as cleanup).
 
 ---
 
@@ -134,6 +141,12 @@ The CLI has no network code. It reads and writes the desktop app's local vault
 directly, so it needs the app installed to be useful, but it builds and runs
 without it.
 
+By default it attaches to the **real** desktop app's data directory
+(`%APPDATA%\relic` on Windows). To point it at a different vault — a sandbox,
+a test fixture — set `RELIC_APP_DIR` to that directory. (Not to be confused
+with `RELIC_DATA_DIR`, which is a self-host *server* variable; the CLI ignores
+it.)
+
 ---
 
 ## `worker/` — the Cloudflare Worker sync server
@@ -142,12 +155,14 @@ without it.
 cd worker
 npm ci
 npm test          # vitest; needs Node 22
-npx wrangler dev  # local dev server
+cp wrangler.example.toml wrangler.toml   # wrangler needs a config to run
+npx wrangler dev  # local dev server (simulated D1/R2/KV, no account needed)
 ```
 
-`wrangler.example.toml` documents every binding the worker expects (D1, R2, KV).
-Copy it to `wrangler.toml` and fill in your own resource ids to deploy to your
-own Cloudflare account. The live sync doorbell (a Durable Object named `SYNC`)
+`wrangler.example.toml` documents every binding the worker expects (D1, R2,
+KV). For `wrangler dev` you can copy it **unmodified** — wrangler simulates the
+bindings locally. Only when deploying to your own Cloudflare account do you
+fill in your own resource ids. The live sync doorbell (a Durable Object named `SYNC`)
 is **optional**: with the binding absent, `/sync/socket` returns 501 and clients
 fall back to polling. It requires a Workers Paid plan.
 
@@ -175,10 +190,15 @@ npm run smoke     # in-process round-trip of the full sync data plane
 npm start         # serves on :8787, data in ./data
 ```
 
-**CI note:** `worker/` and `selfhost/` are meant to share one `node_modules`.
-On a fresh runner, copy `selfhost/package.json` to the repository root and run
-`npm install` there before running the smoke test, so the self-host layer can
-resolve the worker's dependencies.
+Verify a running server with `curl http://localhost:8787/health` — it answers
+`{"ok":true}` without auth. (Everything else returns 401 until a device
+enrolls.)
+
+**CI-runner note (skip on a normal machine):** the commands above work as-is
+from a fresh clone. Some CI runners hoist `node_modules` differently; if the
+smoke test cannot resolve the worker's dependencies there, copy
+`selfhost/package.json` to the repository root and `npm install` at the root
+instead.
 
 Configuration is all optional: `PORT` (default `8787`), `RELIC_DATA_DIR`
 (default `/data`), `RELIC_ENROLL_SECRET`, `RELIC_APP_BASE_URL`. There is no

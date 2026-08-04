@@ -84,8 +84,10 @@ decrypt.
 
 There is a second, independent implementation in the same folder:
 [`crypto/js/`](./crypto/js) is the TypeScript that the hosted web vault ships to
-every browser. It is byte-verified against the Dart one, so you can read either
-and check both. The contract they both implement is
+every browser, published here so what runs in your browser is readable in the
+open. (It is verified byte-compatible against the Dart implementation in the
+web vault's own build, not by a harness in this repository — see its README.)
+The contract they both implement is
 [`docs/crypto.md`](./docs/crypto.md) and
 [`docs/wire-format.md`](./docs/wire-format.md).
 

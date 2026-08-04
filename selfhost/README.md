@@ -33,6 +33,15 @@ docker build -f selfhost/Dockerfile -t relic-selfhost .
 docker run -d --name relic -p 8787:8787 -v relic-data:/data relic-selfhost
 ```
 
+Either way, verify the server is up before reaching for the app:
+
+```sh
+curl http://localhost:8787/health     # → {"ok":true}
+```
+
+(Everything except `/health` answers 401 until a device enrolls — that means
+auth is working, not that something is broken.)
+
 ### Then connect the app
 
 - **Desktop:** Settings → **Connect… → Your own server**, enter
