@@ -141,8 +141,7 @@ jobs:
       - run: flutter --version
       - run: flutter pub get
       - name: Analyze
-        # Errors and warnings block; style infos don't (tracked as cleanup).
-        run: flutter analyze --no-fatal-infos
+        run: flutter analyze
       - name: Test
         run: flutter test
 

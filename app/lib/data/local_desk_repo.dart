@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -230,6 +229,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   int _lastSyncAt = 0; // epoch s of the last successful pull; 0 = never
   String? _syncScope;
   AccountInfo? _remoteAccount;
+  @override
   bool get syncEnabled => _mk != null;
 
   // Account-switch guard: the identity this database's contents last synced
@@ -498,6 +498,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   bool get captureFilesEnabled => _captureFiles;
   bool get maskSecrets => _maskSecrets;
   int get maxItemMb => _maxItemMb;
+  @override
   int get maxItemBytes => _maxItemMb * 1024 * 1024;
   bool get autoVault => _autoVault;
   int? get retainCount => _retainCount;
@@ -670,7 +671,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   /// active tier's range; applies immediately by evicting any excess.
   void setRetainCount(int? n) {
     final lim = retentionLimits;
-    _retainCount = n == null ? null : n.clamp(lim.ringMin, lim.ringMax);
+    _retainCount = n?.clamp(lim.ringMin, lim.ringMax);
     _savePrefs();
     _enforceRetention();
     notifyListeners();
@@ -2322,7 +2323,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       tags: [
         'photo',
         if (dims != null) 'screenshot',
-        if (sourceApp != null) sourceApp,
+        ?sourceApp,
       ],
     );
     db.upsert(r, haveBlob: true, queuePush: syncEnabled);
@@ -2476,8 +2477,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     final ext = dot >= 0 ? name.substring(dot + 1) : '';
     if (_plainTextExts.contains(ext) || _richDocExts.contains(ext)) return ext;
     final m = (mime ?? '').toLowerCase();
-    if (m.startsWith('text/') || m.contains('json') || m.contains('xml'))
+    if (m.startsWith('text/') || m.contains('json') || m.contains('xml')) {
       return 'txt';
+    }
     if (m.contains('pdf')) return 'pdf';
     if (m.contains('wordprocessing') || m.endsWith('msword')) return 'docx';
     if (m.contains('spreadsheet') || m.contains('excel')) return 'xlsx';
@@ -2518,8 +2520,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     final db = _db;
     if (db == null) return;
     final cur = db.getByUid(r.uid);
-    if (cur == null || (cur.content ?? '').isNotEmpty)
+    if (cur == null || (cur.content ?? '').isNotEmpty) {
       return; // gone, or already extracted
+    }
     // Content-shape tags (code/json/markdown) describe a clipboard *snippet*'s
     // form; they're noise on a whole document's extracted text (e.g. a setup PDF
     // tagged "code"). Keep only meaningful signals like secrets.
@@ -3380,8 +3383,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     final key = r.blobKey;
     if (key == null) return false;
     if (_blobPathIfExists(key) != null) return true;
-    if (_mk == null || _syncUrl == null || _fetching.contains(key))
+    if (_mk == null || _syncUrl == null || _fetching.contains(key)) {
       return false;
+    }
     _fetching.add(key);
     try {
       final resp = await http.get(Uri.parse(_u('/blob/$key')), headers: _h);
@@ -3494,7 +3498,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   static int _hash(Uint8List b) {
     // cheap content fingerprint: length + sampled bytes
     var h = b.length;
-    final step = (b.length ~/ 64).clamp(1, b.length == 0 ? 1 : b.length);
+    final step = (b.length ~/ 64).clamp(1, b.isEmpty ? 1 : b.length);
     for (var i = 0; i < b.length; i += step) {
       h = (h * 31 + b[i]) & 0x7fffffff;
     }
@@ -3830,8 +3834,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         headers: {...auth, 'Content-Type': 'application/json'},
         body: jsonEncode(kp),
       );
-      if (put.statusCode != 200)
+      if (put.statusCode != 200) {
         throw 'Could not create the vault key (${put.statusCode}).';
+      }
       mk = newMk;
       vaultJustCreated = true; // fresh vault → host shows the recovery kit once
     } else if (resp.statusCode == 200) {
@@ -4445,8 +4450,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           // 'cloud' (Relic Cloud / managed) vs 'selfhost' (the user's own
           // server). Absent in pre-self-host configs → treated as 'cloud'.
           'mode': mode,
-          if (userId != null) 'user_id': userId,
-          if (email != null) 'email': email,
+          'user_id': ?userId,
+          'email': ?email,
         }),
       );
     } catch (_) {}
@@ -4728,7 +4733,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         final q = {
           'since': '$_cursor',
           'limit': '500',
-          if (cursor != null) 'cursor': cursor,
+          'cursor': ?cursor,
         };
         final resp = await http.get(
           Uri.parse(_u('/relics')).replace(queryParameters: q),
@@ -5418,7 +5423,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           Uri.parse(_u('/ai')).replace(queryParameters: {
             'since': '$_aiCursor',
             'limit': '500',
-            if (cursor != null) 'cursor': cursor,
+            'cursor': ?cursor,
           }),
           headers: _h,
         );

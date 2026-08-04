@@ -368,9 +368,8 @@ class _RealAppState extends State<RealApp>
       await _sizeWindow(520, 620);
       await windowManager.show();
       _visible = true;
-      final ctx = context;
       if (mounted) {
-        await Navigator.of(ctx).push(MaterialPageRoute(
+        await Navigator.of(context).push(MaterialPageRoute(
             builder: (_) => RecoveryKitScreen(kitText: kit)));
       }
       if (mounted) setState(() => _showingKit = false);

@@ -531,7 +531,7 @@ class AiRecord {
     final p = {
       if (title != null) 'title': title,
       'tags': tags,
-      if (t != null) 'text': t,
+      'text': ?t,
       // Empty is meaningful here ("ran, found nothing"), so it is sent as ''
       // rather than dropped — but only when there was something to say.
       if (a != null || (att != null && att!.isEmpty)) 'att': a ?? '',

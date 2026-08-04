@@ -926,7 +926,7 @@ class _PhotoThumb extends StatelessWidget {
           // Decode at ~3x the display size (aspect preserved — only cacheWidth
           // is set) so a list of thumbnails never full-decodes a screenshot.
           cacheWidth: (size * 3).round(),
-          errorBuilder: (_, __, ___) => _mock(c, size, rad),
+          errorBuilder: (_, _, _) => _mock(c, size, rad),
         ),
       );
     }

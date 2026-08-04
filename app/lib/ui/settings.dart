@@ -3727,8 +3727,9 @@ class _HotkeyRowState extends State<_HotkeyRow> {
       return KeyEventResult.handled;
     }
     final b = HotkeyBinding.fromEvent(e);
-    if (b == null)
+    if (b == null) {
       return KeyEventResult.handled; // bare modifier — keep waiting
+    }
     if (!b.hasModifier) {
       setState(
         () => _error = 'Use at least one modifier (Ctrl / Alt / Shift / Win).',

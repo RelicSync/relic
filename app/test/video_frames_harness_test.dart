@@ -29,14 +29,14 @@ import 'shot_seed.dart';
 /// is that every scene pumps a fixed 1/fps timestep and captures every frame,
 /// with scripted acts (typing, taps, flings) firing at set timestamps.
 ///
-///   RELIC_VIDEO_DIR=<dir> flutter test test/video_frames_harness_test.dart
+///   `RELIC_VIDEO_DIR=<dir>` flutter test test/video_frames_harness_test.dart
 ///
 /// Knobs:
 ///   RELIC_VIDEO_FPS     frames per second (default 60)
 ///   RELIC_VIDEO_SCENES  comma-separated scene filter (default: all)
 ///
-/// Output: <dir>/<scene>/frame_00001.png … plus <dir>/<scene>/meta.txt with
-/// "fps <n>" and "size <w>x<h>" for the compositor.
+/// Output: `<dir>/<scene>/frame_00001.png` … plus `<dir>/<scene>/meta.txt` with
+/// `"fps <n>"` and `"size <w>x<h>"` for the compositor.
 void main() {
   final outRoot = Platform.environment['RELIC_VIDEO_DIR'];
   final fps =
@@ -322,7 +322,7 @@ void main() {
           onCancel: () => editOpen.value = false,
           onCopy: () {},
           onDelete: () {},
-          onSave: (title, note, userTags, machineTags, content, _, __) async {
+          onSave: (title, note, userTags, machineTags, content, _, _) async {
             await repo.updateMeta(einRelic,
                 title: title,
                 note: note,
@@ -707,7 +707,7 @@ void main() {
       name: 'phone',
       build: (c) => ValueListenableBuilder<bool>(
         valueListenable: phoneSyncing,
-        builder: (_, syncing, __) => PopupView(
+        builder: (_, syncing, _) => PopupView(
           repo: phoneRepo,
           onClose: () {},
           onSettings: () {},
@@ -884,11 +884,11 @@ class _FakeEmailPage extends StatelessWidget {
                   Row(mainAxisSize: MainAxisSize.min, children: [
                     ValueListenableBuilder<bool>(
                       valueListenable: selecting,
-                      builder: (_, on, __) => TweenAnimationBuilder<double>(
+                      builder: (_, on, _) => TweenAnimationBuilder<double>(
                         tween: Tween(begin: 0, end: on ? 1 : 0),
                         duration: const Duration(milliseconds: 450),
                         curve: Curves.easeInOut,
-                        builder: (_, v, __) => Stack(children: [
+                        builder: (_, v, _) => Stack(children: [
                           Positioned.fill(
                             child: Align(
                               alignment: Alignment.centerLeft,
@@ -915,7 +915,7 @@ class _FakeEmailPage extends StatelessWidget {
                     const SizedBox(width: 14),
                     ValueListenableBuilder<bool>(
                       valueListenable: copied,
-                      builder: (_, on, __) => AnimatedOpacity(
+                      builder: (_, on, _) => AnimatedOpacity(
                         opacity: on ? 1 : 0,
                         duration: const Duration(milliseconds: 220),
                         child: Container(
@@ -957,7 +957,7 @@ class _FakeEmailPage extends StatelessWidget {
       // capture-and-annotate hotkey: dim scrim + a scale/fade-in.
       ValueListenableBuilder<bool>(
         valueListenable: editOpen,
-        builder: (_, open, __) => !open
+        builder: (_, open, _) => !open
             ? const SizedBox.shrink()
             : Positioned.fill(
                 child: TweenAnimationBuilder<double>(
@@ -1077,14 +1077,14 @@ class _FakeSnip extends StatelessWidget {
       Positioned.fill(
         child: ValueListenableBuilder<int>(
           valueListenable: snip,
-          builder: (_, phase, __) {
+          builder: (_, phase, _) {
             if (phase == 0) return const SizedBox.shrink();
             return Stack(children: [
               TweenAnimationBuilder<double>(
                 tween: Tween(begin: 0, end: phase >= 1 ? 1.0 : 0.0),
                 duration: const Duration(milliseconds: 620),
                 curve: Curves.easeOut,
-                builder: (_, p, __) =>
+                builder: (_, p, _) =>
                     CustomPaint(painter: _SnipPainter(_sel, p), size: Size.infinite),
               ),
               if (phase == 2)
@@ -1092,7 +1092,7 @@ class _FakeSnip extends StatelessWidget {
                   tween: Tween(begin: 0.85, end: 0.0),
                   duration: const Duration(milliseconds: 320),
                   curve: Curves.easeOut,
-                  builder: (_, f, __) => IgnorePointer(
+                  builder: (_, f, _) => IgnorePointer(
                     child: ColoredBox(color: Color.fromRGBO(255, 255, 255, f)),
                   ),
                 ),
@@ -1250,7 +1250,7 @@ class _FakeBookingPage extends StatelessWidget {
                   _label('CONFIRMATION CODE'),
                   ValueListenableBuilder<String>(
                     valueListenable: formValue,
-                    builder: (_, v, __) => _field(
+                    builder: (_, v, _) => _field(
                       v.isEmpty
                           ? Container(width: 2, height: 18, color: _blue)
                           : Text(v,
@@ -1286,7 +1286,7 @@ class _FakeBookingPage extends StatelessWidget {
       // The real mini picker, anchored at the focused field's caret.
       ValueListenableBuilder<bool>(
         valueListenable: miniOpen,
-        builder: (_, open, __) => open
+        builder: (_, open, _) => open
             ? Positioned(left: 348, top: 384, width: 340, height: 196, child: mini)
             : const SizedBox.shrink(),
       ),

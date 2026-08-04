@@ -48,7 +48,7 @@ class _GemToastState extends State<GemToast>
         padding: const EdgeInsets.only(bottom: 46),
         child: AnimatedBuilder(
           animation: _ctl,
-          builder: (_, __) {
+          builder: (_, _) {
             final v = _ctl.value;
             // pop in
             final pop = Curves.easeOutBack.transform(_iv(v, 0, 0.28));

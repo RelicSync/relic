@@ -51,7 +51,7 @@ void main() {
       'source': 'clipboard',
       'content': content,
       'preview': content,
-      if (title != null) 'title': title,
+      'title': ?title,
       'tags': tags,
       'user_tags': <String>[],
     });
@@ -78,10 +78,10 @@ void main() {
     String device = 'desk-a',
   }) async {
     final sealed = await RelicCrypto.sealAiPayload(mk, uid, {
-      if (title != null) 'title': title,
+      'title': ?title,
       'tags': tags,
-      if (text != null) 'text': text,
-      if (att != null) 'att': att,
+      'text': ?text,
+      'att': ?att,
     });
     return {
       'v': 1,

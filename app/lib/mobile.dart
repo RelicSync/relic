@@ -752,7 +752,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     await _Creds.markTutorialShown();
     await Future.delayed(const Duration(milliseconds: 700)); // let the list settle
     final ctx = _navKey.currentContext;
-    if (!mounted || ctx == null) return;
+    if (!mounted || ctx == null || !ctx.mounted) return;
     showQuickCaptureTutorial(
       ctx,
       colors: _dark ? RelicColors.dark : RelicColors.light,
@@ -1448,7 +1448,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     }
     if (!ok && mounted) {
       final cx = _navKey.currentContext;
-      if (cx != null) {
+      if (cx != null && cx.mounted) {
         ScaffoldMessenger.of(cx).showSnackBar(
           const SnackBar(
             content: Text('Could not open the browser. Visit relic.space/account.'),

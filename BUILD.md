@@ -77,13 +77,11 @@ are much faster.
 
 ```sh
 cd app
-flutter analyze --no-fatal-infos
+flutter analyze
 flutter test
 ```
 
-Neither needs a secret or a network account. The `--no-fatal-infos` flag
-matches CI: errors and warnings fail the check, info-level style lints do not
-(a clean checkout currently carries a few dozen of those, tracked as cleanup).
+Neither needs a secret or a network account.
 
 ---
 

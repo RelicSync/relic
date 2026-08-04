@@ -1,5 +1,6 @@
 /// Process-wide transient flags shared across the widget tree without threading
 /// callbacks through every layer.
+library;
 
 /// True while a native OS modal (the file picker) is open. The frameless popup's
 /// click-away-to-close (`onWindowBlur` → hide) checks this so opening a file

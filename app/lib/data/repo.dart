@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:flutter/services.dart';
 
 import '../platform/clipboard_bridge.dart';
@@ -571,6 +569,7 @@ class MemoryRepo implements RelicRepo {
   /// Uids whose on-device analysis pass (tags, OCR, generated title) is queued
   /// or running, so the UI can show a spinner instead of a bare row. Empty
   /// everywhere the local pipeline doesn't run.
+  @override
   Set<String> get analyzingUids => const {};
   @override
   int? addReminder(String uid, int remindAtMs, {String? note}) => null;

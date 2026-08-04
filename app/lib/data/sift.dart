@@ -498,7 +498,7 @@ class SiftSidecar {
     final served = await _serve(flags, {
       'kind': kind,
       'label': label,
-      if (path != null) 'path': path,
+      'path': ?path,
       if (path == null) 'text': text ?? '',
     });
     if (served != null) return served;

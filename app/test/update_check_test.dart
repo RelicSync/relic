@@ -19,7 +19,7 @@ void main() {
         'platforms': {
           'windows': {
             'url': 'https://relic.space/download/windows',
-            if (sha != null) 'sha256': sha,
+            'sha256': ?sha,
           },
         },
       };

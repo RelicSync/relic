@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io' show Platform;
-import 'dart:typed_data' show Uint8List;
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' show RefreshIndicator;
@@ -171,7 +170,7 @@ class _PopupViewState extends State<PopupView> {
   Scope _scope = Scope.all;
   SortMode _sort = SortMode.relevance;
   int _selected = 0;
-  bool _dragOver = false;
+  final bool _dragOver = false;
   Timer? _debounce;
 
   /// Date filter. [_manualRange] is set by the preset/calendar picker and wins
@@ -1898,7 +1897,7 @@ class _PopupViewState extends State<PopupView> {
           scrollDirection: Axis.horizontal,
           padding: padding,
           itemCount: present.length,
-          separatorBuilder: (_, __) => const SizedBox(width: 6),
+          separatorBuilder: (_, _) => const SizedBox(width: 6),
           itemBuilder: (_, i) {
             final (label, tag, icon) = present[i];
             return _CollectionChip(
@@ -2328,8 +2327,9 @@ class _PopupViewState extends State<PopupView> {
     final c = RelicTheme.of(context);
     final grouped = _grouped;
     final results = [for (final g in grouped) g.relic];
-    if (_selected >= results.length && results.isNotEmpty)
+    if (_selected >= results.length && results.isNotEmpty) {
       _selected = results.length - 1;
+    }
     final searching = _searching;
     // Mini picker: compact, chrome-stripped, cursor-anchored (desktop only).
     // The mode is per-summon (set by the host from which hotkey fired).
@@ -2393,7 +2393,7 @@ class _PopupViewState extends State<PopupView> {
                 if (!mini && widget.capturePaused != null)
                   ValueListenableBuilder<bool>(
                     valueListenable: widget.capturePaused!,
-                    builder: (_, paused, __) => paused
+                    builder: (_, paused, _) => paused
                         ? _pausedBanner(c)
                         : const SizedBox.shrink(),
                   ),

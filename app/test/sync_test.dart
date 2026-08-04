@@ -37,6 +37,8 @@ void main() {
     expect(found.isNotEmpty, true, reason: 'relic returned by /relics');
     final dec = await RelicCrypto.openRelicPayload(mkB!, found);
     expect(dec?['content'], 'cross device hello');
+    // Deliberate diagnostic output for the live test.
+    // ignore: avoid_print
     print('CROSS-DEVICE OK: device B decrypted device A relic');
   }, timeout: const Timeout(Duration(minutes: 2)));
 
@@ -68,6 +70,8 @@ void main() {
     final dec = await RelicCrypto.openBlob(mkB!, blobId, get.bodyBytes);
     expect(dec, isNotNull, reason: 'decrypt blob');
     expect(dec, orderedEquals(bytes), reason: 'blob bytes match');
+    // Deliberate diagnostic output for the live test.
+    // ignore: avoid_print
     print('BLOB CROSS-DEVICE OK: device B decrypted device A image bytes');
   }, timeout: const Timeout(Duration(minutes: 2)));
 }

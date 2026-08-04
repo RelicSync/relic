@@ -2068,7 +2068,7 @@ class _TagsSheetState extends State<TagsSheet> {
       runSpacing: 7,
       alignment: WrapAlignment.start,
       children: [
-        if (leading != null) leading,
+        ?leading,
         for (final e in tags)
           if (_editing == e.key && _editingUser == accent)
             _editChip(c)

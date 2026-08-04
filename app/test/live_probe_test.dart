@@ -13,9 +13,15 @@ void main() {
     }
     final repo = WorkerRepo(baseUrl: url, token: token, passphrase: pass);
     await repo.load();
+    // Deliberate diagnostic output for the live probe.
+    // ignore: avoid_print
     print('ACCOUNT: ${repo.account?.footer}');
+    // Deliberate diagnostic output for the live probe.
+    // ignore: avoid_print
     print('RELICS: ${repo.all.length}');
     for (final r in repo.all.take(8)) {
+      // Deliberate diagnostic output for the live probe.
+      // ignore: avoid_print
       print(' - ${r.kind.name} | ${r.promoted ? "★ " : ""}${r.displayTitle}');
     }
     expect(repo.all.length, greaterThanOrEqualTo(0));
