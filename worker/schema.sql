@@ -73,6 +73,25 @@ CREATE TABLE IF NOT EXISTS relic_meta (
 CREATE INDEX IF NOT EXISTS idx_meta_updated ON relic_meta(account_id, updated_at, uid);
 CREATE INDEX IF NOT EXISTS idx_meta_stream  ON relic_meta(account_id, promoted, created_at);
 
+-- AI records + the work lease (migrations/0007_ai_meta.sql has the rationale).
+-- Kept off relic_meta on purpose: relic pushes must advance updated_at, so AI
+-- output riding the relic envelope would make every tagging pass look like a
+-- user edit. This is its own document on its own cursor.
+CREATE TABLE IF NOT EXISTS ai_meta (
+    account_id       TEXT NOT NULL,
+    uid              TEXT NOT NULL,
+    ai_at            INTEGER,            -- NULL until a result lands
+    ai_level         INTEGER,            -- enrich level it was produced at
+    device_id        TEXT,               -- which device produced it
+    n                TEXT,               -- base64 nonce (AAD relic.ai.v1:<uid>)
+    ct               TEXT,               -- base64 ciphertext: {title, tags}
+    claimed_by       TEXT,               -- device holding the lease
+    claim_expires_at INTEGER,            -- past this the lease is free again
+    PRIMARY KEY (account_id, uid)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_at ON ai_meta(account_id, ai_at, uid)
+    WHERE ai_at IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS tombstones (
     account_id TEXT NOT NULL,
     uid        TEXT NOT NULL,

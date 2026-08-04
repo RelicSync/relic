@@ -69,7 +69,9 @@ class PopupHeader extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const RelicIcon(size: 16),
+          // Sized to the settings glyph in the header button opposite it (21 on
+          // mobile), so the two ends of the bar read as the same weight.
+          RelicIcon(size: RelicTheme.isMobileOf(context) ? 21 : 16),
           const SizedBox(width: 8),
           Text(
             'RELIC',
@@ -259,14 +261,16 @@ class _HeaderBtn extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final m = RelicTheme.isMobileOf(context);
-    // Keep today's exact footprint: 24px square desktop / 36px mobile, with the
-    // slightly-larger-than-default glyph the header has always used. Passing the
-    // size explicitly per platform sidesteps GhostButton's icon-only mobile
-    // clamp (which would land at ~34, not 36).
+    // Desktop keeps its 24px square. Mobile matches the row's copy button
+    // exactly: GhostButton bumps icon-only controls by 1.4x for a finger
+    // target, so 30 renders at 42 with a 21px glyph, same as copy's
+    // `size: 30` with a defaulted icon. It used to pass 36/19, which rendered
+    // at 50 and made the header buttons visibly larger than every other
+    // control on screen.
     return GhostButton(
       icon: icon,
-      size: m ? 36 : 24,
-      iconSize: m ? 19 : 13,
+      size: m ? 30 : 24,
+      iconSize: m ? 21 : 13,
       radius: Radii.chip,
       style: filled
           ? GhostStyle.filled

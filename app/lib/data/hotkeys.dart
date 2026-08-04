@@ -3,6 +3,53 @@ import 'dart:io' show Platform;
 import 'package:flutter/services.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 
+/// What asked for the popup. Every summon names its source, and the picker
+/// mode is decided from that in [miniForSummon].
+enum Summon {
+  /// The history hotkey: always the full popup.
+  historyHotkey,
+
+  /// The dedicated mini hotkey: always the compact picker.
+  miniHotkey,
+
+  /// Tray icon click or the tray menu's Show.
+  tray,
+
+  /// Launched (or relaunched) with the popup showing.
+  launch,
+
+  /// A reminder notification the user clicked.
+  notification,
+
+  /// A `relic://` deep link.
+  deepLink,
+
+  /// Save & annotate: the editor needs the full surface.
+  annotate,
+}
+
+/// Which picker a summon opens.
+///
+/// This exists as one table because the alternative had a real cost. The mode
+/// used to be a nullable bool passed at each call site, and the history hotkey
+/// passed nothing, meaning "follow the preference" — so with "Mini picker by
+/// default" on (which is the DEFAULT), the history hotkey and the mini hotkey
+/// both opened the mini picker and the full popup had no hotkey at all. On a
+/// fresh install there was no way to open the full window from the keyboard.
+///
+/// The invariant that must not break again: the two picker hotkeys always
+/// disagree, whatever the preference says. The preference decides the summons
+/// that have no key of their own, which is what the Settings copy has always
+/// promised ("tray and launch").
+bool miniForSummon(Summon s, {required bool miniByDefault}) => switch (s) {
+  Summon.historyHotkey => false,
+  Summon.miniHotkey => true,
+  Summon.tray || Summon.launch => miniByDefault,
+  // A specific item is being surfaced, or an editor is about to open over it.
+  // Both want the room.
+  Summon.notification || Summon.deepLink || Summon.annotate => false,
+};
+
 /// A serializable global-hotkey chord (modifiers + one main key), shared by the
 /// settings recorder (capture/display) and desktop.dart (registration).
 ///

@@ -2028,11 +2028,16 @@ class _PopupViewState extends State<PopupView> {
     };
     final active = _sort != SortMode.relevance;
     final style = active ? GhostStyle.active : GhostStyle.ghost;
+    final m = RelicTheme.isMobileOf(context);
     return showLabel
         ? GhostButton(
             icon: icon,
             label: label,
-            size: 28,
+            // A LABELED GhostButton is exempt from the 1.4x mobile finger-target
+            // bump that icon-only ones get, so this pill sat at 28 next to a
+            // date button rendering at 42. Passing the final height directly is
+            // the only way to line them up.
+            size: m ? 42 : 28,
             iconSize: 13,
             fontSize: 11,
             style: style,
@@ -2052,10 +2057,14 @@ class _PopupViewState extends State<PopupView> {
   /// active (amber) whenever a range is set (picked or parsed from the box).
   Widget _dateButton(RelicColors c) {
     final active = _effectiveRange != null;
+    final m = RelicTheme.isMobileOf(context);
     return GhostButton(
       icon: LucideIcons.calendar,
-      size: 28,
-      iconSize: 14,
+      // Mobile matches the copy button: 30 renders at 42 with a defaulted 21px
+      // glyph. The old 28/14 gave a 40px box with a 14px icon, which read as a
+      // noticeably smaller glyph than everything around it.
+      size: m ? 30 : 28,
+      iconSize: m ? null : 14,
       style: active ? GhostStyle.active : GhostStyle.ghost,
       tooltip: 'Filter by date',
       onTap: _openDateFilter,

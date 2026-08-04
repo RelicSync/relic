@@ -138,6 +138,47 @@ class RelicDb {
         PRIMARY KEY (uid, chunk)
       );
     ''');
+    // AI records: the generated title + tags for a relic, as produced by
+    // whichever device ran the models. Synced, but NOT through the relic
+    // envelope — see worker/src/ai.ts. A relic push is rejected unless it
+    // advances updated_at, so folding AI output into it would make every
+    // background tagging pass look like a user edit and reorder the vault.
+    //
+    // A table of its own rather than columns on `relics`, because an AI record
+    // and its relic arrive on independent cursors and either order is normal.
+    // Keyed by uid with no foreign key, so a record that lands first simply
+    // waits for its relic instead of being dropped on the floor.
+    //
+    // `pushed` IS the outbound queue: 0 means this device generated the record
+    // and still owes it to the server.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS ai_records (
+        uid      TEXT PRIMARY KEY,
+        ai_at    INTEGER NOT NULL,
+        ai_level INTEGER NOT NULL,
+        ai_by    TEXT,
+        title    TEXT,
+        tags     TEXT,
+        ai_text  TEXT,
+        att_text TEXT,
+        pushed   INTEGER NOT NULL DEFAULT 0
+      );
+    ''');
+    // The text columns arrived after the table did. No user_version bump: the
+    // table is young enough that the only databases without them are
+    // development ones, and an added nullable column needs no backfill.
+    final aiCols = db
+        .select('PRAGMA table_info(ai_records)')
+        .map((r) => r['name'] as String)
+        .toSet();
+    for (final c in ['ai_text', 'att_text']) {
+      if (!aiCols.contains(c)) {
+        db.execute('ALTER TABLE ai_records ADD COLUMN $c TEXT');
+      }
+    }
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_ai_unpushed ON ai_records(pushed) WHERE pushed = 0;',
+    );
     // The open-vocabulary tag vocabulary (see relic-sift/src/tag_vocab.rs).
     // ONE ROW PER DISTINCT EMITTED STRING, aliases included — `canonical` is
     // the representative its group snapped onto, and equals `tag` for a
@@ -866,6 +907,9 @@ class RelicDb {
       _db.execute('DELETE FROM relics_fts WHERE uid = ?', [uid]);
       _db.execute('DELETE FROM relics_tri WHERE uid = ?', [uid]);
       _db.execute('DELETE FROM vectors WHERE uid = ?', [uid]);
+      // The AI record dies with its relic, exactly as it does on the server.
+      // Leaving it would let a re-created uid inherit a stranger's title.
+      _db.execute('DELETE FROM ai_records WHERE uid = ?', [uid]);
       _deletePersonalRowsInTxn(uid);
       _db.execute('COMMIT');
     } catch (e) {
@@ -890,6 +934,9 @@ class RelicDb {
       _db.execute('DELETE FROM relics_fts WHERE uid = ?', [uid]);
       _db.execute('DELETE FROM relics_tri WHERE uid = ?', [uid]);
       _db.execute('DELETE FROM vectors WHERE uid = ?', [uid]);
+      // The AI record dies with its relic, exactly as it does on the server.
+      // Leaving it would let a re-created uid inherit a stranger's title.
+      _db.execute('DELETE FROM ai_records WHERE uid = ?', [uid]);
       _deletePersonalRowsInTxn(uid);
       _db.execute('COMMIT');
     } catch (e) {
@@ -947,6 +994,7 @@ class RelicDb {
         'DELETE FROM relics_fts WHERE uid IN ($history)',
         'DELETE FROM relics_tri WHERE uid IN ($history)',
         'DELETE FROM vectors WHERE uid IN ($history)',
+        'DELETE FROM ai_records WHERE uid IN ($history)',
         'DELETE FROM query_memory WHERE uid IN ($history)',
         "DELETE FROM context_memory WHERE kind = 'uid' AND key IN ($history)",
         'DELETE FROM relics WHERE promoted = 0',
@@ -1166,6 +1214,11 @@ class RelicDb {
   void clearAllPendingSync() {
     _db.execute('DELETE FROM pending_ops');
     _db.execute('DELETE FROM sync_rejections');
+    // Same reasoning for AI records still owed to the server: publishing work
+    // generated while bound to one account INTO another is exactly the leak the
+    // account-switch guard exists to prevent. The records stay for local
+    // display; they just stop being outbound.
+    _db.execute('UPDATE ai_records SET pushed = 1 WHERE pushed = 0');
   }
 
   void recordSyncRejection(String uid, String op, int status, int rejectedAt) {
@@ -1281,6 +1334,205 @@ class RelicDb {
     [level, uid],
   );
 
+  int? enrichLevelOf(String uid) {
+    final rs = _db.select('SELECT enrich_level FROM relics WHERE uid = ?', [uid]);
+    return rs.isEmpty ? null : rs.first['enrich_level'] as int;
+  }
+
+  /// Raise [uid]'s enrich level to [level], never lower it.
+  ///
+  /// This is how a device stops redoing work a peer already did: adopting a
+  /// received AI record's level takes the item out of `needingEnrich` for good.
+  /// It must not be able to move BACKWARDS, or a record produced by a device on
+  /// an older model generation would re-queue the whole corpus on a newer one.
+  void raiseEnrichLevel(String uid, int level) => _db.execute(
+    'UPDATE relics SET enrich_level = ? WHERE uid = ? AND enrich_level < ?',
+    [level, uid, level],
+  );
+
+  // --- AI records (generated title + tags; see the ai_records DDL) ---
+
+  /// Whether an incoming AI record should replace [stored].
+  ///
+  /// A byte-for-byte mirror of `aiResultWins` in worker/src/ai.ts, and it has to
+  /// stay that way: if a device disagreed with the server about which result
+  /// wins, it would keep re-publishing a record the server keeps rejecting and
+  /// the two would never settle.
+  ///
+  ///   1. a higher enrich level always wins (a real model upgrade should apply)
+  ///   2. a device may amend its OWN record with its latest word — it is adding
+  ///      to its answer, not competing with it, and the halves of a record are
+  ///      produced by different passes that finish at different times. Its own
+  ///      OLDER word is still refused, so nothing moves backwards.
+  ///   3. at equal level the EARLIEST result wins, so a title the user is
+  ///      already looking at stops moving — this is what stops a device whose
+  ///      lease expired mid-job from overwriting the result that landed first
+  ///   4. exact ties break on device id, so every device picks the same winner
+  static bool aiResultWins(AiRecord incoming, AiRecord? stored) {
+    if (stored == null) return true;
+    if (incoming.level != stored.level) return incoming.level > stored.level;
+    if (incoming.by != null && incoming.by == stored.by) {
+      return incoming.at >= stored.at;
+    }
+    if (incoming.at != stored.at) return incoming.at < stored.at;
+    return (incoming.by ?? '').compareTo(stored.by ?? '￿') < 0;
+  }
+
+  AiRecord? aiRecord(String uid) {
+    final rs = _db.select('SELECT * FROM ai_records WHERE uid = ?', [uid]);
+    return rs.isEmpty ? null : _toAiRecord(rs.first);
+  }
+
+  static AiRecord _toAiRecord(Row r) => AiRecord(
+    uid: r['uid'] as String,
+    at: r['ai_at'] as int,
+    level: r['ai_level'] as int,
+    by: r['ai_by'] as String?,
+    title: r['title'] as String?,
+    tags: _jsonList(r['tags']),
+    text: r['ai_text'] as String?,
+    att: r['att_text'] as String?,
+  );
+
+  /// Store [rec] if it beats what's already here, and return whether it landed.
+  ///
+  /// [needsPush] marks it as owed to the server (this device generated it); a
+  /// record that arrived FROM the server is already published, so it is stored
+  /// with pushed = 1 and never echoed back.
+  ///
+  /// The merge is field-wise, not wholesale: a winning record never clears a
+  /// field it does not carry. The two halves of a record are produced by
+  /// different passes at different times (the models caption an item; a
+  /// separate, model-free pass reads its attachments once their bytes are
+  /// local), so a record that replaced its predecessor outright would throw
+  /// away whichever half arrived first.
+  bool putAiRecord(AiRecord rec, {required bool needsPush}) {
+    final stored = aiRecord(rec.uid);
+    if (!aiResultWins(rec, stored)) return false;
+    final merged = stored == null
+        ? rec
+        : AiRecord(
+            uid: rec.uid,
+            at: rec.at,
+            level: rec.level,
+            by: rec.by,
+            title: rec.title ?? stored.title,
+            tags: rec.tags.isNotEmpty ? rec.tags : stored.tags,
+            text: rec.text ?? stored.text,
+            att: rec.att ?? stored.att,
+          );
+    _db.execute(
+      '''INSERT INTO ai_records
+           (uid, ai_at, ai_level, ai_by, title, tags, ai_text, att_text, pushed)
+         VALUES (?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(uid) DO UPDATE SET
+           ai_at=excluded.ai_at, ai_level=excluded.ai_level, ai_by=excluded.ai_by,
+           title=excluded.title, tags=excluded.tags, ai_text=excluded.ai_text,
+           att_text=excluded.att_text, pushed=excluded.pushed''',
+      [
+        merged.uid,
+        merged.at,
+        merged.level,
+        merged.by,
+        merged.title,
+        jsonEncode(merged.tags),
+        // Stored already trimmed to the wire budget: the full text is in the
+        // relic's own columns, and a second untrimmed copy of every document
+        // would grow the vault file for nothing.
+        aiTextForWire(merged.text),
+        merged.att == null ? null : (aiTextForWire(merged.att) ?? ''),
+        needsPush ? 0 : 1,
+      ],
+    );
+    return true;
+  }
+
+  /// Publish what this device has ALREADY generated, as AI records.
+  ///
+  /// Before AI records existed, enrichment was a purely local side effect: the
+  /// title and machine tags were written to the row and never left the machine.
+  /// So two devices that both enriched the same vault now hold two different
+  /// sets of titles, and neither knows about the other's. This is the one-time
+  /// reconciliation that makes them agree. It runs no models: it publishes
+  /// results that already exist.
+  ///
+  /// `ai_at` is the relic's OWN created_at, not the wall clock, and that choice
+  /// is what makes convergence deterministic. Both devices derive the same
+  /// timestamp for the same item, so the earliest-wins rule reduces to the
+  /// device-id tiebreak and both machines independently pick the same winner.
+  /// Using "now" instead would hand it to whichever device happened to run the
+  /// pass second, which is not a decision anyone made.
+  ///
+  /// Titles the USER typed get published too, since nothing recorded which was
+  /// which. That is harmless: a user title reached the peer through ordinary
+  /// relic sync already, so applying the record there is a no-op. The records
+  /// that actually do something are exactly the ones the peer is missing, which
+  /// are exactly the locally-generated ones.
+  ///
+  /// The same goes for extracted text, and there it matters more: the OCR of a
+  /// screenshot only ever existed on the machine that read it, so seeding it is
+  /// what makes an already-enriched vault searchable on the phone instead of
+  /// only from that one desk. Text relics are excluded — their content is the
+  /// relic body, which syncs on its own and must not get a second copy here.
+  ///
+  /// Returns how many were seeded. Only rows the ML pass actually reached, and
+  /// only ones with something worth sending.
+  int seedAiRecordsFromRelics({required int minLevel, String? by}) {
+    _db.execute(
+      '''INSERT INTO ai_records
+           (uid, ai_at, ai_level, ai_by, title, tags, ai_text, att_text, pushed)
+         SELECT r.uid, r.created_at, r.enrich_level, ?, r.title,
+                COALESCE(r.tags, '[]'),
+                CASE WHEN r.kind <> 'string' THEN substr(r.content, 1, ?) END,
+                substr(r.attachment_text, 1, ?), 0
+           FROM relics r
+          WHERE r.enrich_level >= ?
+            AND (COALESCE(TRIM(r.title), '') <> ''
+                 OR COALESCE(r.tags, '[]') NOT IN ('[]', '')
+                 OR (r.kind <> 'string' AND COALESCE(TRIM(r.content), '') <> '')
+                 OR COALESCE(TRIM(r.attachment_text), '') <> '')
+            AND NOT EXISTS (SELECT 1 FROM ai_records a WHERE a.uid = r.uid)''',
+      // Characters, not bytes: this only bounds what the local table holds, and
+      // the real budget is enforced in bytes on the way out.
+      [by, kAiTextBytes, kAiTextBytes, minLevel],
+    );
+    return _db.updatedRows;
+  }
+
+  /// Records this device generated and still owes the server, oldest first.
+  List<AiRecord> aiRecordsNeedingPush({int limit = 50}) => _db
+      .select(
+        'SELECT * FROM ai_records WHERE pushed = 0 ORDER BY ai_at ASC LIMIT ?',
+        [limit],
+      )
+      .map(_toAiRecord)
+      .toList();
+
+  int countAiRecordsNeedingPush() =>
+      _db.select('SELECT COUNT(*) AS n FROM ai_records WHERE pushed = 0').first['n']
+          as int;
+
+  /// Settle a record with the server. Also the right call when the server says
+  /// `stale`: a peer's result won, so we stop owing this one.
+  void markAiPushed(String uid) =>
+      _db.execute('UPDATE ai_records SET pushed = 1 WHERE uid = ?', [uid]);
+
+  /// Uids that have an AI record but whose relic has not adopted it yet.
+  ///
+  /// Covers the ordinary case where a record arrives before its relic does:
+  /// the two ride independent cursors, so either order happens, and the record
+  /// simply waits here until the relic shows up.
+  List<String> aiRecordsUnapplied({int limit = 200}) => _db
+      .select(
+        '''SELECT a.uid FROM ai_records a
+           JOIN relics r ON r.uid = a.uid
+           WHERE r.enrich_level < a.ai_level
+           ORDER BY a.ai_at ASC LIMIT ?''',
+        [limit],
+      )
+      .map((r) => r['uid'] as String)
+      .toList();
+
   /// Reset attachment-text extraction (after an attachment edit rebuilt the
   /// bundle) so the backlog pass / direct re-extract reads the new bytes —
   /// it only retries rows where attachment_text IS NULL.
@@ -1324,6 +1576,33 @@ class RelicDb {
   List<Relic> needingEnrich(int level, int limit) => _db
       .select(
         'SELECT * FROM relics WHERE enrich_level < ? ORDER BY created_at DESC LIMIT ?',
+        [level, limit],
+      )
+      .map(_toRelic)
+      .toList();
+
+  /// Relics this device considers enriched but holds no embedding for.
+  ///
+  /// This is the hole the work-claim opened. Only one device runs the models on
+  /// a given item now, and every other device adopts its result and marks the
+  /// item done — which also means those devices never embed it, so the item is
+  /// missing from their semantic index and findable there by keyword only.
+  ///
+  /// The fix is not to sync the vectors: they are meaningless to a device on a
+  /// different embedding model, and useless to one that cannot embed a query at
+  /// all. It is to embed locally from the text that now travels. Embedding is
+  /// cheap and deterministic, so every device can afford to redo it and they
+  /// all land on the same answer — unlike captioning, which is neither.
+  ///
+  /// Items with no text are excluded rather than retried: there is nothing to
+  /// embed, so they would otherwise sit in this queue forever. Newest first.
+  List<Relic> needingVectors(int level, int limit) => _db
+      .select(
+        '''SELECT * FROM relics r
+            WHERE r.enrich_level >= ?
+              AND COALESCE(TRIM(r.content), '') <> ''
+              AND NOT EXISTS (SELECT 1 FROM vectors v WHERE v.uid = r.uid)
+            ORDER BY r.created_at DESC LIMIT ?''',
         [level, limit],
       )
       .map(_toRelic)
@@ -1378,6 +1657,23 @@ class RelicDb {
       [text, uid],
     );
     _reindexFts(uid);
+  }
+
+  /// Store attachment text that came from another device, but only where this
+  /// one has none of its own. Returns whether it landed.
+  ///
+  /// Local extraction outranks a peer's copy for the same reason a local
+  /// content column does: it was read from the bytes this device holds. The
+  /// stored value may legitimately be the empty string ("ran, found nothing"),
+  /// which is an answer, so this checks for NULL rather than for emptiness.
+  bool applyAttachmentText(String uid, String text) {
+    final rs = _db.select(
+      'SELECT attachment_text FROM relics WHERE uid = ?',
+      [uid],
+    );
+    if (rs.isEmpty || rs.first['attachment_text'] != null) return false;
+    setAttachmentText(uid, text);
+    return true;
   }
 
   /// Uids of relics that have attachments but no extracted attachment text

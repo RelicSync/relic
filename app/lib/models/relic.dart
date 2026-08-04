@@ -424,3 +424,275 @@ String humanBytes(int bytes) {
   }
   return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
 }
+
+/// What the on-device models generated for one relic: a title and some tags.
+///
+/// This is a document in its own right, not a field of [Relic], because it
+/// syncs on a separate cursor. A relic push is only accepted if it advances
+/// `updated_at`, so if AI output rode the relic envelope then every background
+/// tagging pass would count as a user edit, reshuffle "recently updated", and
+/// let a model run race a rename. Keeping it separate means a generated title
+/// can propagate to every device without touching the relic's own timeline.
+///
+/// [level] is the enrich level it was produced at, so a newer model generation
+/// can supersede an older one while two devices on the SAME generation leave
+/// each other's work alone.
+class AiRecord {
+  final String uid;
+
+  /// When the producing device generated it (epoch seconds).
+  final int at;
+
+  /// The enrich level of the models that produced it.
+  final int level;
+
+  /// Which device produced it. Null only for records from before the field
+  /// existed; used to break exact ties deterministically.
+  final String? by;
+
+  final String? title;
+  final List<String> tags;
+
+  /// The text the models read out of the item: OCR from a screenshot, the
+  /// extracted body of a document. Never set for [Kind.string], whose text is
+  /// the relic itself and already travels in the relic envelope.
+  ///
+  /// This is the difference between a screenshot being findable everywhere and
+  /// being findable only on the machine that happened to run the OCR. It is
+  /// also the largest thing an AI record carries, hence [aiTextForWire].
+  final String? text;
+
+  /// Text read out of the item's ATTACHMENTS, so a note is findable by what its
+  /// bundled files say and not just their filenames.
+  ///
+  /// Extraction itself needs no models, but it does need the attachment bytes,
+  /// and blobs download lazily. So a device that never opened the note has no
+  /// way to index it, and a phone has no extractor at all. Both get it here.
+  ///
+  /// An empty string is a value, not an absence: it means extraction ran and
+  /// found nothing, which is worth saying so nobody retries it.
+  final String? att;
+
+  const AiRecord({
+    required this.uid,
+    required this.at,
+    required this.level,
+    this.by,
+    this.title,
+    this.tags = const [],
+    this.text,
+    this.att,
+  });
+
+  AiRecord copyWith({
+    String? title,
+    List<String>? tags,
+    String? text,
+    String? att,
+    int? at,
+    int? level,
+    String? by,
+  }) =>
+      AiRecord(
+        uid: uid,
+        at: at ?? this.at,
+        level: level ?? this.level,
+        by: by ?? this.by,
+        title: title ?? this.title,
+        tags: tags ?? this.tags,
+        text: text ?? this.text,
+        att: att ?? this.att,
+      );
+
+  /// True when there is nothing worth publishing. An empty record would still
+  /// win its uid under the earliest-wins rule and then lock every other device
+  /// out of producing a real one, so these are dropped rather than stored.
+  bool get isEmpty =>
+      (title == null || title!.trim().isEmpty) &&
+      tags.isEmpty &&
+      (text == null || text!.trim().isEmpty) &&
+      (att == null || att!.trim().isEmpty);
+
+  /// The sealed half of the wire record (the half the server never reads).
+  ///
+  /// The byte budget is applied HERE rather than at each producer, so no path
+  /// can build a record the server will refuse. A rejected record is not
+  /// retried (there is no version of it that would fit), so an untrimmed one
+  /// would mean silently losing the text instead of shipping most of it.
+  Map<String, dynamic> toPayload() {
+    // ONE budget for extracted text, spent in order rather than one budget
+    // each. In practice the two barely compete: an item with OCR of its own is
+    // a photo or a document, an item with attachment text is a note, and a note
+    // has nothing to OCR. Giving each a full budget would double the ceiling
+    // for a case that hardly occurs.
+    final t = aiTextForWire(text);
+    final a = aiTextForWire(att,
+        budget: kAiTextBytes - (t == null ? 0 : utf8.encode(t).length));
+    final p = {
+      if (title != null) 'title': title,
+      'tags': tags,
+      if (t != null) 'text': t,
+      // Empty is meaningful here ("ran, found nothing"), so it is sent as ''
+      // rather than dropped — but only when there was something to say.
+      if (a != null || (att != null && att!.isEmpty)) 'att': a ?? '',
+    };
+    // The byte budget is on the text; JSON escaping is on top of it and has no
+    // fixed ratio (a stray control character costs six bytes to encode one).
+    // In the rare case that pushes a record over, the text goes and the title
+    // and tags still travel — losing the whole record because a document
+    // contained something strange would be the worse outcome by far.
+    if (utf8.encode(jsonEncode(p)).length > kAiPayloadBytes) p.remove('att');
+    if (utf8.encode(jsonEncode(p)).length > kAiPayloadBytes) p.remove('text');
+    return p;
+  }
+
+  /// Rebuild from a decrypted payload plus the envelope's plaintext fields.
+  static AiRecord fromWire(Map<String, dynamic> env, Map<String, dynamic> p) =>
+      AiRecord(
+        uid: env['uid'] as String,
+        at: (env['ai_at'] as num).toInt(),
+        level: (env['level'] as num?)?.toInt() ?? 0,
+        by: env['device'] as String?,
+        title: p['title'] as String?,
+        tags: (p['tags'] as List?)?.whereType<String>().toList() ?? const [],
+        text: p['text'] as String?,
+        att: p['att'] as String?,
+      );
+}
+
+/// How much extracted text one AI record may carry, in UTF-8 bytes.
+///
+/// Measured against a real vault: every screenshot's OCR fits several times
+/// over (the largest was under 3 KB), and so does the text of all but the
+/// longest documents. Past that the record is truncated rather than dropped,
+/// because the front of a document is where its title, headings and names
+/// live, and finding it at all is the point.
+///
+/// The ceiling is not free storage: AI records live in D1 next to the sync
+/// metadata, not in blob storage, and the actual file already syncs as a blob.
+/// Kept in step with MAX_CT in worker/src/ai.ts, which has to allow for
+/// encryption and base64 on top of this.
+const int kAiTextBytes = 24 * 1024;
+
+/// The ceiling on a whole sealed payload, in UTF-8 bytes.
+///
+/// Chosen backwards from the server's MAX_CT of 48 KiB: base64 costs 4/3 and
+/// the seal adds a nonce and a tag, so a payload at this size lands around
+/// 45 KiB on the wire. Anything under it is guaranteed to be accepted, which
+/// matters because a rejected record is not retried.
+const int kAiPayloadBytes = 33 * 1024;
+
+/// [text], trimmed and cut to [budget] UTF-8 bytes, or null if there is nothing
+/// left to send.
+///
+/// The cut is on whole characters and counted in UTF-8 bytes, which is what the
+/// wire actually costs: a budget counted in characters would let a document in
+/// a non-Latin script produce a record three times over the server's cap.
+String? aiTextForWire(String? text, {int budget = kAiTextBytes}) {
+  final t = text?.trim();
+  if (t == null || t.isEmpty) return null;
+  // Too little left to be worth anything: a truncation marker and two words is
+  // not a searchable document, just wire weight.
+  if (budget < 64) return null;
+  var bytes = 0;
+  for (var i = 0; i < t.length; i++) {
+    final c = t.codeUnitAt(i);
+    // Surrogate pairs are two code units of one 4-byte character; counting the
+    // lead as 4 and the trail as 0 keeps the total right and, because a cut can
+    // only happen on a lead, never splits one.
+    bytes += c < 0x80
+        ? 1
+        : c < 0x800
+        ? 2
+        : (c & 0xFC00) == 0xD800
+        ? 4
+        : (c & 0xFC00) == 0xDC00
+        ? 0
+        : 3;
+    if (bytes > budget) {
+      // The ellipsis is the honest signal that there is more of this document
+      // on the device that read it.
+      return '${t.substring(0, i).trimRight()}…';
+    }
+  }
+  return t;
+}
+
+/// The headline to store after a labeling pass: the generated title, for a
+/// photo or a text item the user hasn't titled themselves.
+///
+/// A photo then shows "a rocky beach…" rather than its first OCR line, and a
+/// vault note shows what it is rather than its first 60 characters. A title the
+/// user (or an earlier pass) already set always wins — labeling never overwrites
+/// one. Files keep their filename as the headline.
+///
+/// Text only reaches a labeling pass once promoted; that gate lives at the call
+/// site, not here.
+String? titleAfterLabel({
+  required Kind kind,
+  required String? current,
+  required String? caption,
+}) {
+  if (current != null && current.trim().isNotEmpty) return current;
+  if (kind != Kind.photo && kind != Kind.string) return current;
+  final cap = caption?.trim();
+  return (cap != null && cap.isNotEmpty) ? cap : current;
+}
+
+/// Fold an [AiRecord] into the relic a device already holds.
+///
+/// The invariant that matters: **the user always outranks the models**. A title
+/// they typed is never replaced by a generated one, and a machine tag they
+/// deleted is never re-added. [suppressed] is the RECEIVING device's own record
+/// of those deletions, which is exactly why this filtering happens here rather
+/// than at the device that generated the record: the producer knows what its
+/// models said, but only this device knows what its user has thrown away.
+///
+/// Lives on the model rather than in either repo because both need it — the
+/// desktop applies records it pulls from peers, and the phone, which will never
+/// run the models at all, applies every record it receives.
+({List<String> tags, String? title, String? content}) mergeAiRecord({
+  required Relic cur,
+  required AiRecord rec,
+  required Set<String> suppressed,
+}) {
+  final curLower = cur.tags.map((t) => t.toLowerCase()).toSet();
+  return (
+    tags: <String>[
+      ...cur.tags,
+      ...rec.tags.where((t) =>
+          !curLower.contains(t.toLowerCase()) &&
+          !suppressed.contains(t.toLowerCase())),
+    ],
+    // titleAfterLabel returns `current` whenever it is non-empty, so a
+    // generated title only ever fills a gap.
+    title: titleAfterLabel(kind: cur.kind, current: cur.title, caption: rec.title),
+    content: contentAfterExtract(
+      kind: cur.kind,
+      current: cur.content,
+      text: rec.text,
+    ),
+  );
+}
+
+/// The searchable body to store for an item whose text was read by the models
+/// on another device.
+///
+/// Extracted text fills a gap and never overwrites one. Whatever is already in
+/// [current] is either this device's own extraction or something the user typed
+/// into the item, and both outrank a peer's copy — the peer cannot tell which
+/// of the two it is looking at, so the only safe rule is to leave it alone.
+///
+/// [Kind.string] is excluded outright: a text relic's content IS the relic, it
+/// already syncs in the envelope, and letting an AI record write it would put
+/// a second, stale copy of the body on a path with no last-write-wins.
+String? contentAfterExtract({
+  required Kind kind,
+  required String? current,
+  required String? text,
+}) {
+  if (kind == Kind.string) return current;
+  if (current != null && current.trim().isNotEmpty) return current;
+  final t = text?.trim();
+  return (t != null && t.isNotEmpty) ? t : current;
+}

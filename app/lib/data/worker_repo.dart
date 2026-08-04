@@ -425,6 +425,15 @@ class WorkerRepo implements RelicRepo {
 
   int _cursor = 0; // max relic updated_at pulled
   int _tombCursor = 0; // max tombstone deleted_at pulled
+  int _aiCursor = 0; // max AI-record ai_at pulled
+
+  // AI records (generated titles + tags) from the account's desktops. This
+  // device is a pure consumer: phones never run the models, so it only ever
+  // pulls these, never claims work and never publishes. Kept as raw envelopes
+  // like `_envByUid` so the account-switch cache guard covers them for free —
+  // another account's records simply fail to decrypt.
+  final Map<String, Map<String, dynamic>> _aiEnvByUid = {};
+  final Map<String, AiRecord> _aiByUid = {};
   Map<String, dynamic>? _keyparams; // cached so the key can be unwrapped offline
   bool _cacheLoaded = false;
 
@@ -594,6 +603,13 @@ class WorkerRepo implements RelicRepo {
       // re-prepares ~8 statements per relic, which measured 6.1s building this
       // index on a real vault at launch.
       db.bulkLoad(_items, haveBlob: (r) => localImagePath(r) != null);
+      // bulkLoad rebuilds every index row from the relics alone, so the
+      // attachment text a desktop sent us has to be written back on top or a
+      // full rebuild would quietly drop it from search.
+      for (final e in _aiByUid.entries) {
+        final att = e.value.att;
+        if (att != null && att.isNotEmpty) db.setAttachmentText(e.key, att);
+      }
       _index?.dispose();
       _index = db;
       _refreshWindow();
@@ -606,6 +622,12 @@ class WorkerRepo implements RelicRepo {
     if (_indexBuilding) _indexDirty.add(r.uid); // replayed onto the new db
     try {
       _index?.upsert(r, haveBlob: localImagePath(r) != null);
+      // Attachment text is a column on the index row, not a field on the Relic,
+      // so an upsert leaves it behind and it has to be written back. A phone
+      // has no extractor of its own, so this copy from a desktop is the only
+      // one it will ever have.
+      final att = _aiByUid[r.uid]?.att;
+      if (att != null && att.isNotEmpty) _index?.setAttachmentText(r.uid, att);
     } catch (_) {}
   }
 
@@ -1014,6 +1036,9 @@ class WorkerRepo implements RelicRepo {
           final d = (t['deleted_at'] as num).toInt();
           if (d > tmax) tmax = d;
           final uid = t['uid'] as String;
+          // The AI record dies with its relic, as it does on the server.
+          _aiEnvByUid.remove(uid);
+          _aiByUid.remove(uid);
           if (_envByUid.remove(uid) != null) {
             _items.removeWhere((x) => x.uid == uid);
             _indexDelete(uid);
@@ -1023,6 +1048,10 @@ class WorkerRepo implements RelicRepo {
         }
         if (tmax - 1 > _tombCursor) _tombCursor = tmax - 1;
       }
+
+      // AI records last, so an item that arrived in this same pass gets its
+      // generated title now rather than a cycle later.
+      if (await _pullAiRecords()) changed = true;
 
       if (changed) {
         _items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
@@ -1068,7 +1097,100 @@ class WorkerRepo implements RelicRepo {
       _items.add(relic);
     }
     _indexUpsert(relic);
+    // A relic update replaces the decrypted row wholesale, and the generated
+    // title lives only in that row (never in the envelope), so it has to be
+    // folded back in or an unrelated edit on another device would silently
+    // strip the title off this one.
+    _applyAiRecord(uid);
     return true;
+  }
+
+  /// Fold this uid's AI record into the in-memory relic, if both are here.
+  ///
+  /// Returns whether anything changed. Safe to call at any time: records and
+  /// relics arrive on independent cursors, so either order is normal and this
+  /// simply does nothing until both halves exist.
+  bool _applyAiRecord(String uid) {
+    final rec = _aiByUid[uid];
+    if (rec == null) return false;
+    final i = _items.indexWhere((x) => x.uid == uid);
+    if (i < 0) return false;
+    final cur = _items[i];
+    // Suppression is desktop-only local state, so there is nothing to filter
+    // out here; the user's own title still outranks the generated one.
+    final merged = mergeAiRecord(cur: cur, rec: rec, suppressed: const {});
+    if (merged.tags.length == cur.tags.length &&
+        merged.title == cur.title &&
+        merged.content == cur.content) {
+      // Nothing on the relic itself changed, but the record may still carry
+      // attachment text, which lives on the index row rather than the relic.
+      // Routed through _indexUpsert so it gets the same treatment as any other
+      // index write, including being replayed if a rebuild is in flight.
+      final att = rec.att;
+      if (att != null && att.isNotEmpty) {
+        _indexUpsert(cur);
+        return true;
+      }
+      return false;
+    }
+    // Content carries the extracted text a desktop read out of the item. A
+    // phone will never produce it, so this is the only way a screenshot ends up
+    // searchable by the words inside it here.
+    _items[i] = cur.copyWith(
+      tags: merged.tags,
+      title: merged.title,
+      content: merged.content,
+    );
+    _indexUpsert(_items[i]);
+    return true;
+  }
+
+  /// Pull the generated titles and tags the account's desktops produced.
+  ///
+  /// This is the half of the feature that matters on a phone. The models will
+  /// never run here, so without this pull a vaulted screenshot shows up
+  /// untitled forever even though a desktop already named it.
+  Future<bool> _pullAiRecords() async {
+    if (_mk == null) return false;
+    var changed = false;
+    try {
+      var maxAt = _aiCursor;
+      String? cursor;
+      do {
+        final r = await http.get(
+          Uri.parse(_u('/ai')).replace(queryParameters: {
+            'since': '$_aiCursor',
+            'limit': '500',
+            if (cursor != null) 'cursor': cursor,
+          }),
+          headers: _headers,
+        ).timeout(kNetTimeout);
+        if (r.statusCode != 200) return changed;
+        final body = jsonDecode(r.body) as Map<String, dynamic>;
+        for (final env in (body['items'] as List).cast<Map<String, dynamic>>()) {
+          final at = (env['ai_at'] as num).toInt();
+          if (at > maxAt) maxAt = at;
+          if (await _absorbAiEnv(env)) changed = true;
+        }
+        cursor = body['next_cursor'] as String?;
+      } while (cursor != null);
+      // Same off-by-one guard the relic cursor uses, so a record written in the
+      // same second as the cursor is not skipped.
+      if (maxAt - 1 > _aiCursor) _aiCursor = maxAt - 1;
+    } catch (_) {
+      return changed;
+    }
+    return changed;
+  }
+
+  Future<bool> _absorbAiEnv(Map<String, dynamic> env) async {
+    final uid = env['uid'] as String;
+    final p = await RelicCrypto.openAiPayload(
+        _mk!, uid, env['n'] as String, env['ct'] as String);
+    if (p == null) return false; // not ours to read, or tampered with
+    _aiEnvByUid[uid] = env;
+    _aiByUid[uid] = AiRecord.fromWire(env, p);
+    return _applyAiRecord(uid);
   }
 
   // --- test hooks (the pull/outbox plumbing is private; there is no offline
@@ -1076,6 +1198,15 @@ class WorkerRepo implements RelicRepo {
 
   @visibleForTesting
   Future<bool> debugUpsertEnv(Map<String, dynamic> env) => _upsertEnv(env);
+
+  /// Feed one AI record in, as a pull would. There is no offline network seam,
+  /// so the consumer path is driven directly.
+  @visibleForTesting
+  Future<bool> debugAbsorbAiEnv(Map<String, dynamic> env) => _absorbAiEnv(env);
+
+  /// Rebuild the search index from scratch, as a relaunch does.
+  @visibleForTesting
+  void debugRebuildIndex() => _rebuildIndex();
 
   @visibleForTesting
   List<Map<String, dynamic>> get debugOutbox => List.unmodifiable(_outbox);
@@ -1140,10 +1271,19 @@ class WorkerRepo implements RelicRepo {
       }
       _cursor = (j['cursor'] as num?)?.toInt() ?? 0;
       _tombCursor = (j['tombCursor'] as num?)?.toInt() ?? 0;
+      _aiCursor = (j['aiCursor'] as num?)?.toInt() ?? 0;
       _keyparams = (j['keyparams'] as Map?)?.cast<String, dynamic>();
       for (final e in (j['items'] as List? ?? const [])) {
         final env = (e as Map).cast<String, dynamic>();
         _envByUid[env['uid'] as String] = env;
+      }
+      // Cached alongside the relics because the AI cursor is cached too: on a
+      // relaunch the pull starts past these records, so if they were not kept
+      // every generated title would vanish until something happened to
+      // re-publish it.
+      for (final e in (j['aiItems'] as List? ?? const [])) {
+        final env = (e as Map).cast<String, dynamic>();
+        _aiEnvByUid[env['uid'] as String] = env;
       }
       for (final o in (j['outbox'] as List? ?? const [])) {
         _outbox.add((o as Map).cast<String, dynamic>());
@@ -1174,6 +1314,19 @@ class WorkerRepo implements RelicRepo {
     for (final env in _envByUid.values) {
       final r = await _decrypt(env);
       if (r != null) _items.add(r);
+    }
+    // Generated titles, folded in before the first paint. The relic envelope
+    // never carries them, so without this pass a relaunch would show every
+    // desktop-titled item untitled until the next successful pull.
+    _aiByUid.clear();
+    for (final env in _aiEnvByUid.values) {
+      final uid = env['uid'] as String;
+      final p = await RelicCrypto.openAiPayload(
+          _mk!, uid, env['n'] as String, env['ct'] as String);
+      if (p != null) _aiByUid[uid] = AiRecord.fromWire(env, p);
+    }
+    for (final uid in _aiByUid.keys) {
+      _applyAiRecord(uid);
     }
     _items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     BootTrace.mark('relics decrypted');
@@ -1304,8 +1457,10 @@ class WorkerRepo implements RelicRepo {
         'account': _personalAcct, // owner stamp — see _loadCache's guard
         'cursor': _cursor,
         'tombCursor': _tombCursor,
+        'aiCursor': _aiCursor,
         'keyparams': _keyparams,
         'items': _envByUid.values.toList(),
+        'aiItems': _aiEnvByUid.values.toList(),
         'outbox': _outbox,
         'blobOutbox': _blobOutbox,
         if (_account != null)
@@ -1327,11 +1482,14 @@ class WorkerRepo implements RelicRepo {
   Future<void> destroyLocalCache() async {
     _items.clear();
     _envByUid.clear();
+    _aiEnvByUid.clear();
+    _aiByUid.clear();
     _outbox.clear();
     _blobOutbox.clear();
     _account = null; // cached plan/storage belongs to the account being dropped
     _cursor = 0;
     _tombCursor = 0;
+    _aiCursor = 0;
     _keyparams = null;
     try {
       final f = await _cacheFile();

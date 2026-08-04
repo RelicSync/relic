@@ -169,6 +169,35 @@ class RelicCrypto {
     return {'n': base64.encode(nonce), 'ct': base64.encode(ct)};
   }
 
+  /// Seal an AI record (generated title + tags) → `{n, ct}` base64.
+  ///
+  /// A domain of its own, NOT the relic domain: an AI record travels as a
+  /// separate document with its own lifecycle, so binding it to
+  /// `relic.ai.v1:<uid>` means a relic body can never be served in its place
+  /// (or the reverse) even by a server that shuffles ciphertexts on purpose.
+  static Future<Map<String, String>> sealAiPayload(
+      Uint8List mk, String uid, Map<String, dynamic> payload) async {
+    final nonce = _randomNonce();
+    final ct = await _seal(mk, nonce, utf8.encode(jsonEncode(payload)), 'relic.ai.v1:$uid');
+    return {'n': base64.encode(nonce), 'ct': base64.encode(ct)};
+  }
+
+  /// Decrypt mirror of [sealAiPayload]. Null on a wrong key, a tampered record,
+  /// or a record minted for a different uid.
+  static Future<Map<String, dynamic>?> openAiPayload(
+      Uint8List mk, String uid, String n, String ct) async {
+    try {
+      final clear = await _open(mk, Uint8List.fromList(base64.decode(n)),
+          Uint8List.fromList(base64.decode(ct)), 'relic.ai.v1:$uid');
+      final v = jsonDecode(utf8.decode(clear));
+      return v is Map<String, dynamic> ? v : null;
+    } on SecretBoxAuthenticationError {
+      return null;
+    } on FormatException {
+      return null;
+    }
+  }
+
   /// Encrypt a blob → wire bytes `nonce(24) ‖ ct`, AAD bound to the blob id.
   /// Encrypt mirror of [openBlob].
   static Future<Uint8List> sealBlob(Uint8List mk, String blobId, Uint8List bytes) async {

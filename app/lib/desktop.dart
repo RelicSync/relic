@@ -228,7 +228,7 @@ class _RealAppState extends State<RealApp>
           title: 'Relic reminders',
           body: 'You have ${due.length} reminders due.',
         );
-        n.onClick = () => _show(forceMini: false);
+        n.onClick = () => _show(Summon.notification);
         try {
           n.show();
         } catch (_) {}
@@ -244,7 +244,7 @@ class _RealAppState extends State<RealApp>
         );
         n.onClick = () async {
           await widget.repo.putOnClipboard(r);
-          await _show(forceMini: false);
+          await _show(Summon.notification);
         };
         try {
           n.show();
@@ -283,7 +283,7 @@ class _RealAppState extends State<RealApp>
         await windowManager.show();
         _visible = true;
       } else if (widget.showOnLaunch) {
-        await _show(forceMini: false);
+        await _show(Summon.launch);
       } else {
         await windowManager.hide();
         _visible = false;
@@ -301,7 +301,7 @@ class _RealAppState extends State<RealApp>
   /// capture/auth hosts are mobile-only, so there is nothing else to route here.
   void _handleDeepLink(Uri uri) {
     if (!mounted) return;
-    unawaited(_show(forceMini: false));
+    unawaited(_show(Summon.deepLink));
   }
 
   @override
@@ -475,11 +475,13 @@ class _RealAppState extends State<RealApp>
       }
     }
 
-    // The main history hotkey honors the "mini picker by default" setting; the
-    // dedicated mini hotkey always opens mini. Every non-hotkey summon (tray,
-    // notifications, launch, deep links, annotate) forces the full picker.
-    await reg('history', widget.repo.historyHotkey, (_) => _toggle());
-    await reg('mini', widget.repo.miniHotkey, (_) => _toggle(forceMini: true));
+    // The two picker hotkeys open the two pickers, always, whatever the "mini
+    // picker by default" setting says. That setting used to steer the history
+    // hotkey as well, which meant that with it on (the default) both hotkeys
+    // opened mini and the full popup was unreachable from the keyboard. See
+    // miniForSummon.
+    await reg('history', widget.repo.historyHotkey, (_) => _toggle(Summon.historyHotkey));
+    await reg('mini', widget.repo.miniHotkey, (_) => _toggle(Summon.miniHotkey));
     await reg('capture', widget.repo.captureHotkey, (_) => _saveAndAnnotate());
     await reg('promote', widget.repo.promoteHotkey, (_) {
       if (widget.repo.promoteLast()) {
@@ -555,11 +557,11 @@ class _RealAppState extends State<RealApp>
 
   Size get _popupDims => Size(widget.repo.popupSize.w, widget.repo.popupSize.h);
 
-  /// [forceMini] pins this summon to the mini (true) or full (false) picker —
-  /// the two hotkeys pass it explicitly; tray/launch/deep-link summons pass null
-  /// and follow the `miniPicker` default.
-  Future<void> _show({bool? forceMini}) async {
-    _miniMode.value = forceMini ?? widget.repo.miniPicker;
+  /// [src] is who asked; [miniForSummon] turns that into the picker mode. The
+  /// source travels rather than the mode so that no call site can decide the
+  /// policy on its own, which is how the full popup once lost its hotkey.
+  Future<void> _show(Summon src) async {
+    _miniMode.value = miniForSummon(src, miniByDefault: widget.repo.miniPicker);
     // Read the summon context FIRST — the summoner still owns the foreground
     // until we take it (same rule as the capture path below). Feeds the
     // destination-context ranking prior; the skip-list nulls Relic itself.
@@ -816,20 +818,15 @@ class _RealAppState extends State<RealApp>
     } catch (_) {}
   }
 
-  /// Summon/dismiss. [forceMini] pins the mode (the two picker hotkeys pass it).
-  /// When the popup is already up in the OTHER mode, switch to the requested one
-  /// instead of closing — so pressing the mini key over the full picker (or vice
-  /// versa) swaps modes rather than dismissing.
-  Future<void> _toggle({bool? forceMini}) async {
-    if (_visible) {
-      final want = forceMini ?? widget.repo.miniPicker;
-      if (_miniMode.value == want) {
-        await _hide(explicit: true);
-      } else {
-        await _show(forceMini: forceMini);
-      }
+  /// Summon/dismiss. When the popup is already up in the OTHER mode, switch to
+  /// the requested one instead of closing — so pressing the mini key over the
+  /// full picker (or vice versa) swaps modes rather than dismissing.
+  Future<void> _toggle(Summon src) async {
+    final want = miniForSummon(src, miniByDefault: widget.repo.miniPicker);
+    if (_visible && _miniMode.value == want) {
+      await _hide(explicit: true);
     } else {
-      await _show(forceMini: forceMini);
+      await _show(src);
     }
   }
 
@@ -959,7 +956,7 @@ class _RealAppState extends State<RealApp>
       if (_settingsOpen) setState(() => _settingsOpen = false);
       _annotateRequest = EditRequest(r, promoted: promoted);
       if (mounted) setState(() {});
-      await _show(forceMini: false);
+      await _show(Summon.annotate);
     } finally {
       _annotateInFlight = false;
     }
@@ -1154,14 +1151,14 @@ class _RealAppState extends State<RealApp>
 
   // --- tray ---
   @override
-  void onTrayIconMouseDown() => _toggle(forceMini: false);
+  void onTrayIconMouseDown() => _toggle(Summon.tray);
   @override
   void onTrayIconRightMouseDown() => trayManager.popUpContextMenu();
   @override
   void onTrayMenuItemClick(MenuItem item) async {
     switch (item.key) {
       case 'show':
-        _show(forceMini: false);
+        _show(Summon.tray);
       case 'pause_10':
         await _setPaused(true, duration: const Duration(minutes: 10));
       case 'pause_60':
@@ -1173,7 +1170,7 @@ class _RealAppState extends State<RealApp>
       case 'connect':
         setState(() => _connecting = true);
         await _sizeWindow(520, 560);
-        await _show(forceMini: false);
+        await _show(Summon.tray);
       case 'check_update':
         await _checkForUpdates();
       case 'install_update':

@@ -32,6 +32,52 @@ void main() {
     expect(await RelicCrypto.openRelicPayload(mk, bad), isNull);
   });
 
+  test('AI record round-trips and is bound to its uid', () async {
+    final mk = Uint8List.fromList(List.generate(32, (i) => i));
+    final sealed = await RelicCrypto.sealAiPayload(mk, 'uid-1', {
+      'title': 'Kessler Roofing pricing',
+      'tags': ['invoice', 'roofing'],
+    });
+    final got = await RelicCrypto.openAiPayload(
+        mk, 'uid-1', sealed['n']!, sealed['ct']!);
+    expect(got?['title'], 'Kessler Roofing pricing');
+    expect(got?['tags'], ['invoice', 'roofing']);
+
+    // Replaying another item's record must not open here.
+    expect(
+        await RelicCrypto.openAiPayload(mk, 'uid-2', sealed['n']!, sealed['ct']!),
+        isNull);
+    // Nor should a different vault's key.
+    final other = Uint8List.fromList(List.filled(32, 9));
+    expect(
+        await RelicCrypto.openAiPayload(other, 'uid-1', sealed['n']!, sealed['ct']!),
+        isNull);
+  });
+
+  test('an AI record and a relic body cannot be swapped for each other',
+      () async {
+    // Domain separation is the point of the distinct AAD: a server that serves
+    // a relic body where an AI record belongs gets a decrypt failure, not a
+    // silently mis-parsed document.
+    final mk = Uint8List.fromList(List.generate(32, (i) => i));
+    final relic = await RelicCrypto.sealRelicPayload(mk, 'uid-1', {'content': 'hi'});
+    expect(
+        await RelicCrypto.openAiPayload(mk, 'uid-1', relic['n']!, relic['ct']!),
+        isNull);
+
+    final ai = await RelicCrypto.sealAiPayload(mk, 'uid-1', {'title': 'x'});
+    expect(
+        await RelicCrypto.openRelicPayload(
+            mk, {'uid': 'uid-1', 'n': ai['n'], 'ct': ai['ct']}),
+        isNull);
+  });
+
+  test('a corrupt AI record returns null rather than throwing', () async {
+    final mk = Uint8List.fromList(List.generate(32, (i) => i));
+    expect(await RelicCrypto.openAiPayload(mk, 'uid-1', '!!not base64!!', 'zz'),
+        isNull);
+  });
+
   test('create → rewrap under a new passphrase preserves the master key', () async {
     final (kp, mk) = await RelicCrypto.createKeyParams('first passphrase');
     // Original passphrase unwraps; a wrong one returns null (the key check).

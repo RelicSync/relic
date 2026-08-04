@@ -31,6 +31,11 @@ import 'sift.dart';
 import 'sync_socket.dart';
 import 'supabase_auth.dart';
 
+// titleAfterLabel and mergeAiRecord moved to the model when the phone needed
+// them too (it applies AI records without ever running the models). Re-exported
+// so existing callers and tests keep importing them from here.
+export '../models/relic.dart' show mergeAiRecord, titleAfterLabel;
+
 /// Status of the on-device ML (sift) pipeline, for the settings UI.
 enum SiftStatus {
   unavailable, // no sift binary bundled
@@ -166,28 +171,6 @@ bool shouldRequeueForLabel(
   return !bulk && r.kind == Kind.string;
 }
 
-/// The headline to store after a labeling pass: the generated title, for a
-/// photo or a text item the user hasn't titled themselves.
-///
-/// A photo then shows "a rocky beach…" rather than its first OCR line, and a
-/// vault note shows what it is rather than its first 60 characters. A title the
-/// user (or an earlier pass) already set always wins — labeling never overwrites
-/// one. Files keep their filename as the headline.
-///
-/// Text only reaches a labeling pass once promoted; that gate lives at the call
-/// site, not here.
-@visibleForTesting
-String? titleAfterLabel({
-  required Kind kind,
-  required String? current,
-  required String? caption,
-}) {
-  if (current != null && current.trim().isNotEmpty) return current;
-  if (kind != Kind.photo && kind != Kind.string) return current;
-  final cap = caption?.trim();
-  return (cap != null && cap.isNotEmpty) ? cap : current;
-}
-
 /// The real desktop store: clipboard captures persisted to a local SQLite
 /// database (incremental writes + FTS5 search + windowed reads), fully usable
 /// offline. E2E Worker sync layers on top.
@@ -232,6 +215,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   Uint8List? _mk; // master key, in memory only
   int _cursor = 0;
   int _tombCursor = 0;
+  int _aiCursor = 0; // AI records ride their own timeline; see worker/src/ai.ts
+  bool _aiConverged = false; // the one-time publish of pre-existing AI titles
   Timer? _syncTimer;
   SyncSocket? _syncSocket; // live-sync doorbell; null until first connect
   bool _online = false;
@@ -298,6 +283,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     if (switched) {
       _cursor = 0;
       _tombCursor = 0;
+      _aiCursor = 0;
       _lastSyncAt = 0;
       _saveCursors();
       _uploaded.clear();
@@ -1202,6 +1188,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _describeEverything = j['describe_everything'] as bool? ?? false;
         _analysisSpeed = AnalysisSpeed.byName(j['analysis_speed'] as String?);
         _prunedGen = j['models_pruned_gen'] as int? ?? 0;
+        _aiConverged = j['ai_records_converged'] as bool? ?? false;
         _aiOcr = j['ai_ocr'] as bool? ?? true;
         _aiImageTags = j['ai_image_tags'] as bool? ?? true;
         _aiEmbeddings = j['ai_embeddings'] as bool? ?? true;
@@ -1295,6 +1282,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           'describe_everything': _describeEverything,
           'analysis_speed': _analysisSpeed.name,
           'models_pruned_gen': _prunedGen,
+          'ai_records_converged': _aiConverged,
           'ai_ocr': _aiOcr,
           'ai_image_tags': _aiImageTags,
           'ai_embeddings': _aiEmbeddings,
@@ -2613,10 +2601,48 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     // from the OLD bytes — drop it and let the backlog pass re-read.
     if (cur.blobKey != r.blobKey) return;
     db.setAttachmentText(r.uid, joined); // '' marks "done, nothing to index"
+    _publishAttachmentText(db, r.uid, joined);
     if (joined.isNotEmpty) {
       _refreshWindow();
       notifyListeners();
     }
+  }
+
+  /// Share what an attachment said, so the devices that cannot read it still
+  /// find the note by it.
+  ///
+  /// Extraction needs no models, but it does need the attachment bytes, and
+  /// blobs download lazily: a desktop that never opened this note has nothing
+  /// to extract from, and a phone has no extractor at all. Both of them would
+  /// otherwise have a note that is findable only by its filename.
+  ///
+  /// Amends this device's existing record where there is one, so the caption
+  /// and tags the models produced are not replaced by a record carrying only
+  /// attachment text. Where there is none, the record is created at the item's
+  /// CURRENT enrich level — never at the ML level — because the level is what
+  /// tells peers the generative work is finished, and this pass ran no models.
+  void _publishAttachmentText(RelicDb db, String uid, String text) {
+    if (!syncEnabled || _mk == null) return;
+    final existing = db.aiRecord(uid);
+    if (existing != null && existing.by != _deviceId) {
+      // A peer owns the record. The text stays here, in the column, where this
+      // device's own search uses it — but republishing it under our id would
+      // mean trading writes with a device that holds more of the answer than
+      // we do. It publishes its own attachment text when it reads the bundle.
+      return;
+    }
+    db.putAiRecord(
+      existing != null
+          ? existing.copyWith(att: text)
+          : AiRecord(
+              uid: uid,
+              at: _now,
+              level: db.enrichLevelOf(uid) ?? 0,
+              by: _deviceId,
+              att: text,
+            ),
+      needsPush: true,
+    );
   }
 
   /// One-time catch-up: extract text for document files captured before this
@@ -4556,6 +4582,11 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         db.clearOp(p.uid, p.op);
         changed = true;
       }
+      // Generated titles and tags this device owes its peers. Drained after the
+      // relic queue on purpose: a record whose relic has not reached the server
+      // yet is useless to the other devices, since they cannot apply it to a
+      // row they do not have.
+      await _pushAiRecords();
     } finally {
       _flushing = false;
     }
@@ -4753,6 +4784,13 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         }
         if (tmax - 1 > _tombCursor) _tombCursor = tmax - 1;
       }
+      // AI records last: they merge INTO relics, so pulling them after the
+      // relics in the same cycle means a freshly-arrived item gets its title in
+      // the same pass rather than a cycle later.
+      if (await _pullAiRecords()) changed = true;
+      // And records whose relic only just showed up (either arrival order is
+      // normal — they ride independent cursors).
+      if (_applyPendingAiRecords(db)) changed = true;
       _online = true;
       _lastSyncAt = _now;
       await _fetchAccount();
@@ -4838,6 +4876,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     final db = _db;
     if (_enriching || !_mlEnrich || sift == null || db == null) return;
     _enriching = true;
+    // Claimed but not yet done. Held out here rather than inside the try so the
+    // finally can hand it back even when a pass throws part-way.
+    final unfinished = <String>{};
     try {
       // First cycle (and after each download) we re-check model readiness.
       if (!sift.modelsReady && !_downloadingModels) {
@@ -4861,7 +4902,20 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       final backlog = db.countNeedingEnrich(target);
       var changed = backlog != _enrichBacklog;
       _enrichBacklog = backlog;
-      final batch = db.needingEnrich(target, 12);
+      final found = db.needingEnrich(target, 12);
+      // Claim before spending anything. Whatever a peer is already working on,
+      // or has already finished, this device must not touch: that is what stops
+      // two desktops burning the same generative pass and landing on two
+      // different titles for one item.
+      //
+      // Only the ML pass is coordinated. Stage-A is heuristics over text the
+      // device already has: cheap, and deterministic enough that every device
+      // reaches the same answer, so there is nothing to divide up and a claim
+      // round trip would be pure latency.
+      final batch = aiCapable
+          ? await _claimAiWork(found, target)
+              .then((g) => [for (final r in found) if (g.contains(r.uid)) r])
+          : found;
       // Drive the per-row "Analyzing…" spinner. The whole batch lights up, not
       // just the item in flight: everything here is queued and will be picked
       // up in this pass, and a row that sat blank for a few seconds before
@@ -4870,17 +4924,27 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _analyzing = batch.map((r) => r.uid).toSet();
         notifyListeners();
       }
+      if (aiCapable) unfinished.addAll(batch.map((r) => r.uid));
       for (final r in batch) {
         if (await _enrichOne(sift, r, target)) changed = true;
+        unfinished.remove(r.uid);
         // Clear per item so the spinner retreats down the list as it goes.
         if (_analyzing.remove(r.uid)) notifyListeners();
       }
+      // Embed anything a peer generated for us. Deliberately after the batch:
+      // generating is the scarce work, indexing is the cheap work, and the
+      // cheap work must never delay the scarce work.
+      if (sift.modelsReady && await _backfillVectors(sift, 8)) changed = true;
       if (changed) {
         _refreshWindow();
         notifyListeners();
       }
     } finally {
       _enriching = false;
+      // Anything claimed but not finished (a throw mid-batch, the models
+      // unloaded under us) goes back to the pool now, instead of sitting locked
+      // until the lease expires and leaving a peer idle in the meantime.
+      if (unfinished.isNotEmpty) unawaited(_releaseAiWork(unfinished));
       // A throw mid-batch must not strand spinners on rows forever.
       if (_analyzing.isNotEmpty) {
         _analyzing = {};
@@ -4900,6 +4964,68 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     _enrichFails[uid] = n;
     if (n >= _enrichMaxFails) db.setEnrichLevel(uid, level);
     return false;
+  }
+
+  /// Uids whose embedding attempt produced nothing this session, so a text the
+  /// embedder will not take (or a sidecar that keeps failing on it) does not
+  /// come back every six seconds. Cleared by a restart, which is the right
+  /// cadence for retrying something that may have been a transient fault.
+  final Set<String> _embedSkip = {};
+
+  /// The document this device embeds for [r].
+  ///
+  /// Kept deliberately in step with the composition in [_enrichOne]: a vector
+  /// is only worth anything if it means the same thing on every device, and
+  /// two machines embedding different documents for one item would rank the
+  /// same query differently.
+  static String embedDocFor(Relic r) => r.kind == Kind.string
+      // Title and note carry the strongest search intent, so they are part of
+      // the embedded document rather than metadata beside it.
+      ? [r.title, r.note, r.content]
+          .whereType<String>()
+          .where((x) => x.trim().isNotEmpty)
+          .join('\n')
+      // Everything else embeds the text that was read out of it. On the device
+      // that ran the models that text came from OCR or document extraction;
+      // here it arrived in an AI record, which is the whole point.
+      : (r.content ?? '').trim();
+
+  /// Give the local semantic index the items whose models ran on another
+  /// device. Returns whether anything landed.
+  ///
+  /// No claim and no publish: an embedding is per-device state, like the FTS
+  /// rows next to it. Two devices doing this in parallel is not duplicated work
+  /// in the sense the claim exists to prevent, because neither result travels.
+  Future<bool> _backfillVectors(SiftSidecar sift, int limit) async {
+    final db = _db;
+    // With embeddings off the user has opted out of the semantic leg entirely;
+    // building an index they asked not to have would be spending their battery
+    // to ignore the result.
+    if (db == null || !_aiEmbeddings) return false;
+    var changed = false;
+    for (final r in db.needingVectors(_levelMl, limit)) {
+      if (_disposed) break;
+      if (_embedSkip.contains(r.uid)) continue;
+      final doc = embedDocFor(r);
+      if (doc.isEmpty) {
+        _embedSkip.add(r.uid);
+        continue;
+      }
+      // label: false is the point of the whole pass. The caption and the tags
+      // already exist and travelled here; re-running the labeler would spend
+      // minutes to produce a second, different answer to a settled question.
+      final res = await sift.classifyText(doc, ml: true, label: false);
+      final vec = res?.textVector;
+      if (vec == null || vec.isEmpty) {
+        _embedSkip.add(r.uid);
+        continue;
+      }
+      final chunks = [vec, ...?res?.textChunkVectors];
+      db.upsertVectors(r.uid, chunks);
+      _vec[r.uid] = [for (final c in chunks) Float32List.fromList(c)];
+      changed = true;
+    }
+    return changed;
   }
 
   Future<bool> _enrichOne(SiftSidecar sift, Relic r, int level) async {
@@ -5007,6 +5133,32 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
                 !ocrTagBlocklist.contains(t) &&
                 (_maskSecrets || t != 'secret'),
           );
+    // What the MODELS contributed, before this device's own dedupe and
+    // suppression is applied. This is the set that travels in the AI record:
+    // a peer has its own suppressed tags and its own existing chips, so it has
+    // to do that filtering itself rather than inherit ours. Extension chips are
+    // deliberately absent — those are derived from the filename, so every
+    // device already produces them identically and shipping them would be pure
+    // wire weight.
+    final aiTags = <String>[];
+    final aiSeen = <String>{};
+    for (final t in [
+      ...boundLabelTags,
+      ...res.relicTags.where(
+        (t) =>
+            (_maskSecrets || t != 'secret') &&
+            // sift's content-shape tags are noise on a whole image/document
+            // (the v2 migration scrubbed exactly this class once already).
+            !(r.kind != Kind.string && ocrTagBlocklist.contains(t)) &&
+            !(r.kind == Kind.file && _genericFileTags.contains(t)),
+      ),
+      ...textTags.where((t) => !(r.kind == Kind.file && _genericFileTags.contains(t))),
+    ]) {
+      // Cross-source dedupe: the labeler and the classifier can land on the
+      // same word, and only the per-source checks below caught that before.
+      if (aiSeen.add(t.toLowerCase())) aiTags.add(t);
+    }
+
     // Case-insensitive views for dedupe: extension chips are Capitalized
     // ("Markdown") while sift/detector tags are lowercase ("markdown") — an
     // exact-case check let both land on one relic as duplicate-looking chips.
@@ -5017,30 +5169,11 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       ...extChips.where((t) =>
           !curLower.contains(t.toLowerCase()) &&
           !suppressed.contains(t.toLowerCase())),
-      ...boundLabelTags.where(
+      ...aiTags.where(
         (t) =>
             !curLower.contains(t.toLowerCase()) &&
             !extLower.contains(t.toLowerCase()) &&
             !suppressed.contains(t.toLowerCase()),
-      ),
-      ...res.relicTags.where(
-        (t) =>
-            !curLower.contains(t.toLowerCase()) &&
-            !extLower.contains(t.toLowerCase()) &&
-            !suppressed.contains(t.toLowerCase()) &&
-            (_maskSecrets || t != 'secret') &&
-            // sift's content-shape tags are noise on a whole image/document,
-            // same as the OCR-derived ones below (the v2 migration scrubbed
-            // exactly this class once already).
-            !(r.kind != Kind.string && ocrTagBlocklist.contains(t)) &&
-            !(r.kind == Kind.file && _genericFileTags.contains(t)),
-      ),
-      ...textTags.where(
-        (t) =>
-            !curLower.contains(t.toLowerCase()) &&
-            !extLower.contains(t.toLowerCase()) &&
-            !suppressed.contains(t.toLowerCase()) &&
-            !(r.kind == Kind.file && _genericFileTags.contains(t)),
       ),
     ];
     var content = cur.content;
@@ -5060,6 +5193,40 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     // its `kind != string` guard would make this unreachable for the text the
     // labeler now handles.
     title = titleAfterLabel(kind: r.kind, current: cur.title, caption: res.caption);
+
+    // Record what the models produced as a document of its own, so it can reach
+    // the user's other devices. Without this the whole pass is a local side
+    // effect: the title shows up on the machine that happened to run the models
+    // and nowhere else, and every other device re-runs them to get its own
+    // (different) answer. Note this stores what the AI SAID, not what landed on
+    // the row — if the user had already titled the item, `title` above keeps
+    // their name while the record still carries the generated one, so a peer
+    // that has no title yet can still use it.
+    final aiCaption = res.caption?.trim();
+    final rec = AiRecord(
+      uid: r.uid,
+      at: _now,
+      level: level,
+      by: _deviceId,
+      title: (aiCaption != null && aiCaption.isNotEmpty) ? aiCaption : null,
+      tags: aiTags,
+      // What the models READ, not just what they said about it. Without this a
+      // screenshot of an invoice is findable by its text on this desk and
+      // nowhere else, because OCR output lands in the relic's content column
+      // and that column only travels on a user edit.
+      text: ocrText.isEmpty ? null : ocrText,
+    );
+    // An empty record would still claim its uid under earliest-wins and then
+    // lock every other device out of producing a real one.
+    //
+    // Only the ML pass publishes. Stage-A output is heuristics over text the
+    // peer already has, so it would derive the same tags itself: sending them
+    // is wire traffic that buys nothing, and it would put a placeholder record
+    // in front of the real one.
+    if (!rec.isEmpty) {
+      db.putAiRecord(rec, needsPush: syncEnabled && ml);
+    }
+
     final changed =
         tags.length != cur.tags.length ||
         content != cur.content ||
@@ -5082,6 +5249,253 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     // A vector-only write also counts as a change: the caller's notify is what
     // flips the settings status off "keyword-only" when the first vector lands.
     return changed || wroteVector;
+  }
+
+  // --- AI records: sharing the models' output across devices ---
+  //
+  // The models run on whichever device can run them, and the result reaches all
+  // of them. Two things have to be true for that to work:
+  //
+  //   * only one device does the work for a given item, or you pay for the same
+  //     generative pass N times and get N different titles (the labeler is not
+  //     deterministic across machines), and
+  //   * the result travels without touching the relic's updated_at, or every
+  //     background tagging pass looks like a user edit.
+  //
+  // The first is the claim lease, the second is the separate record. See
+  // worker/src/ai.ts.
+
+  /// Whether this device should be doing AI work at all.
+  ///
+  /// Phones never are, and low-powered laptops may never be: the models are
+  /// gigabytes of weights and minutes of compute. A big desktop does the work
+  /// and everyone else consumes the result. This is a capability, deliberately
+  /// not a preference — the user should not have to nominate a machine, and
+  /// nominating one that is asleep would stall the whole account.
+  bool get aiCapable {
+    if (!Platform.isWindows && !Platform.isMacOS && !Platform.isLinux) {
+      return false;
+    }
+    return _mlEnrich && (_sift?.modelsReady ?? false);
+  }
+
+  /// Ask the server which of [batch] this device should work on.
+  ///
+  /// Returns the uids we won. Anything a peer is already working on, or has
+  /// already finished at this level or better, is excluded — those we either
+  /// leave alone or mark done locally so they stop coming back every cycle.
+  ///
+  /// Offline (or on a self-host build with no account) there is no coordinator,
+  /// so the whole batch is granted: a single-device vault must keep working
+  /// exactly as it does today, and duplicate work is impossible with one device.
+  Future<Set<String>> _claimAiWork(List<Relic> batch, int level) async {
+    final db = _db;
+    if (db == null) return batch.map((r) => r.uid).toSet();
+    if (!syncEnabled || _mk == null || (_deviceId?.isEmpty ?? true)) {
+      return batch.map((r) => r.uid).toSet();
+    }
+    try {
+      final resp = await http
+          .post(
+            Uri.parse(_u('/ai/claim')),
+            headers: {..._h, 'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'items': [
+                for (final r in batch) {'uid': r.uid, 'level': level},
+              ],
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (resp.statusCode != 200) {
+        // The coordinator is unreachable or unhappy. Working anyway is the
+        // right failure mode: a duplicate title is a far smaller problem than
+        // a vault that silently stops tagging whenever the server hiccups.
+        return batch.map((r) => r.uid).toSet();
+      }
+      final body = jsonDecode(resp.body) as Map<String, dynamic>;
+      final granted = (body['granted'] as List?)?.cast<String>().toSet() ?? {};
+      // A peer already finished these. Adopt its level so this device stops
+      // asking; the content itself arrives on the next AI pull.
+      for (final d in (body['done'] as List?) ?? const []) {
+        final m = (d as Map).cast<String, dynamic>();
+        final uid = m['uid'] as String?;
+        final lv = (m['level'] as num?)?.toInt();
+        if (uid != null && lv != null) db.raiseEnrichLevel(uid, lv);
+      }
+      return granted;
+    } catch (_) {
+      return batch.map((r) => r.uid).toSet(); // offline — see above
+    }
+  }
+
+  /// Hand back leases we won but did not use, so a peer can pick them up in
+  /// seconds rather than waiting out the lease. Best-effort by design: every
+  /// lease expires on its own, so a failure here costs latency, never work.
+  Future<void> _releaseAiWork(Iterable<String> uids) async {
+    final list = uids.toList();
+    if (list.isEmpty || !syncEnabled || _mk == null) return;
+    try {
+      await http
+          .post(
+            Uri.parse(_u('/ai/release')),
+            headers: {..._h, 'Content-Type': 'application/json'},
+            body: jsonEncode({'uids': list}),
+          )
+          .timeout(const Duration(seconds: 10));
+    } catch (_) {}
+  }
+
+  /// One-time reconciliation of AI titles that predate AI records.
+  ///
+  /// Two machines that both enriched this vault each hold their own titles,
+  /// generated independently and never shared. This publishes what is already
+  /// here so they converge on one answer. It runs no models and generates
+  /// nothing new: the deliberate backfill of never-titled items is a separate
+  /// decision, not this.
+  void _convergeAiRecords() {
+    final db = _db;
+    if (db == null || _aiConverged || !syncEnabled || _mk == null) return;
+    // Mark it done first. A crash mid-seed leaves whatever landed already
+    // queued and correct, whereas retrying forever on a vault that trips the
+    // insert would re-scan the corpus on every launch.
+    _aiConverged = true;
+    _savePrefs();
+    try {
+      db.seedAiRecordsFromRelics(minLevel: _levelMl, by: _deviceId);
+    } catch (_) {}
+  }
+
+  /// Publish the AI records this device generated and still owes the server.
+  Future<void> _pushAiRecords() async {
+    final db = _db;
+    if (db == null || !syncEnabled || _mk == null) return;
+    _convergeAiRecords();
+    for (final rec in db.aiRecordsNeedingPush(limit: 25)) {
+      try {
+        final sealed =
+            await RelicCrypto.sealAiPayload(_mk!, rec.uid, rec.toPayload());
+        final resp = await http.put(
+          Uri.parse(_u('/ai/${rec.uid}')),
+          headers: {..._h, 'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'v': 1,
+            'uid': rec.uid,
+            'ai_at': rec.at,
+            'level': rec.level,
+            'n': sealed['n'],
+            'ct': sealed['ct'],
+          }),
+        );
+        if (resp.statusCode >= 200 && resp.statusCode < 300) {
+          // Settled either way: `stale: true` means a peer's result won, which
+          // is an answer, not a failure. Retrying would loop forever.
+          db.markAiPushed(rec.uid);
+          _online = true;
+        } else if (_permanentSyncStatus(resp.statusCode)) {
+          // Malformed or over cap: it will never be accepted, so stop owing it
+          // rather than retrying every cycle for the life of the vault.
+          db.markAiPushed(rec.uid);
+        } else {
+          return; // reachable but refused (401 mid-refresh, 429, 5xx) — retry
+        }
+      } catch (_) {
+        _online = false;
+        return; // offline: keep the rest queued
+      }
+    }
+  }
+
+  /// Pull AI records produced by this account's other devices.
+  Future<bool> _pullAiRecords() async {
+    final db = _db;
+    if (db == null || !syncEnabled || _mk == null) return false;
+    var changed = false;
+    try {
+      var maxAt = _aiCursor;
+      String? cursor;
+      do {
+        final resp = await http.get(
+          Uri.parse(_u('/ai')).replace(queryParameters: {
+            'since': '$_aiCursor',
+            'limit': '500',
+            if (cursor != null) 'cursor': cursor,
+          }),
+          headers: _h,
+        );
+        if (resp.statusCode != 200) return changed;
+        final body = jsonDecode(resp.body) as Map<String, dynamic>;
+        final items = (body['items'] as List).cast<Map<String, dynamic>>();
+        for (final env in items) {
+          final at = (env['ai_at'] as num).toInt();
+          if (at > maxAt) maxAt = at;
+          final uid = env['uid'] as String;
+          final p = await RelicCrypto.openAiPayload(
+              _mk!, uid, env['n'] as String, env['ct'] as String);
+          if (p == null) continue; // not ours to read, or tampered with
+          final rec = AiRecord.fromWire(env, p);
+          // Already published by definition — never echo it back.
+          if (!db.putAiRecord(rec, needsPush: false)) continue;
+          if (_applyAiRecord(db, rec)) changed = true;
+        }
+        cursor = body['next_cursor'] as String?;
+      } while (cursor != null);
+      // Same off-by-one guard the relic cursor uses: rewind a second so a
+      // record written in the same second as the cursor is not skipped.
+      if (maxAt - 1 > _aiCursor) _aiCursor = maxAt - 1;
+    } catch (_) {
+      _online = false;
+    }
+    return changed;
+  }
+
+  /// Merge an AI record into its relic. Returns whether the row changed.
+  ///
+  /// Returns false when the relic is not here yet: records and relics ride
+  /// independent cursors, so either arrival order is normal. The record stays
+  /// stored and [_applyPendingAiRecords] picks it up once the relic lands.
+  bool _applyAiRecord(RelicDb db, AiRecord rec) {
+    final cur = db.getByUid(rec.uid);
+    if (cur == null) return false;
+    final merged = mergeAiRecord(
+      cur: cur,
+      rec: rec,
+      suppressed: db.suppressedTags(rec.uid).toSet(),
+    );
+    // Attachment text sits in a column of its own rather than on the relic, so
+    // it is applied separately and reindexes itself.
+    final attChanged =
+        rec.att != null && db.applyAttachmentText(rec.uid, rec.att!);
+    final changed = merged.tags.length != cur.tags.length ||
+        merged.title != cur.title ||
+        merged.content != cur.content;
+    if (changed) {
+      // No queuePush and no updatedAt bump: AI output travels as its own
+      // record, so writing it here must not look like a user edit.
+      //
+      // The content write is what puts a peer's OCR into this device's search
+      // index — upsert re-derives the FTS rows, so the text is findable here
+      // the moment it lands, without this machine ever opening the image.
+      db.upsert(cur.copyWith(
+        tags: merged.tags,
+        title: merged.title,
+        content: merged.content,
+      ));
+    }
+    // The point of the whole exercise: this device now considers the item done
+    // and will not run the models on it.
+    db.raiseEnrichLevel(rec.uid, rec.level);
+    return changed || attChanged;
+  }
+
+  /// Apply records whose relic has since arrived (or which predate a level bump
+  /// on this device). Cheap indexed lookup; runs once per sync cycle.
+  bool _applyPendingAiRecords(RelicDb db) {
+    var changed = false;
+    for (final uid in db.aiRecordsUnapplied()) {
+      final rec = db.aiRecord(uid);
+      if (rec != null && _applyAiRecord(db, rec)) changed = true;
+    }
+    return changed;
   }
 
   Future<Relic?> _decryptEnv(Map<String, dynamic> env) async {
@@ -5209,7 +5623,11 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       // Third field: last successful pull time, so "Last synced" survives a
       // restart. Written exactly once per successful pull, same cadence as
       // the cursors themselves.
-      _cursorFile.writeAsStringSync('$_cursor,$_tombCursor,$_lastSyncAt');
+      // Fourth field: the AI-record cursor. Appended rather than folded in, so
+      // a file written by an older build still parses (its AI cursor reads 0,
+      // which just re-pulls records that are idempotent to apply anyway).
+      _cursorFile
+          .writeAsStringSync('$_cursor,$_tombCursor,$_lastSyncAt,$_aiCursor');
     } catch (_) {}
   }
 
@@ -5220,6 +5638,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _cursor = int.tryParse(parts[0]) ?? 0;
         if (parts.length > 1) _tombCursor = int.tryParse(parts[1]) ?? 0;
         if (parts.length > 2) _lastSyncAt = int.tryParse(parts[2]) ?? 0;
+        if (parts.length > 3) _aiCursor = int.tryParse(parts[3]) ?? 0;
       }
     } catch (_) {}
   }

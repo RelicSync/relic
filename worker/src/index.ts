@@ -39,6 +39,7 @@ import {
   stripeWebhook,
 } from "./stripe";
 import { sweepOrphanBlobs, sweepTombstones } from "./sweep";
+import { claimAi, listAi, putAi, releaseAi } from "./ai";
 import { pokeSync, SyncSocket } from "./notify";
 
 // Re-exported so Wrangler can bind the Durable Object class (it must be exported
@@ -120,6 +121,10 @@ function touchDevice(env: Env, ctx: ExecutionContext | undefined, auth: Auth, re
 const isSyncWrite = (method: string, path: string): boolean =>
   (method === "PUT" && /^\/relic\/[A-Za-z0-9-]+$/.test(path)) ||
   (method === "PUT" && path === "/keyparams") ||
+  // Publishing a generated title is a sync write like any other. Claiming and
+  // releasing are not: they move no data, and letting an unverified account
+  // hold leases it can never publish against would park work indefinitely.
+  (method === "PUT" && /^\/ai\/[^/]+$/.test(path)) ||
   (method === "POST" && path === "/blob") ||
   (method === "POST" && /^\/blob\/mpu(\/.*)?$/.test(path)); // create + complete
 
@@ -149,6 +154,9 @@ export async function deleteRelic(env: Env, acct: string, uid: string, blobKey: 
   if (blobKey) await env.STORE.delete(blobR2Key(acct, blobKey));
   await env.DB.batch([
     env.DB.prepare("DELETE FROM relic_meta WHERE account_id = ?1 AND uid = ?2").bind(acct, uid),
+    // The AI record dies with its relic. Leaving it would strand a row no relic
+    // can ever claim, and would resurrect a title if the uid were ever reused.
+    env.DB.prepare("DELETE FROM ai_meta WHERE account_id = ?1 AND uid = ?2").bind(acct, uid),
     env.DB.prepare(
       "INSERT OR REPLACE INTO tombstones (account_id, uid, deleted_at) VALUES (?1, ?2, ?3)",
     ).bind(acct, uid, deletedAt),
@@ -377,6 +385,15 @@ export default {
       return json({});
     }
     if (path === "/relics" && req.method === "GET") return listRelics(url, env, auth);
+
+    // --- AI records (generated title + tags) + the work lease. See ai.ts. ---
+    if (path === "/ai" && req.method === "GET") return listAi(url, env, auth);
+    if (path === "/ai/claim" && req.method === "POST") return claimAi(req, env, auth);
+    if (path === "/ai/release" && req.method === "POST") return releaseAi(req, env, auth);
+    const aiMatch = /^\/ai\/([^/]+)$/.exec(path);
+    if (aiMatch && req.method === "PUT") {
+      return putAi(req, env, auth, aiMatch[1], ctx);
+    }
 
     if (path === "/tombstones" && req.method === "GET") {
       const since = Number(url.searchParams.get("since") ?? 0);

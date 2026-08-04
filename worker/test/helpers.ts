@@ -29,6 +29,10 @@ const DDL = [
      account_id TEXT NOT NULL, uid TEXT NOT NULL, created_at INTEGER NOT NULL,
      updated_at INTEGER NOT NULL, byte_size INTEGER NOT NULL, promoted INTEGER NOT NULL,
      blob_key TEXT, PRIMARY KEY (account_id, uid))`,
+  `CREATE TABLE IF NOT EXISTS ai_meta (
+     account_id TEXT NOT NULL, uid TEXT NOT NULL, ai_at INTEGER, ai_level INTEGER,
+     device_id TEXT, n TEXT, ct TEXT, claimed_by TEXT, claim_expires_at INTEGER,
+     PRIMARY KEY (account_id, uid))`,
   `CREATE TABLE IF NOT EXISTS tombstones (
      account_id TEXT NOT NULL, uid TEXT NOT NULL, deleted_at INTEGER NOT NULL,
      PRIMARY KEY (account_id, uid))`,
@@ -46,7 +50,7 @@ const DDL = [
 
 const TABLES = [
   "tokens", "accounts", "subscriptions", "billing_events",
-  "devices", "relic_meta", "tombstones", "shares", "sweep_state",
+  "devices", "relic_meta", "ai_meta", "tombstones", "shares", "sweep_state",
   "account_links",
 ];
 
