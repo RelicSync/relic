@@ -15,6 +15,7 @@ import '../data/result_grouping.dart';
 import '../data/temporal_parser.dart';
 import '../data/text_transforms.dart';
 import '../models/relic.dart';
+import '../platform/store_safe.dart';
 import 'coach_marks.dart';
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
@@ -1049,6 +1050,10 @@ class _PopupViewState extends State<PopupView> {
       });
     } else {
       setState(() => _selected = i);
+      // Two-pane: a plain tap shows the relic in the detail pane ("list on
+      // the left, selected relic on the right"). Phone widths keep tap =
+      // select (the action cluster) with double-tap opening the editor.
+      if (_twoPane(context)) _edit(r);
     }
   }
 
@@ -1608,7 +1613,7 @@ class _PopupViewState extends State<PopupView> {
       return const SizedBox.shrink();
     }
     final reason = syncRejectionReason(rej.status);
-    final hint = syncRejectionHint(rej.status);
+    final hint = syncRejectionHint(rej.status, storeSafe: storeSafeBuild);
     const w = 230.0;
     final rootBox =
         _rootStackKey.currentContext?.findRenderObject() as RenderBox?;
@@ -2322,6 +2327,39 @@ class _PopupViewState extends State<PopupView> {
     return KeyEventResult.ignored;
   }
 
+  /// Whether the touch UI is running two-pane (iPad / Android tablet width,
+  /// docs/apple-port-2026-08.md §5). Desktop never: its popup is a compact
+  /// summon window with modal dialogs by design.
+  bool _twoPane(BuildContext context) =>
+      RelicTheme.isMobileOf(context) &&
+      RelicTheme.isWideOf(context) &&
+      !(widget.miniSignal?.value ?? false);
+
+  /// Two-pane composition: [list] (the whole existing single-column UI) on
+  /// the left at a fixed comfortable width, and the detail pane on the right
+  /// hosting the same widgets that overlay as modals at phone widths —
+  /// [_setDialog] content renders here instead, so every edit/compose/remind
+  /// flow works unchanged in both layouts.
+  Widget _withDetailPane(RelicColors c, Widget list) {
+    if (!_twoPane(context)) return list;
+    return Row(children: [
+      SizedBox(width: 380, child: list),
+      Container(width: 1, color: c.border),
+      Expanded(
+        child: _dialog == null
+            ? Center(
+                child: Text('Select an item',
+                    style: RelicTheme.sans(size: 13, color: c.textFaint)),
+              )
+            : Container(
+                alignment: Alignment.center,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+                child: _dialog,
+              ),
+      ),
+    ]);
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = RelicTheme.of(context);
@@ -2357,7 +2395,7 @@ class _PopupViewState extends State<PopupView> {
         child: Stack(
           key: _rootStackKey,
           children: [
-            Column(
+            _withDetailPane(c, Column(
               children: [
                 if (!mini)
                   PopupHeader(
@@ -2525,9 +2563,11 @@ class _PopupViewState extends State<PopupView> {
                         ),
                 ),
               ],
-            ),
+            )),
             if (_dragOver) _DragOverlay(),
-            if (_dialog != null)
+            // Phone widths only: two-pane renders _dialog in the detail pane
+            // (see _withDetailPane) instead of as a modal.
+            if (_dialog != null && !_twoPane(context))
               Positioned.fill(
                 child: GestureDetector(
                   onTap: () => _setDialog(null),

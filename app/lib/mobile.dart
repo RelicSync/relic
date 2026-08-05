@@ -22,6 +22,7 @@ import 'data/supabase_auth.dart';
 import 'data/worker_repo.dart';
 import 'onboarding/add_device.dart';
 import 'onboarding/onboarding.dart';
+import 'platform/store_safe.dart';
 import 'theme/relic_theme.dart';
 import 'theme/tokens.dart';
 import 'ui/dialogs.dart';
@@ -954,10 +955,13 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
 
   static const _upgradeUrl = 'https://relic.space/upgrade';
 
-  /// Store-safe upgrade guidance (device-cap dialog): open relic.space/upgrade
-  /// in the browser, falling back to copying the link. The app sells nothing
-  /// in-app; upgrades happen on desktop or the web.
+  /// Upgrade guidance (device-cap dialog): open relic.space/upgrade in the
+  /// browser, falling back to copying the link. The app sells nothing in-app;
+  /// upgrades happen on desktop or the web. Fine on Play; on iOS this exact
+  /// shape is the Guideline 3.1.1 violation, so [storeSafeBuild] builds never
+  /// reach it (call sites pass null) and it refuses defensively if one does.
   Future<void> _openUpgradeGuidance() async {
+    if (storeSafeBuild) return;
     final ctx = _navKey.currentContext;
     final messenger = ctx == null ? null : ScaffoldMessenger.of(ctx);
     var ok = false;
@@ -1246,7 +1250,10 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
                     if ((_repo?.accountEmail ?? '').isNotEmpty)
                       _accountEmailRow(colors, _repo!.accountEmail!),
                     if (acct != null) _accountHeader(colors, acct),
-                    if (acct != null) ...[
+                    // Store-safe builds state plan facts (the header above)
+                    // and stop there: no upgrade copy, no pointer to where
+                    // plans are sold.
+                    if (acct != null && !storeSafeBuild) ...[
                       _settingLabel(colors, 'PLAN'),
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
@@ -1310,11 +1317,12 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
                         final cx = _navKey.currentContext;
                         if (cx != null) {
                           ScaffoldMessenger.of(cx).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Account email copied. Sign in on desktop to upgrade.',
-                              ),
-                              duration: Duration(seconds: 3),
+                            SnackBar(
+                              content: Text(storeSafeBuild
+                                  ? 'Account email copied.'
+                                  : 'Account email copied. Sign in on desktop '
+                                      'to upgrade.'),
+                              duration: const Duration(seconds: 3),
                             ),
                           );
                         }
@@ -1345,9 +1353,13 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
                             builder: (_) => DevicesScreen(
                                   bearer: () async => r.token,
                                   onRenameThisDevice: _renameThisDevice,
-                                  onUpgrade: _openUpgradeGuidance,
-                                  upgradeLabel:
-                                      'Upgrade on your computer or at relic.space/upgrade',
+                                  onUpgrade: storeSafeBuild
+                                      ? null
+                                      : _openUpgradeGuidance,
+                                  upgradeLabel: storeSafeBuild
+                                      ? ''
+                                      : 'Upgrade on your computer or at '
+                                          'relic.space/upgrade',
                                 )));
                       }
                     }),

@@ -81,6 +81,18 @@ class RelicTheme extends InheritedWidget {
     return t?.isMobile ?? false;
   }
 
+  /// Layout breakpoint, deliberately separate from [isMobileOf]: that flag
+  /// means "touch device" and keeps driving finger-sized targets, fonts and
+  /// row heights; this one means "enough room for a two-pane layout" (iPad,
+  /// Android tablets, foldables). Width-derived and reactive — an iPad in
+  /// Split View can be 320dp wide, so it must re-evaluate on every resize,
+  /// never cache a device class. docs/apple-port-2026-08.md §5.
+  static bool isWideOf(BuildContext context) =>
+      MediaQuery.sizeOf(context).width >= wideBreakpoint;
+
+  /// Minimum logical width for the two-pane layout.
+  static const double wideBreakpoint = 700;
+
   @override
   bool updateShouldNotify(RelicTheme old) =>
       old.colors != colors || old.isMobile != isMobile;

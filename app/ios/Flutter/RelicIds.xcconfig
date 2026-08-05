@@ -1,0 +1,8 @@
+// Apple platform identifiers — the native mirror of lib/platform/apple_ids.dart.
+// Change both together (docs/apple-port-2026-08.md §3b.4).
+// Referenced from build settings / entitlements as $(RELIC_APP_GROUP) etc. so
+// the Runner target and the future RelicShare extension can never drift.
+RELIC_BUNDLE_ID = space.relic.app
+RELIC_SHARE_BUNDLE_ID = space.relic.app.RelicShare
+RELIC_APP_GROUP = group.space.relic.app
+RELIC_URL_SCHEME = relic

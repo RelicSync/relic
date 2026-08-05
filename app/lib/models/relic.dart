@@ -21,12 +21,21 @@ String syncRejectionReason(int status) => switch (status) {
 };
 
 /// Optional second line under [syncRejectionReason]: what the user can DO.
-String? syncRejectionHint(int status) => switch (status) {
-  402 => 'Free up space or upgrade, then retry.',
-  413 => 'Upgrade your plan to sync items this large.',
-  409 => 'This usually resolves itself on the next sync.',
-  _ => null,
-};
+///
+/// [storeSafe] drops the upgrade suggestion (App Store 3.1.1 — iOS builds
+/// may state plan facts but not steer toward a purchase); kept as a
+/// parameter, not a Platform check, so this file stays pure.
+String? syncRejectionHint(int status, {bool storeSafe = false}) =>
+    switch (status) {
+      402 => storeSafe
+          ? 'Free up space, then retry.'
+          : 'Free up space or upgrade, then retry.',
+      413 => storeSafe
+          ? 'This item is larger than your plan allows.'
+          : 'Upgrade your plan to sync items this large.',
+      409 => 'This usually resolves itself on the next sync.',
+      _ => null,
+    };
 
 /// One file attached to a relic. The bytes for every attachment of a relic are
 /// concatenated into a single "bundle" blob (the relic's [Relic.blobKey]); this

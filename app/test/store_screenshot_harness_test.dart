@@ -72,10 +72,11 @@ void main() {
       required RelicColors c,
       required Widget Function(RelicColors c) build,
       required Size physical,
+      double dpr = 3.0,
       Future<void> Function()? interact,
     }) async {
       tester.view.physicalSize = physical;
-      tester.view.devicePixelRatio = 3.0;
+      tester.view.devicePixelRatio = dpr;
 
       await tester.pumpWidget(
         MaterialApp(
@@ -126,7 +127,7 @@ void main() {
         find.byKey(key),
       );
       await tester.runAsync(() async {
-        final image = await boundary.toImage(pixelRatio: 3.0);
+        final image = await boundary.toImage(pixelRatio: dpr);
         final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
         image.dispose();
         await File('$outDir/$name.png').writeAsBytes(
@@ -139,6 +140,12 @@ void main() {
     const phone = Size(1080, 2280);
     // Tablet-proportioned pass: 480x1013 logical @3x -> 1440x3039 raw.
     const tablet = Size(1440, 3039);
+    // Apple App Store required sets (docs/apple-port-2026-08.md §3c.1) — App
+    // Store Connect scales every smaller device down from these two:
+    // 6.9" iPhone: 440x956 logical @3x -> 1320x2868 raw.
+    const iphone69 = Size(1320, 2868);
+    // 13" iPad portrait: 1032x1376 logical @2x -> 2064x2752 raw.
+    const ipad13 = Size(2064, 2752);
 
     Widget popup(RelicColors c) =>
         PopupView(repo: repo, onClose: () {}, onSettings: () {});
@@ -224,6 +231,62 @@ void main() {
       c: RelicColors.dark,
       build: popup,
       physical: tablet,
+    );
+
+    // 6. App Store set, 6.9" iPhone: hero + light + search, mirroring the
+    // Play set above.
+    await renderShot(
+      name: 'appstore-popup-dark',
+      c: RelicColors.dark,
+      build: popup,
+      physical: iphone69,
+    );
+    await renderShot(
+      name: 'appstore-popup-light',
+      c: RelicColors.light,
+      build: popup,
+      physical: iphone69,
+    );
+    await renderShot(
+      name: 'appstore-search-dark',
+      c: RelicColors.dark,
+      build: popup,
+      physical: iphone69,
+      interact: () async {
+        await tester.enterText(find.byType(TextField).first, 'business');
+        await tester.pump(const Duration(milliseconds: 200));
+      },
+    );
+    await renderShot(
+      name: 'appstore-edit-text-dark',
+      c: RelicColors.dark,
+      build: (c) => _dialogHost(
+        c,
+        EditDialog(
+          relic: textRelic,
+          repo: repo,
+          onCancel: () {},
+          onCopy: () {},
+          onDelete: () {},
+          onShare: () {},
+          onSave: (t, n, u, m, c2, a, rm) async {},
+        ),
+      ),
+      physical: iphone69,
+    );
+
+    // 7. App Store set, 13" iPad: the two-pane layout with the first relic
+    // open in the detail pane (a tap opens it there at wide widths).
+    await renderShot(
+      name: 'appstore-popup-dark-ipad13',
+      c: RelicColors.dark,
+      build: popup,
+      physical: ipad13,
+      dpr: 2.0,
+      interact: () async {
+        await tester.tap(find.text('EIN').first);
+        await tester.pump(const Duration(milliseconds: 200));
+      },
     );
 
     debugDisableShadows = true;

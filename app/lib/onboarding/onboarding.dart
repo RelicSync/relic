@@ -13,6 +13,7 @@ import '../data/recovery.dart';
 import '../data/selfhost_link.dart';
 import '../data/supabase_auth.dart';
 import '../data/worker_repo.dart';
+import '../platform/store_safe.dart';
 import '../services/onboarding_service.dart';
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
@@ -134,10 +135,12 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
 
   static const _upgradeUrl = 'https://relic.space/upgrade';
 
-  /// Store-safe upgrade guidance for the device-cap dialog: open
-  /// relic.space/upgrade in the browser, falling back to copying the link.
-  /// Mobile sells nothing in-app; upgrades happen on desktop or the web.
+  /// Upgrade guidance for the device-cap dialog: open relic.space/upgrade in
+  /// the browser, falling back to copying the link. Mobile sells nothing
+  /// in-app; upgrades happen on desktop or the web. Never reached on
+  /// [storeSafeBuild] builds (App Store 3.1.1) — call sites pass null.
   Future<void> _openUpgradeGuidance() async {
+    if (storeSafeBuild) return;
     final messenger = ScaffoldMessenger.of(context);
     var ok = false;
     try {
@@ -201,8 +204,10 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
             devices: e.devices,
             label: _deviceName,
             platform: DeviceId.platform(),
-            onUpgrade: _openUpgradeGuidance,
-            upgradeLabel: 'Upgrade on your computer or at relic.space/upgrade');
+            onUpgrade: storeSafeBuild ? null : _openUpgradeGuidance,
+            upgradeLabel: storeSafeBuild
+                ? ''
+                : 'Upgrade on your computer or at relic.space/upgrade');
       }
     } catch (_) {/* offline: non-fatal, the vault still works here */}
     widget.onConnected(repo);

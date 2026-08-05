@@ -1540,8 +1540,13 @@ class _DeviceCapDialogState extends State<_DeviceCapDialog> {
                     style: TextStyle(
                         color: c.text, fontSize: 20, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 8),
+                // The "or upgrade" clause follows the action: with no upgrade
+                // affordance (store-safe iOS builds pass onUpgrade: null) the
+                // copy must not steer either (App Store 3.1.1).
                 Text(
-                    'Your plan is full. Remove a device to connect this one, or upgrade your plan for more devices.',
+                    widget.onUpgrade != null
+                        ? 'Your plan is full. Remove a device to connect this one, or upgrade your plan for more devices.'
+                        : 'Your plan is full. Remove a device to connect this one.',
                     style: TextStyle(color: c.textMuted, height: 1.4)),
                 const SizedBox(height: 16),
                 Flexible(

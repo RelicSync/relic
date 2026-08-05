@@ -38,16 +38,24 @@ extension SaveModeLabel on SaveMode {
         SaveMode.gallery => 'gallery',
       };
 
+  // iOS has no Downloads folder: [SaveMode.ask] is the Files document picker
+  // and [SaveMode.gallery] is Photos, so the copy names those instead of the
+  // Android destinations ([SaveMode.downloads] is never offered there —
+  // AndroidSave.available() is false off Android).
   String get label => switch (this) {
         SaveMode.downloads => 'Downloads',
-        SaveMode.ask => 'Ask every time',
-        SaveMode.gallery => 'Photos gallery',
+        SaveMode.ask => Platform.isIOS ? 'Files' : 'Ask every time',
+        SaveMode.gallery => Platform.isIOS ? 'Photos' : 'Photos gallery',
       };
 
   String get blurb => switch (this) {
         SaveMode.downloads => 'Your phone’s Downloads folder.',
-        SaveMode.ask => 'Pick the folder each time you save.',
-        SaveMode.gallery => 'Images go to Photos; other files ask.',
+        SaveMode.ask => Platform.isIOS
+            ? 'Choose where in Files each time you save.'
+            : 'Pick the folder each time you save.',
+        SaveMode.gallery => Platform.isIOS
+            ? 'Images go to Photos; other files go to Files.'
+            : 'Images go to Photos; other files ask.',
       };
 }
 
@@ -80,7 +88,10 @@ class SavePrefs {
   static Future<void> setMode(SaveMode m) =>
       _s.write(key: _kMode, value: m.id);
 
-  /// Which modes to offer on this device (Downloads is hidden below Android 10).
+  /// Which modes to offer on this device. Downloads is hidden below
+  /// Android 10 and everywhere off Android — on iOS that leaves the Files
+  /// picker ([SaveMode.ask]) and Photos ([SaveMode.gallery]), the only two
+  /// destinations the platform actually has.
   static Future<List<SaveMode>> options() async => [
         if (await AndroidSave.available()) SaveMode.downloads,
         SaveMode.ask,
