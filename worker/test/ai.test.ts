@@ -246,6 +246,22 @@ describe("AI record publish + pull", () => {
     expect(await r.json()).toEqual({ stale: false });
   });
 
+  it("a device may republish its own record with more in it", async () => {
+    // The attachment-text pass finishes after the models do, so the owner comes
+    // back to the same record with the other half of the answer. A peer's late
+    // publish is still refused (that is the test above); this is not that.
+    await seedToken("tk", "acct");
+    await publish("tk", "desk-a", "u1", { ai_at: 1000, level: 3, ct: "Zmlyc3Q=" });
+    const again = await publish("tk", "desk-a", "u1", {
+      ai_at: 1000,
+      level: 3,
+      ct: "ZnVsbGVy",
+    });
+
+    expect(await again.json()).toEqual({ stale: false });
+    expect(await aiRow("acct", "u1")).toMatchObject({ ct: "ZnVsbGVy" });
+  });
+
   it("a deleted relic does not sprout an AI record", async () => {
     await seedToken("tk", "acct");
     await E.DB.prepare(
