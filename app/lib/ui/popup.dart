@@ -103,10 +103,9 @@ class PopupView extends StatefulWidget {
   final bool pinned;
   final VoidCallback? onPinToggle;
 
-  /// Desktop only: fired by the host when the popup was EXPLICITLY closed
-  /// (Esc / X / tray click). Clears every search constraint — text, tags,
-  /// date, sort, scope — so the next summon starts fresh on All. Click-away
-  /// hides don't fire it: an alt-tab detour keeps your place.
+  /// Desktop only: fired by the host on every close, click-away included.
+  /// Clears every search constraint — text, tags, date, sort, scope — so the
+  /// next summon starts fresh on All.
   final Listenable? resetSignal;
 
   /// Desktop only: fired by the host every time the window is summoned, so
@@ -115,9 +114,15 @@ class PopupView extends StatefulWidget {
   final Listenable? summonSignal;
 
   /// Desktop only: whether the CURRENT summon is the mini picker. Set by the
-  /// host per-summon (which hotkey fired, or the default), so the same PopupView
-  /// renders compact or full without a persistent mode flag.
+  /// host per-summon (which hotkey fired), so the same PopupView renders
+  /// compact or full without a persistent mode flag.
   final ValueListenable<bool>? miniSignal;
+
+  /// Desktop only: leave the mini picker for the full window, in place, without
+  /// re-summoning. Only the host can do this — the window bounds and
+  /// [miniSignal] belong to it. Awaited before anything that needs the room,
+  /// which today means the editor.
+  final Future<void> Function()? onExpand;
 
   /// Global hotkey lines for the "?" cheatsheet, e.g.
   /// ("Ctrl+Shift+Q", "Open history"). The host supplies live values so a
@@ -148,6 +153,7 @@ class PopupView extends StatefulWidget {
     this.resetSignal,
     this.summonSignal,
     this.miniSignal,
+    this.onExpand,
     this.globalShortcuts = const [],
     this.capturePaused,
     this.pausedUntil,
@@ -764,9 +770,21 @@ class _PopupViewState extends State<PopupView> {
               widget.repo.uploadFraction(r) != null,
           onSelect: () => setState(() => _selected = i),
           onActivate: () => _copy(r),
+          onEdit: widget.onExpand == null ? null : () => _expandAndEdit(r),
         );
       },
     );
+  }
+
+  /// Mini picker → the editor. The mini window is ~340px wide and a handful of
+  /// rows tall, which is nowhere near enough for the edit surface, so the host
+  /// grows the window to the full popup FIRST and the editor opens into it.
+  /// The two steps are ordered, not concurrent: opening the modal into a
+  /// mini-sized window would lay it out at the wrong size for a frame.
+  Future<void> _expandAndEdit(Relic r) async {
+    await widget.onExpand?.call();
+    if (!mounted) return;
+    _edit(r);
   }
 
   /// Keep the arrow-selected mini row in view (fixed 30px rows → offset math)

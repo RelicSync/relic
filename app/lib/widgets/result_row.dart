@@ -992,17 +992,30 @@ class _PhotoThumb extends StatelessWidget {
   );
 }
 
-/// A dense one-line row for the mini picker (`repo.miniPicker`): a 20px media
+/// A dense one-line row for the mini picker (the mini hotkey): a 20px media
 /// chit + title, plus a faint "trigger" pill on snippets. No preview, no meta,
-/// no action cluster. Single tap selects; a quick second tap activates (paste)
-/// via [onActivate] — mirroring [ResultRow]'s manual double-tap so a single tap
-/// stays instant. Keyboard nav + Enter-paste live in the popup host.
+/// no action cluster.
+///
+/// A single tap fires [onActivate] — one click, item pasted, window gone.
+/// Unlike [ResultRow] there is deliberately no select-then-confirm step: the
+/// mini picker exists to be the fastest path from "I need that thing" to the
+/// thing being in your document, and a picker you have to click twice is just
+/// the full popup wearing a smaller window. [onSelect] is still called on
+/// hover so the keyboard highlight follows the pointer.
+///
+/// [onEdit] paints a small pencil on the row you're pointing at (or have
+/// selected with the arrows), for the one case a click can't serve: the item
+/// is nearly right and needs a change first.
 class MiniResultRow extends StatefulWidget {
   final Relic relic;
   final bool selected;
   final String? imagePath;
   final VoidCallback onSelect;
   final VoidCallback onActivate;
+
+  /// Open this item in the editor. The mini window is far too small to host a
+  /// modal, so the host expands to the full popup first.
+  final VoidCallback? onEdit;
 
   /// Not yet synced (queued/uploading or blocked). Shows a tiny dot so the
   /// compact picker also reflects in-flight state.
@@ -1014,6 +1027,7 @@ class MiniResultRow extends StatefulWidget {
     required this.imagePath,
     required this.onSelect,
     required this.onActivate,
+    this.onEdit,
     this.syncing = false,
   });
 
@@ -1029,17 +1043,13 @@ class MiniResultRow extends StatefulWidget {
 }
 
 class _MiniResultRowState extends State<MiniResultRow> {
-  DateTime? _lastTap;
+  bool _hover = false;
 
-  void _onTap() {
-    final now = DateTime.now();
-    if (_lastTap != null && now.difference(_lastTap!).inMilliseconds < 350) {
-      _lastTap = null;
-      widget.onActivate();
-    } else {
-      _lastTap = now;
-      widget.onSelect();
-    }
+  /// Pointing at a row also selects it, so the arrow-key highlight and the
+  /// pointer never disagree about which item Enter would take.
+  void _enter() {
+    setState(() => _hover = true);
+    if (!widget.selected) widget.onSelect();
   }
 
   @override
@@ -1048,11 +1058,13 @@ class _MiniResultRowState extends State<MiniResultRow> {
     final r = widget.relic;
     final sel = widget.selected;
     final isSnippet = r.userTags.contains('snippet');
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: _onTap,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => _enter(),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onActivate,
         child: Container(
           height: MiniResultRow.height,
           padding: const EdgeInsets.symmetric(horizontal: 9),
@@ -1089,14 +1101,44 @@ class _MiniResultRowState extends State<MiniResultRow> {
                 const SizedBox(width: 8),
                 _snippetPill(c),
               ],
-              // Vault gem on the far right (after the snippet pill, so they
-              // never overlap) when the item is promoted.
+              // Vault gem (after the snippet pill, so they never overlap) when
+              // the item is promoted.
               if (r.promoted) ...[
                 const SizedBox(width: 8),
                 RelicMark(size: 12, color: c.accent, facets: false),
               ],
+              _editSlot(c, sel),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  /// The pencil, in a slot that is always reserved so the title never reflows
+  /// as the pointer moves down the list. It paints on the row you're pointing
+  /// at, and on the arrow-selected row so the affordance is discoverable
+  /// without a mouse ever touching it.
+  Widget _editSlot(RelicColors c, bool sel) {
+    final onEdit = widget.onEdit;
+    const w = 22.0;
+    if (onEdit == null) return const SizedBox.shrink();
+    if (!_hover && !sel) return const SizedBox(width: w);
+    // No tooltip, deliberately: the mini window is ~340px wide and a few rows
+    // tall, and a tooltip hanging off a row at that edge renders cramped or
+    // clipped. A pencil does not need a label.
+    return SizedBox(
+      width: w,
+      height: MiniResultRow.height,
+      child: GestureDetector(
+        // Opaque, and nested inside the row's detector, so the tap opens the
+        // editor instead of pasting the item and closing the window.
+        behavior: HitTestBehavior.opaque,
+        onTap: onEdit,
+        child: Icon(
+          LucideIcons.squarePen,
+          size: 13,
+          color: sel ? c.textOnSelected : c.textSecondary,
         ),
       ),
     );

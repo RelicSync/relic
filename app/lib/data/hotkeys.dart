@@ -12,7 +12,7 @@ enum Summon {
   /// The dedicated mini hotkey: always the compact picker.
   miniHotkey,
 
-  /// Tray icon click or the tray menu's Show.
+  /// Tray icon click or the tray menu's Show: always the full window.
   tray,
 
   /// Launched (or relaunched) with the popup showing.
@@ -30,24 +30,34 @@ enum Summon {
 
 /// Which picker a summon opens.
 ///
-/// This exists as one table because the alternative had a real cost. The mode
-/// used to be a nullable bool passed at each call site, and the history hotkey
-/// passed nothing, meaning "follow the preference" — so with "Mini picker by
-/// default" on (which is the DEFAULT), the history hotkey and the mini hotkey
-/// both opened the mini picker and the full popup had no hotkey at all. On a
-/// fresh install there was no way to open the full window from the keyboard.
+/// One table, and the source alone decides. The mode used to be a nullable
+/// bool passed at each call site, and the history hotkey passed nothing,
+/// meaning "follow the mini-picker preference" — which defaulted to on, so the
+/// history hotkey and the mini hotkey both opened the mini picker and the full
+/// window had no key at all.
+///
+/// The preference is gone now, because there was nothing left for it to
+/// decide. The mini picker is compact and anchored to the text caret: it is
+/// the answer to a keystroke, mid-typing. Every other way in is a deliberate
+/// "show me Relic" — a tray click, a launch, a reminder, a link — and those
+/// want the whole window. That leaves exactly one summon that opens mini, and
+/// it has its own hotkey.
 ///
 /// The invariant that must not break again: the two picker hotkeys always
-/// disagree, whatever the preference says. The preference decides the summons
-/// that have no key of their own, which is what the Settings copy has always
-/// promised ("tray and launch").
-bool miniForSummon(Summon s, {required bool miniByDefault}) => switch (s) {
-  Summon.historyHotkey => false,
+/// disagree, so neither surface can become unreachable.
+bool miniForSummon(Summon s) => switch (s) {
   Summon.miniHotkey => true,
-  Summon.tray || Summon.launch => miniByDefault,
-  // A specific item is being surfaced, or an editor is about to open over it.
-  // Both want the room.
-  Summon.notification || Summon.deepLink || Summon.annotate => false,
+  // Everything else. A tray click is a mouse landing in the corner of the
+  // screen, nowhere near the caret the mini picker anchors to, and a launch,
+  // reminder, deep link or annotate is surfacing something specific. All of
+  // them want the room.
+  Summon.historyHotkey ||
+  Summon.tray ||
+  Summon.launch ||
+  Summon.notification ||
+  Summon.deepLink ||
+  Summon.annotate =>
+    false,
 };
 
 /// A serializable global-hotkey chord (modifiers + one main key), shared by the

@@ -153,10 +153,6 @@ abstract class RelicRepo {
   bool get snippets => false;
   bool get reminders => false;
 
-  /// Compact cursor-anchored popup mode (desktop). Default off; LocalDeskRepo
-  /// persists + implements.
-  bool get miniPicker => false;
-
   /// Open-vocabulary machine tags that have been seen only once and so have not
   /// earned a facet chip yet (see relic-sift/src/tag_vocab.rs). They remain on
   /// their relics and stay fully searchable — this only suppresses the chip.
@@ -560,8 +556,6 @@ class MemoryRepo implements RelicRepo {
   bool get snippets => false;
   @override
   bool get reminders => false;
-  @override
-  bool get miniPicker => false;
 
   @override
   Set<String> get provisionalTags => const {};

@@ -560,7 +560,7 @@ class _RealAppState extends State<RealApp>
   /// source travels rather than the mode so that no call site can decide the
   /// policy on its own, which is how the full popup once lost its hotkey.
   Future<void> _show(Summon src) async {
-    _miniMode.value = miniForSummon(src, miniByDefault: widget.repo.miniPicker);
+    _miniMode.value = miniForSummon(src);
     // Read the summon context FIRST — the summoner still owns the foreground
     // until we take it (same rule as the capture path below). Feeds the
     // destination-context ranking prior; the skip-list nulls Relic itself.
@@ -776,15 +776,23 @@ class _RealAppState extends State<RealApp>
     });
   }
 
-  /// Hide the popup. [explicit] marks a deliberate close (Esc / X / tray
-  /// click): it also resets the popup's search state so the NEXT summon opens
-  /// fresh on All with an empty box. Blur/click-away and pick-to-paste hides
-  /// stay implicit — re-summoning after a quick detour keeps your place.
-  Future<void> _hide({bool explicit = false}) async {
+  /// Hide the popup, and always reset the popup's search state so the NEXT
+  /// summon opens fresh on All with an empty box.
+  ///
+  /// This used to reset only on a deliberate close (Esc / X / tray click), on
+  /// the theory that re-summoning after a quick detour should keep your place.
+  /// In practice the detour is rarely quick: you click away, come back much
+  /// later, and Relic is still showing a search you have forgotten typing, with
+  /// most of your history filtered out of view. A stale filter reads as missing
+  /// data. Every close resets now, so the window always opens the same way.
+  ///
+  /// The reset runs while the window is hidden, after [_visible] goes false, so
+  /// the mini picker's live re-hug ignores the resulting result-count change.
+  Future<void> _hide() async {
     await windowManager.hide();
     _visible = false;
     _pinned = false; // every close path funnels through here
-    if (explicit) _popupResetTick.value++;
+    _popupResetTick.value++;
     // One-time education the first time the window disappears: without this,
     // a new user who clicks away has no idea how to get Relic back.
     if (!widget.repo.trayHintShown) {
@@ -817,13 +825,35 @@ class _RealAppState extends State<RealApp>
     } catch (_) {}
   }
 
+  /// Grow the mini picker into the full popup, in place. Used when the user
+  /// asks for something the compact window has no room for (today: the editor,
+  /// from the pencil on a mini row).
+  ///
+  /// Deliberately NOT [_show]: that path re-reads the summon context, re-takes
+  /// the foreground, and ticks [_popupSummonTick], which would yank focus back
+  /// to the search box just as the editor opens. The window is already up and
+  /// focused; all that has to change is its mode and its bounds.
+  ///
+  /// It centers rather than following the cursor. The mini window is anchored
+  /// to the caret, often near a screen edge, and growing it from there would
+  /// either run off the monitor or shove itself sideways to fit. Centering is
+  /// what every other in-session surface change already does (Settings,
+  /// Connect), so the motion is one the user has seen before.
+  Future<void> _expandFromMini() async {
+    if (!_miniMode.value) return;
+    _miniResizeTimer?.cancel(); // a pending re-hug must not shrink us back
+    _miniMode.value = false;
+    await _sizeWindow(_popupDims.width, _popupDims.height);
+    if (mounted) setState(() {});
+  }
+
   /// Summon/dismiss. When the popup is already up in the OTHER mode, switch to
   /// the requested one instead of closing — so pressing the mini key over the
   /// full picker (or vice versa) swaps modes rather than dismissing.
   Future<void> _toggle(Summon src) async {
-    final want = miniForSummon(src, miniByDefault: widget.repo.miniPicker);
+    final want = miniForSummon(src);
     if (_visible && _miniMode.value == want) {
-      await _hide(explicit: true);
+      await _hide();
     } else {
       await _show(src);
     }
@@ -855,7 +885,7 @@ class _RealAppState extends State<RealApp>
       _sizeWindow(_popupDims.width, _popupDims.height);
       return KeyEventResult.handled;
     }
-    _hide(explicit: true);
+    _hide();
     return KeyEventResult.handled;
   }
 
@@ -1420,7 +1450,7 @@ class _RealAppState extends State<RealApp>
         onBillingOpened: () {
           // Get out of the browser's way: hide the window and leave the next
           // summon on the plain popup, not Settings.
-          _hide(explicit: true);
+          _hide();
           setState(() => _settingsOpen = false);
           _sizeWindow(_popupDims.width, _popupDims.height);
         },
@@ -1435,12 +1465,13 @@ class _RealAppState extends State<RealApp>
         // must not reopen the editor on the next ordinary summon.
         if (!open) _annotateRequest = null;
       },
-      onClose: () => _hide(explicit: true),
+      onClose: () => _hide(),
       pinned: _pinned,
       onPinToggle: () => setState(() => _pinned = !_pinned),
       resetSignal: _popupResetTick,
       summonSignal: _popupSummonTick,
       miniSignal: _miniMode,
+      onExpand: _expandFromMini,
       capturePaused: _pausedSignal,
       pausedUntil: () => _pausedUntil,
       onResumeCapture: () => _setPaused(false),

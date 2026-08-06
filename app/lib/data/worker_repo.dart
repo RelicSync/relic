@@ -720,8 +720,6 @@ class WorkerRepo implements RelicRepo {
   bool get snippets => false;
   @override
   bool get reminders => false;
-  @override
-  bool get miniPicker => false; // mini picker is desktop-only
 
   @override
   // The local labeler is desktop-only, so nothing here is ever provisional.

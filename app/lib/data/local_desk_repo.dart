@@ -365,21 +365,6 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     notifyListeners();
   }
 
-  // Compact "mini picker" mode: a small, cursor-anchored popup that shows just a
-  // search line and dense one-line rows, sized to the results. This is the
-  // DEFAULT summon mode (tray click / launch / deep links); the dedicated
-  // history hotkey always opens the full picker and the mini hotkey always opens
-  // mini, regardless. On by default. Read by both the popup (row renderer) and
-  // the desktop shell (sizing/placement), so it lives on the RelicRepo interface.
-  bool _miniPicker = true;
-  @override
-  bool get miniPicker => _miniPicker;
-  void setMiniPicker(bool on) {
-    _miniPicker = on;
-    _savePrefs();
-    notifyListeners();
-  }
-
   // --- general / capture preferences (persisted in prefs.json) ---
   Appearance _appearance = Appearance.system;
   bool _launchAtLogin = true;
@@ -1183,7 +1168,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         final j =
             jsonDecode(_prefsFile.readAsStringSync()) as Map<String, dynamic>;
         _popupSize = PopupSize.byName(j['popup_size'] as String?);
-        _miniPicker = j['mini_picker'] as bool? ?? true;
+        // ('mini_picker' was retired: which picker opens is decided by what
+        // summoned it, not by a preference. Old files keep the key; it is
+        // ignored and drops out on the next save.)
         _mlEnrich = j['ml_enrich'] as bool? ?? true;
         _describeItems = j['rich_captions'] as bool? ?? false;
         _describeEverything = j['describe_everything'] as bool? ?? false;
@@ -1277,7 +1264,6 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       _prefsFile.writeAsStringSync(
         jsonEncode({
           'popup_size': _popupSize.name,
-          'mini_picker': _miniPicker,
           'ml_enrich': _mlEnrich,
           'rich_captions': _describeItems,
           'describe_everything': _describeEverything,

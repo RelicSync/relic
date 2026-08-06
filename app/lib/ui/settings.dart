@@ -413,16 +413,6 @@ class _SettingsViewState extends State<SettingsView> {
             ),
             _appearanceRow(c),
             _popupSizeRow(c),
-            if (Platform.isWindows)
-              _toggleRow(
-                c,
-                'Mini picker by default',
-                repo.miniPicker,
-                repo.setMiniPicker,
-                sub: 'Open the compact, cursor-anchored picker by default (tray '
-                    'and launch). ${repo.miniHotkey.display} always opens mini; '
-                    'your history hotkey always opens the full popup.',
-              ),
             _toggleRow(
               c,
               'Paste directly on select',
