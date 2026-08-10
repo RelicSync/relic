@@ -386,7 +386,21 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     }
   }
 
+  /// Completes when [_autoConnect] has settled, however it settled: repo bound,
+  /// browse-only, onboarding. A capture arriving mid-boot waits on this rather
+  /// than standing up a second repo over the same cache file — see
+  /// [_repoForCapture].
+  final Completer<void> _bootSettled = Completer<void>();
+
   Future<void> _autoConnect() async {
+    try {
+      await _autoConnectInner();
+    } finally {
+      if (!_bootSettled.isCompleted) _bootSettled.complete();
+    }
+  }
+
+  Future<void> _autoConnectInner() async {
     // Supabase mode: bind silently (cached master key, or a one-time legacy
     // passphrase migration). See [_silentSupabaseRepo].
     final mode = await _Creds.authMode();
@@ -1015,12 +1029,22 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     if (_pendingText.isNotEmpty) {
       final batch = List<String>.from(_pendingText);
       _pendingText.clear();
-      for (final t in batch) {
-        repo.captureText(t);
-      }
-      if (mounted) setState(() {});
-      _toast('${batch.length} captured to Relic');
+      unawaited(_flushPendingText(repo, batch));
     }
+  }
+
+  /// Drain queued tile captures, counting the ones that actually landed. The
+  /// old version fired them off unawaited and toasted `batch.length` regardless.
+  Future<void> _flushPendingText(WorkerRepo repo, List<String> batch) async {
+    var added = 0;
+    for (final t in batch) {
+      if (await repo.captureText(t)) added++;
+    }
+    if (!mounted) return;
+    setState(() {});
+    _toast(added > 0
+        ? '$added captured to Relic'
+        : "Couldn't capture — open Relic and retry");
   }
 
   // --- relic://capture deep link (Android QS tile / iOS Shortcut) ---
@@ -1062,6 +1086,23 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   WorkerRepo? _captureRepo;
   Future<WorkerRepo?> _repoForCapture() async {
     if (_repo != null) return _repo;
+    // A tile tap launches the app, so _autoConnect is usually still running
+    // right here. Building a second repo now would give one cache file two
+    // owners: each loads it, each later writes the WHOLE file back, and the
+    // loser's items and outbox are erased — the capture is toasted, then
+    // vanishes from the list and never uploads. Whether the clipboard read
+    // needed a retry decided which repo saved last, which is why it only
+    // happened sometimes. Wait for boot to settle instead.
+    if (!_bootSettled.isCompleted) {
+      await _bootSettled.future
+          .timeout(const Duration(seconds: 10), onTimeout: () {});
+      if (_repo != null) return _repo;
+      // Boot is wedged, not finished. Still no safe moment to open a second
+      // writer, so let the caller queue this for _flushPending.
+      if (!_bootSettled.isCompleted) return null;
+    }
+    // Boot finished without a repo (offline, browse-only, expired session):
+    // nothing else owns the cache now, so a standalone capture repo is safe.
     if (_captureRepo != null) return _captureRepo;
     if (await _Creds.authMode() == 'supabase') {
       final repo = await _silentSupabaseRepo();
@@ -1123,15 +1164,18 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
       _pendingText.add(text); // not set up yet — capture once connected
       return;
     }
-    await repo.captureText(text);
+    // Never claim success we didn't have: captureText returns false when the
+    // master key can't be unlocked, and the old unconditional toast made that
+    // silent no-op look like a capture.
+    final ok = await repo.captureText(text);
     if (_repo != null && mounted) setState(() {}); // refresh the live list
-    _toast('Captured to Relic');
+    _toast(ok ? 'Captured to Relic' : "Couldn't capture — open Relic and retry");
   }
 
   Future<void> _captureShared(WorkerRepo repo, List<SharedMediaFile> files) async {
     final seen = await _Creds.shareSeen();
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    var added = 0, skipped = 0;
+    var added = 0, skipped = 0, failed = 0;
     var dirty = false;
     for (final f in files) {
       try {
@@ -1140,7 +1184,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
         // intent when the app is reopened from recents, which would otherwise
         // resurface a days-old screenshot as a new (and desync'd) item.
         final String fp;
-        final Future<void> Function() capture;
+        final Future<bool> Function() capture;
         if (f.type == SharedMediaType.text || f.type == SharedMediaType.url) {
           fp = ShareDedup.fingerprint('txt', utf8.encode(f.path));
           capture = () => repo.captureText(f.path);
@@ -1160,11 +1204,20 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
           skipped++;
           continue;
         }
-        await capture();
-        seen[fp] = now;
-        dirty = true;
-        added++;
-      } catch (_) {}
+        // Only remember the fingerprint for a capture that actually landed. A
+        // failed capture that recorded one would be skipped as "Already in
+        // Relic" on every retry for the whole 90-day window, so the content
+        // could never be shared in again.
+        if (await capture()) {
+          seen[fp] = now;
+          dirty = true;
+          added++;
+        } else {
+          failed++;
+        }
+      } catch (_) {
+        failed++;
+      }
     }
     if (dirty) await _Creds.setShareSeen(ShareDedup.prune(seen, now));
     if (added > 0 && mounted) {
@@ -1173,6 +1226,8 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     } else if (skipped > 0 && mounted) {
       // The share was already captured — reassure rather than silently no-op.
       _toast(skipped == 1 ? 'Already in Relic' : 'Already in Relic ($skipped)');
+    } else if (failed > 0 && mounted) {
+      _toast("Couldn't capture — open Relic and retry");
     }
   }
 

@@ -172,5 +172,82 @@ void main() {
           reason: 'an unprimed repo persists only what it knows about');
       expect((cache['cursor'] as num).toInt(), 0);
     });
+
+    Set<Object?> uidsOf(Map<String, dynamic> cache) =>
+        (cache['items'] as List).map((e) => (e as Map)['uid']).toSet();
+
+    // The bug behind "the QS tile said Captured to Relic but nothing appeared".
+    // Priming fixed the capture repo erasing the vault, but not two repos being
+    // alive at once: a tile tap launches the app, so _autoConnect is still
+    // running when the deep link arrives. Both repos load the cache, both later
+    // write it back WHOLESALE, and the one that saves last wins the file.
+    // Priming can't help — the boot repo's snapshot is simply older than the
+    // capture. Whether the clipboard read needed a retry decided the order,
+    // which is why it looked random.
+    test('a concurrently-booted repo erases the capture when it saves',
+        () async {
+      await seedCache();
+      final seeded = uidsOf(readCache());
+
+      // Boot binds and reads the cache — three items, no capture yet.
+      final boot = await offlineRepo();
+      await boot.primeCache();
+
+      // The tile capture lands on its own repo and saves correctly.
+      final tile = await offlineRepo();
+      await tile.primeCache();
+      expect(await tile.captureText('captured from the tile'), isTrue);
+      final tileUid = uidsOf(readCache()).difference(seeded).single;
+
+      // Now boot writes anything at all: a pull, a sync, another capture.
+      await boot.captureText('anything at all');
+
+      expect(uidsOf(readCache()), isNot(contains(tileUid)),
+          reason: 'the tile capture is gone from disk despite its toast');
+      expect(boot.debugOutbox.any((o) => o['uid'] == tileUid), isFalse,
+          reason: 'and gone from the outbox, so it never uploads either');
+    });
+  });
+
+  // captureText/Image/File return false rather than throwing when the key can't
+  // be unlocked. The callers used to toast success unconditionally, so a
+  // no-op capture was indistinguishable from a real one — and on the share
+  // path it also burned a 90-day dedup fingerprint, making every retry of the
+  // same content report "Already in Relic".
+  group('captures report whether they landed', () {
+    test('true when the relic is actually stored', () async {
+      final r = await offlineRepo();
+      expect(await r.captureText('real capture'), isTrue);
+      expect(r.debugOutbox, hasLength(1));
+    });
+
+    test('true when an identical capture bumps the existing relic', () async {
+      final r = await offlineRepo();
+      await r.captureText('same text twice');
+      expect(await r.captureText('same text twice'), isTrue,
+          reason: 'the item moved to the top — that is a real capture');
+    });
+
+    test('false when the master key cannot be unlocked', () async {
+      // No cached keyparams and no reachable server: _ensureKey throws.
+      final r = WorkerRepo(
+        baseUrl: 'http://127.0.0.1:9',
+        token: 'device-token',
+        passphrase: 'correct horse battery staple',
+      );
+      expect(await r.captureText('never stored'), isFalse);
+      expect(await r.captureImage(Uint8List.fromList([1, 2, 3])), isFalse);
+      expect(await r.captureFile(Uint8List.fromList([4, 5]), filename: 'a.bin'),
+          isFalse);
+      expect(r.debugOutbox, isEmpty);
+    });
+
+    test('false for text there was nothing to capture from', () async {
+      final r = await offlineRepo();
+      expect(await r.captureText('   '), isFalse);
+      expect(await r.captureText('relic://capture'), isFalse,
+          reason: "Relic's own control strings are uncapturable");
+      expect(r.debugOutbox, isEmpty);
+    });
   });
 }

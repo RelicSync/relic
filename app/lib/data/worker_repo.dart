@@ -1621,15 +1621,19 @@ class WorkerRepo implements RelicRepo {
         lower.contains(RecoveryKit.formatTag); // relic-mk-v1
   }
 
-  Future<void> captureText(String text) async {
+  /// Capture [text] as a string relic. Returns false when nothing was stored —
+  /// the text was empty/uncapturable, or the master key could not be unlocked.
+  /// Callers must not report success on a false: the QS tile used to toast
+  /// "Captured to Relic" over a silent no-op.
+  Future<bool> captureText(String text) async {
     final t = text.trim();
-    if (t.isEmpty || isUncapturable(t)) return;
+    if (t.isEmpty || isUncapturable(t)) return false;
     try {
       await _ensureKey();
     } catch (_) {
-      return;
+      return false;
     }
-    if (_mk == null) return;
+    if (_mk == null) return false;
     final now = _now;
     // Re-copy dedupe (parity with the desktop watcher): identical text
     // resurfaces as the newest capture instead of duplicating. Both stamps
@@ -1641,7 +1645,7 @@ class WorkerRepo implements RelicRepo {
       _items.removeAt(i);
       _items.insert(0, bumped);
       await _push(bumped);
-      return;
+      return true;
     }
     final r = Relic(
       uid: _uuid.v4(),
@@ -1658,6 +1662,7 @@ class WorkerRepo implements RelicRepo {
     );
     _items.insert(0, r);
     await _push(r);
+    return true;
   }
 
   /// Seal + upload a blob to the Worker (chunked past 64 MiB — the edge body
@@ -1727,13 +1732,15 @@ class WorkerRepo implements RelicRepo {
     if (changed) await _saveCache();
   }
 
-  Future<void> captureImage(Uint8List bytes, {String? mime, String? filename}) async {
+  /// Capture image [bytes] as a photo relic. False when the key is unavailable
+  /// (see [captureText]).
+  Future<bool> captureImage(Uint8List bytes, {String? mime, String? filename}) async {
     try {
       await _ensureKey();
     } catch (_) {
-      return;
+      return false;
     }
-    if (_mk == null) return;
+    if (_mk == null) return false;
     final now = _now;
     final blobKey = _uuid.v4(); // 36 chars, matches the worker's blob-id regex
     await _putBlob(blobKey, bytes);
@@ -1755,17 +1762,19 @@ class WorkerRepo implements RelicRepo {
     );
     _items.insert(0, r);
     await _push(r);
+    return true;
   }
 
   /// Capture an arbitrary file (share sheet / picker) as a `Kind.file` relic —
-  /// uploads the blob, stamps friendly file-type chips, and pushes.
-  Future<void> captureFile(Uint8List bytes, {String? filename, String? mime}) async {
+  /// uploads the blob, stamps friendly file-type chips, and pushes. False when
+  /// the key is unavailable (see [captureText]).
+  Future<bool> captureFile(Uint8List bytes, {String? filename, String? mime}) async {
     try {
       await _ensureKey();
     } catch (_) {
-      return;
+      return false;
     }
-    if (_mk == null) return;
+    if (_mk == null) return false;
     final now = _now;
     final blobKey = _uuid.v4();
     await _putBlob(blobKey, bytes);
@@ -1787,6 +1796,7 @@ class WorkerRepo implements RelicRepo {
     );
     _items.insert(0, r);
     await _push(r);
+    return true;
   }
 
   @override

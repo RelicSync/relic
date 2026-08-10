@@ -87,10 +87,11 @@ void main() {
       expect(repo.masterKey, isNotNull,
           reason: 'the vault key was created or unwrapped');
 
-      // A capture has to survive sealing, the cache write, and the upload. An
-      // empty outbox afterwards is the real proof: captureText returns void
-      // here, so it cannot report its own failure.
-      await repo.captureText('captured from the device test');
+      // A capture has to survive sealing, the cache write, and the upload.
+      // captureText reports whether it stored anything, but that only covers
+      // the local half; an empty outbox afterwards is what proves the upload.
+      expect(await repo.captureText('captured from the device test'), isTrue,
+          reason: 'the relic was sealed and queued');
       expect(repo.debugOutbox, isEmpty,
           reason: 'the outbox flushed to the real server; anything left means '
               'the upload failed and only the local cache has it');
