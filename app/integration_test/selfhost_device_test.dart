@@ -37,6 +37,15 @@ import 'package:relic_app/data/worker_repo.dart';
 /// it at your real vault with the wrong passphrase gets a 403, and at a fresh
 /// server it would claim the instance with a throwaway passphrase. Use a
 /// disposable container for it.
+///
+/// `-d windows` also works, and is worth running as a smoke test of everything
+/// here except the one thing only a phone can answer. It needs `RELIC_DATA_DIR`
+/// set to a throwaway directory, for two reasons: the runner's single-instance
+/// mutex is scoped by that variable (windows/runner/main.cpp), so without it the
+/// test binary loses the race against a resident tray copy and exits before the
+/// debug connection is up — which surfaces as the misleading "log reader stopped
+/// unexpectedly, or never started", not as a test failure. It also keeps the run
+/// off your real SQLite vault.
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
