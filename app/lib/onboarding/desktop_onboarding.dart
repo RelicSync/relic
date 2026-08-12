@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 import 'dart:typed_data';
 
@@ -7,6 +8,7 @@ import '../data/api.dart';
 import '../data/oauth_flow.dart';
 import '../data/pairing.dart';
 import '../data/supabase_auth.dart';
+import '../platform/app_activation.dart';
 import '../platform/input_injector.dart';
 import '../services/onboarding_service.dart';
 import '../theme/relic_theme.dart';
@@ -85,6 +87,65 @@ bool shouldShowAccessibilityIntro({
 }) =>
     isMacOS && !trusted && !startAtSignIn;
 
+/// Watches for the Accessibility grant landing while the user is away in System
+/// Settings, so Relic can pull itself back in front instead of sitting in the
+/// background after the switch is flipped. There is no TCC change notification
+/// to subscribe to, but AXIsProcessTrusted reflects the grant live (no relaunch
+/// needed), and reading it without the prompt option is a side-effect-free
+/// check — see macos/Runner/Bridge/InputBridge.swift — so a slow poll is both
+/// correct and cheap. [window] bounds it: a user who wanders off must not leave
+/// a timer ticking for the life of the process.
+///
+/// Split out of the widget so the grant-watching contract is testable without a
+/// Mac: [probe] is `inputInjectionAvailable` in production.
+@visibleForTesting
+class AccessibilityGrantWatcher {
+  static const interval = Duration(seconds: 1);
+  static const window = Duration(minutes: 3);
+
+  final Future<bool> Function() probe;
+  final VoidCallback onGranted;
+
+  Timer? _timer;
+  int _left = 0;
+  bool _probing = false;
+
+  AccessibilityGrantWatcher({required this.probe, required this.onGranted});
+
+  bool get watching => _timer != null;
+
+  /// (Re)start from a full [window]. A second trip out to System Settings gets
+  /// its own budget, and can never stack a second timer on the first.
+  void start() {
+    cancel();
+    _left = window.inMicroseconds ~/ interval.inMicroseconds;
+    _timer = Timer.periodic(interval, (_) => unawaited(_tick()));
+  }
+
+  void cancel() {
+    _timer?.cancel();
+    _timer = null;
+  }
+
+  Future<void> _tick() async {
+    if (_probing) return; // a channel hop slower than the interval must not pile up
+    _probing = true;
+    final bool trusted;
+    try {
+      trusted = await probe();
+    } finally {
+      _probing = false;
+    }
+    if (_timer == null) return; // canceled while that probe was in flight
+    if (trusted) {
+      cancel();
+      onGranted();
+      return;
+    }
+    if (--_left <= 0) cancel();
+  }
+}
+
 enum _Step {
   accessibility,
   welcome,
@@ -112,6 +173,10 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
   // macOS Accessibility (TCC): flips once we've sent the user out to System
   // Settings, which turns the skip action into a "done, continue".
   bool _axAsked = false;
+  late final _axWatcher = AccessibilityGrantWatcher(
+    probe: inputInjectionAvailable,
+    onGranted: () => unawaited(_onAccessibilityGranted()),
+  );
 
   final _emailC = TextEditingController();
   final _passC = TextEditingController();
@@ -161,6 +226,11 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
   /// Security → Accessibility so the switch is right there. If the grant is
   /// somehow already in hand we move on instead of sending the user out to
   /// System Settings for nothing.
+  ///
+  /// Sending the user out puts Relic in the background behind System Settings,
+  /// where nothing brings it back on its own, so we watch for the grant from
+  /// here (see [AccessibilityGrantWatcher]). The manual "Done, continue" stays
+  /// the guaranteed path.
   Future<void> _openAccessibility() async {
     setState(() => _busy = true);
     final trusted = await inputInjectionAvailable(prompt: true);
@@ -170,11 +240,26 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
       _busy = false;
       _axAsked = true;
     });
-    if (trusted) _go(_Step.welcome);
+    if (trusted) {
+      _go(_Step.welcome);
+    } else {
+      _axWatcher.start();
+    }
+  }
+
+  /// The user flipped the switch over in System Settings. Relic is buried
+  /// behind that window, so take the foreground before advancing — otherwise
+  /// the flow continues where nobody can see it.
+  Future<void> _onAccessibilityGranted() async {
+    if (!mounted) return;
+    await activateApp();
+    if (!mounted) return;
+    _go(_Step.welcome);
   }
 
   @override
   void dispose() {
+    _axWatcher.cancel();
     _pairing?.cancel(); // stop any orphan relay poll on teardown
     for (final c in [_emailC, _passC, _phraseC, _confirmC, _kitC, _pairCodeC]) {
       c.dispose();
@@ -554,7 +639,12 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
           _primary(c, 'Open Accessibility settings',
               _busy ? null : _openAccessibility),
           _secondary(c, _axAsked ? 'Done, continue' : 'Skip for now',
-              _busy ? null : () => _go(_Step.welcome)),
+              _busy
+                  ? null
+                  : () {
+                      _axWatcher.cancel(); // the user got there first
+                      _go(_Step.welcome);
+                    }),
         ]);
       case _Step.welcome:
         return Column(children: [
