@@ -6,6 +6,7 @@ import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../platform/apple_ids.dart';
+import '../platform/app_activation.dart';
 import 'crash_log.dart';
 import 'supabase_auth.dart';
 
@@ -84,6 +85,11 @@ class OAuthFlow {
             'loopback callback landed '
             '(${u.queryParameters.containsKey('code') ? 'code' : 'error'})',
             tag: 'auth');
+        // The user is standing in the browser and the browser's part is over.
+        // Take the foreground back so the next step (the passphrase) is on
+        // screen, instead of leaving them to re-find the app behind the tab —
+        // the loopback page's Open Relic button stays as the fallback.
+        unawaited(activateApp());
         return _exchange(u, verifier);
       } on TimeoutException {
         appendSyncLog(

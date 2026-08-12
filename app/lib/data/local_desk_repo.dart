@@ -4595,7 +4595,14 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       : DateTime.fromMillisecondsSinceEpoch(_lastSyncAt * 1000);
 
   @override
-  bool get syncBusy => _manualSync;
+  bool get syncBusy =>
+      // The first pull of a fresh bind is the one long sync a user actually
+      // watches (a whole vault coming down), and _online is still false for
+      // all of it — without this it wears the "Offline" label start to
+      // finish. Gated on "never synced yet" so the periodic 30s pulls (and
+      // offline retries) don't flicker the chip for the rest of the app's
+      // life.
+      _manualSync || (_pulling && _lastSyncAt == 0);
 
   /// Manual "Sync now": one full push+pull cycle with UI feedback. Safe to
   /// overlap the periodic timer — _maybeRefresh/_flushPending/_pullRemote all
@@ -4849,7 +4856,11 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   Future<void> _pullRemote() async {
     final db = _db;
     if (_pulling || _mk == null || db == null) return;
+    // First-ever pull of this bind: syncBusy is watching, so the chip has to
+    // repaint on both edges. Later cycles skip the churn.
+    final firstSync = _lastSyncAt == 0;
     _pulling = true;
+    if (firstSync) notifyListeners();
     try {
       var changed = false;
       var maxU = _cursor;
@@ -4936,6 +4947,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       _online = false;
     } finally {
       _pulling = false;
+      if (firstSync) notifyListeners();
     }
   }
 
