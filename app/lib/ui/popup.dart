@@ -493,6 +493,47 @@ class _PopupViewState extends State<PopupView> {
         ),
       );
 
+  /// Shown while an account-switch merge offer is pending: those items look
+  /// like they simply refuse to sync unless the holdback is explained where
+  /// the user is actually looking. Routes to Settings, where the offer's
+  /// Upload all / Keep local decision lives.
+  Widget _mergeOfferBanner(RelicColors c) => GestureDetector(
+        onTap: widget.onSettings,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(14, 8, 12, 8),
+            decoration: BoxDecoration(
+              color: c.accent.withValues(alpha: 0.10),
+              border: Border(bottom: BorderSide(color: c.border, width: 1)),
+            ),
+            child: Row(children: [
+              Icon(LucideIcons.cloudOff, size: 14, color: c.accent),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  '${widget.repo.mergeOfferCount} items from your previous '
+                  'account are only on this device.',
+                  style: RelicTheme.sans(size: 11.5, color: c.textSecondary),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 4),
+                decoration: BoxDecoration(
+                  color: c.accent,
+                  borderRadius: BorderRadius.circular(Radii.chip),
+                ),
+                child: Text('Review',
+                    style: RelicTheme.sans(
+                        size: 11, weight: FontWeight.w600, color: c.onAccent)),
+              ),
+            ]),
+          ),
+        ),
+      );
+
   /// Slim "capture is paused" pill: a forgotten pause used to silently eat
   /// copies for days — now it's visible on every summon, with one-tap Resume
   /// and the auto-resume time when a timed pause is running.
@@ -2528,6 +2569,10 @@ class _PopupViewState extends State<PopupView> {
                     widget.onConnect != null &&
                     !widget.repo.syncEnabled)
                   _connectBanner(c),
+                if (!mini &&
+                    widget.repo.syncEnabled &&
+                    widget.repo.mergeOfferCount > 0)
+                  _mergeOfferBanner(c),
                 if (!mini && widget.capturePaused != null)
                   ValueListenableBuilder<bool>(
                     valueListenable: widget.capturePaused!,

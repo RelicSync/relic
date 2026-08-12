@@ -6,6 +6,7 @@ import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../platform/apple_ids.dart';
+import 'crash_log.dart';
 import 'supabase_auth.dart';
 
 /// Runs a browser OAuth (PKCE) login and returns the resulting [SupabaseSession].
@@ -58,6 +59,8 @@ class OAuthFlow {
     try {
       final redirect = 'http://127.0.0.1:${server.port}/callback';
       final authorize = SupabaseAuth.authorizeUrl(provider, redirect, challenge);
+      appendSyncLog('desktop oauth start, loopback port ${server.port}',
+          tag: 'auth');
       if (!await launchUrl(authorize, mode: LaunchMode.externalApplication)) {
         throw 'Could not open the browser.';
       }
@@ -77,8 +80,16 @@ class OAuthFlow {
       });
       try {
         final u = await done.future.timeout(_timeout);
+        appendSyncLog(
+            'loopback callback landed '
+            '(${u.queryParameters.containsKey('code') ? 'code' : 'error'})',
+            tag: 'auth');
         return _exchange(u, verifier);
       } on TimeoutException {
+        appendSyncLog(
+            'loopback callback never landed (${_timeout.inMinutes}m) — '
+            'browser likely detoured to the web vault',
+            tag: 'auth');
         throw 'Sign-in timed out. Please try again.';
       } finally {
         await sub.cancel();
@@ -160,11 +171,17 @@ class OAuthFlow {
     return SupabaseAuth.exchangeCode(code, verifier);
   }
 
+  /// The page the loopback serves after the callback. The app is already
+  /// bringing itself forward at this point; the deep-link button is the
+  /// belt-and-braces path back for browsers/users where that hand-off gets
+  /// lost (relic:// is registered on every desktop platform we ship).
   static String _closePage(bool ok) => '''
 <!doctype html><meta charset="utf-8"><title>Relic</title>
 <body style="font-family:system-ui;background:#16130E;color:#F2ECDD;display:grid;place-items:center;height:100vh;margin:0">
 <div style="text-align:center">
 <h2 style="color:#DAA43E">${ok ? 'Signed in' : 'Sign-in failed'}</h2>
-<p>You can close this tab and return to Relic.</p>
+<p>${ok ? 'Finish unlocking in the Relic app.' : 'You can close this tab and try again in Relic.'}</p>
+${ok ? '<p><a href="$relicUrlScheme://open" style="display:inline-block;margin-top:8px;padding:10px 22px;background:#DAA43E;color:#16130E;border-radius:8px;text-decoration:none;font-weight:600">Open Relic</a></p>' : ''}
+<p style="color:#8A8272;font-size:13px">Then this tab can be closed.</p>
 </div></body>''';
 }

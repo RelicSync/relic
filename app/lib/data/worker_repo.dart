@@ -738,6 +738,10 @@ class WorkerRepo implements RelicRepo {
   void clearReminder(int id) {}
   @override
   bool get syncEnabled => true; // mobile: a live repo means connected
+  // Mobile connects one account per install; the desktop switch-and-hold-back
+  // flow (and its banner) has no analog here yet.
+  @override
+  int get mergeOfferCount => 0;
   @override
   SyncState get sync => _sync;
   @override

@@ -73,6 +73,30 @@ void initCrashLogging() {
   };
 }
 
+String? _lastSyncMsg;
+DateTime _lastSyncAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+/// One-line trouble entry (sync HTTP status, refresh failure, transport
+/// error, OAuth flow milestones). Sync entries fire from a periodic timer, so
+/// a repeat of the same message within five minutes is dropped — the first
+/// occurrence is the diagnostic, the repetition is just the retry loop.
+void appendSyncLog(String message, {String tag = 'sync'}) {
+  try {
+    final now = DateTime.now();
+    if (message == _lastSyncMsg &&
+        now.difference(_lastSyncAt) < const Duration(minutes: 5)) {
+      return;
+    }
+    _lastSyncMsg = message;
+    _lastSyncAt = now;
+    _logFile().writeAsStringSync(
+      '[${now.toIso8601String()}] [$tag] $message\n',
+      mode: FileMode.append,
+      flush: true,
+    );
+  } catch (_) {}
+}
+
 /// Append one timestamped entry. Never throws.
 void appendCrash(Object error, StackTrace stack, {String? context}) {
   try {

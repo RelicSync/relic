@@ -147,6 +147,12 @@ abstract class RelicRepo {
   /// desktop "sign in to sync" banner only shows where it's actually meaningful.
   bool get syncEnabled => true;
 
+  /// Items held local after an account switch, awaiting the user's
+  /// upload-or-keep decision (see LocalDeskRepo). 0 = no offer pending; the
+  /// popup shows a banner while it is, or the offer sits invisible in Settings
+  /// and reads as "sync is broken".
+  int get mergeOfferCount => 0;
+
   // --- Power features (opt-in; desktop-only in practice, default off/no-op so
   // the popup can bind to them uniformly). LocalDeskRepo persists + implements.
   bool get multiCombine => false;
@@ -573,6 +579,8 @@ class MemoryRepo implements RelicRepo {
   void clearReminder(int id) {}
   @override
   bool get syncEnabled => false;
+  @override
+  int get mergeOfferCount => 0;
   @override
   AccountInfo? get account => const AccountInfo(
     tier: 'Free',

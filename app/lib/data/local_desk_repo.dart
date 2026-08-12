@@ -16,6 +16,7 @@ import '../platform/paths.dart';
 import '../widgets/chrome.dart';
 import 'api.dart';
 import 'backup_file.dart';
+import 'crash_log.dart';
 import 'blob_upload.dart';
 import 'bundle.dart';
 import 'package:relic_crypto/relic_crypto.dart';
@@ -244,6 +245,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   /// the one now connected (0 = no offer pending). Set at bind time when the
   /// account changed; the items stay local until the user explicitly accepts
   /// [acceptMergeOffer] or dismisses via [dismissMergeOffer].
+  @override
   int get mergeOfferCount => _mergeOfferCount;
 
   /// User said "upload this device's items into the connected account": queue
@@ -3934,7 +3936,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         }
       }
       await _flushPending();
-    } catch (_) {
+    } catch (e) {
+      appendSyncLog('sync cycle error: $e');
       _online = false; // next cycle retries
     }
     notifyListeners();
@@ -4265,7 +4268,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           } catch (_) {} // best-effort, must not flip _online
         }
       }
-    } catch (_) {
+    } catch (e) {
+      appendSyncLog('token refresh failed: $e');
       _online = false; // next cycle retries; persistent failure → re-sign-in
     } finally {
       _refreshing = false;
@@ -4677,13 +4681,18 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         emailUnverified.value = true;
         return _skip;
       }
+      appendSyncLog(
+        'push /relic -> ${resp.statusCode} '
+        '${resp.body.length > 200 ? resp.body.substring(0, 200) : resp.body}',
+      );
       if (_permanentSyncStatus(resp.statusCode)) {
         return _rejected(resp.statusCode);
       }
       // Reachable but refused (401 mid-refresh, 429, 5xx) — per-item, not
       // offline: keep draining the rest of the queue.
       return _skip;
-    } catch (_) {
+    } catch (e) {
+      appendSyncLog('push /relic transport error: $e');
       _online = false;
       return _retry;
     }
@@ -4735,6 +4744,10 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           headers: _h,
         );
         if (resp.statusCode != 200) {
+          appendSyncLog(
+            'pull /relics -> ${resp.statusCode} '
+            '${resp.body.length > 200 ? resp.body.substring(0, 200) : resp.body}',
+          );
           _online = false;
           return;
         }
