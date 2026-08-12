@@ -277,17 +277,36 @@ class _ResultRowState extends State<ResultRow> {
                   top: _v(3, 4) + 1,
                   bottom: _v(4, 5) + 1,
                   right: 1,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: c.selectedCard,
-                      borderRadius: const BorderRadius.only(
-                        topRight: Radius.circular(9.5),
-                        bottomRight: Radius.circular(9.5),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Fade-in strip: content under the mask edge dissolves
+                      // instead of getting bisected (a tag chip cut mid-letter
+                      // reads as a bug — caught in the store screenshots).
+                      Container(
+                        width: 22,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              c.selectedCard.withValues(alpha: 0),
+                              c.selectedCard,
+                            ],
+                          ),
+                        ),
                       ),
-                    ),
-                    alignment: Alignment.center,
-                    padding: const EdgeInsets.only(left: 14, right: 8),
-                    child: _actionCluster(c),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: c.selectedCard,
+                          borderRadius: const BorderRadius.only(
+                            topRight: Radius.circular(9.5),
+                            bottomRight: Radius.circular(9.5),
+                          ),
+                        ),
+                        alignment: Alignment.center,
+                        padding: const EdgeInsets.only(left: 4, right: 8),
+                        child: _actionCluster(c),
+                      ),
+                    ],
                   ),
                 ),
               if (bulk)
