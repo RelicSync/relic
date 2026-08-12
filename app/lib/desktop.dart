@@ -16,6 +16,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'app_globals.dart';
 import 'platform/app_activation.dart';
+import 'platform/app_install.dart';
 import 'platform/clipboard_bridge.dart';
 import 'platform/foreground_app.dart';
 import 'platform/gem_toast.dart';
@@ -32,6 +33,7 @@ import 'data/supabase_auth.dart';
 import 'data/update_check.dart';
 import 'models/relic.dart';
 import 'onboarding/add_device.dart';
+import 'onboarding/install_offer.dart';
 import 'services/onboarding_service.dart';
 import 'theme/relic_theme.dart';
 import 'theme/tokens.dart';
@@ -135,6 +137,11 @@ class _RealAppState extends State<RealApp>
   bool _connecting = false;
   bool _onboardStartAtSignIn = false; // onboarding step: false = main welcome page
   bool _settingsOpen = false;
+  /// Non-null when this copy of Relic is running from the disk image (or the
+  /// shadow copy macOS makes of one) and should offer to install itself into
+  /// /Applications before anything else. Read once at startup: the answer
+  /// cannot change while the process lives.
+  final BundleLocation? _installOffer = applicationsInstallOfferForThisProcess();
   final _navKey = GlobalKey<NavigatorState>(); // Esc pops drill-down routes
   bool _showingKit = false; // recovery-kit screen up: don't let blur hide it
   bool _emailBannerDismissed = false; // verify-to-sync banner, session-only
@@ -269,6 +276,15 @@ class _RealAppState extends State<RealApp>
     // onboarding instead of settling silently into the tray. A relic:// launch
     // link surfaces the popup. Otherwise stay hidden in the tray as usual.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Running out of the disk image: ask about installing before anything
+      // else. This one comes ahead of even the autostart shortcut, because a
+      // login item can only be pointing at a copy that is about to vanish.
+      if (_installOffer != null) {
+        await _sizeWindow(460, 420);
+        await _present(foreground: true);
+        _visible = true;
+        return;
+      }
       // Launched at login: settle straight into the tray. Never surface a
       // window (not even first-run onboarding) — the user didn't ask for it.
       if (widget.autostart) {
@@ -1507,6 +1523,19 @@ class _RealAppState extends State<RealApp>
   }
 
   Widget _buildSurface() {
+    // Ahead of onboarding: there is no point signing anyone in on a copy of
+    // Relic that the next eject deletes.
+    if (_installOffer case final where?) {
+      return InstallOfferView(
+        where: where,
+        onInstall: installIntoApplications,
+        onReveal: revealApplicationsFolder,
+        onQuit: () async {
+          await trayManager.destroy();
+          await windowManager.destroy();
+        },
+      );
+    }
     if (_connecting) {
       return DesktopOnboarding(
         startAtSignIn: _onboardStartAtSignIn,

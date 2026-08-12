@@ -172,14 +172,32 @@ STAGE="$(mktemp -d)"
 chmod 755 "$STAGE"   # mktemp -d is 0700, and that mode becomes the volume root's
 ditto "$APP_BUNDLE" "$STAGE/Relic.app"
 PACKAGED=0
+# The window background: two numbered steps, because step 2 (open it from
+# Applications, not from this window) is the one people skip — and the ones who
+# skip it end up running Relic off a volume that disappears. Checked in rather
+# than drawn here: a build script cannot count on Python/PIL, and sips will not
+# draw text. 1200x800 at 144dpi, so Finder lays it out at 600x400 points and it
+# stays sharp on a retina display; keep those numbers in step with --window-size
+# and the icon positions below if you ever redraw it.
+DMG_BACKGROUND="$APP_DIR/macos/dmg-background.png"
+BG_ARGS=()
+[[ -f "$DMG_BACKGROUND" ]] && BG_ARGS=(--background "$DMG_BACKGROUND")
 if command -v create-dmg >/dev/null 2>&1; then
   # create-dmg makes its own /Applications link, so the stage holds only the
   # app. It lays the window out by driving Finder, which needs an interactive
   # session that has granted automation rights — over ssh or from a build
   # agent that times out (-1712). Cosmetic, so failing over is fine.
+  #
+  # Icons at y=190 in a 600x400 window: Relic on the left, the Applications
+  # drop link on the right, the background's arrow pointing from one to the
+  # other. (The ${a[@]+…} guard is for bash 3.2, which is what /bin/bash still
+  # is on macOS: an empty array under `set -u` is an unbound variable there.)
   if create-dmg --volname "Relic $VER" \
-      --window-size 600 400 --icon-size 128 \
+      --window-pos 200 120 --window-size 600 400 \
+      --icon-size 100 --text-size 13 \
+      ${BG_ARGS[@]+"${BG_ARGS[@]}"} \
       --icon "Relic.app" 150 190 --app-drop-link 450 190 \
+      --hide-extension "Relic.app" \
       "$DMG" "$STAGE"; then
     PACKAGED=1
   else
