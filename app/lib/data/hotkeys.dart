@@ -158,12 +158,16 @@ class HotkeyBinding {
   }
 
   /// USB-HID usage codes (page 0x07) for the eight modifier keys, so a bare
-  /// modifier press isn't mistaken for the main key while recording.
+  /// modifier press isn't mistaken for the main key while recording. fn joins
+  /// them from Flutter's synthetic range: macOS keyboards report fn as a real
+  /// key event (Windows ones usually don't), and it is a modifier no OS-level
+  /// hotkey API can register as a main key.
   static const Set<int> _modifierUsages = {
     0x000700e0, 0x000700e4, // control L/R
     0x000700e1, 0x000700e5, // shift L/R
     0x000700e2, 0x000700e6, // alt L/R
-    0x000700e3, 0x000700e7, // meta (Win) L/R
+    0x000700e3, 0x000700e7, // meta (Win / Cmd) L/R
+    0x00000012, // fn (PhysicalKeyboardKey.fn)
   };
 
   /// Same chord (modifiers + physical key), label ignored.
@@ -175,6 +179,11 @@ class HotkeyBinding {
       usbUsage == o.usbUsage;
 
   // --- defaults: one home-row row, Ctrl+Shift + Q/W/E ---
+  //
+  // The same chord on macOS, and deliberately so: [ctrl] is the PHYSICAL
+  // Control key there (HotKeyModifier.control → NSEvent .control), not Command.
+  // Swapping to ⌘⇧ would put the history key on ⌘⇧Q, which is Log Out.
+  // ⌃⇧Q/W/E/Space/1-5 are all unclaimed by macOS.
   static const defaultHistory =
       HotkeyBinding(ctrl: true, shift: true, usbUsage: 0x00070014, label: 'Q'); // Ctrl+Shift+Q
   static const defaultPromote =

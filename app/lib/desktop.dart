@@ -272,8 +272,8 @@ class _RealAppState extends State<RealApp>
       // Launched at login: settle straight into the tray. Never surface a
       // window (not even first-run onboarding) — the user didn't ask for it.
       if (widget.autostart) {
-        await windowManager.hide();
         _visible = false;
+        await _dismiss();
         return;
       }
       final firstRun = !widget.repo.syncEnabled && widget.repo.isEmpty;
@@ -281,13 +281,14 @@ class _RealAppState extends State<RealApp>
         setState(() => _connecting = true);
         await _sizeWindow(520, 560);
         await windowManager.center();
-        await windowManager.show();
+        // Onboarding is a whole UI to work in, so it comes forward for real.
+        await _present(foreground: true);
         _visible = true;
       } else if (widget.showOnLaunch) {
         await _show(Summon.launch);
       } else {
-        await windowManager.hide();
         _visible = false;
+        await _dismiss();
       }
     });
   }
@@ -367,7 +368,8 @@ class _RealAppState extends State<RealApp>
       // visible, roomy, and can't be hidden by a stray blur while it's up.
       if (mounted) setState(() => _showingKit = true);
       await _sizeWindow(520, 620);
-      await windowManager.show();
+      // The one screen the user must actually read and save: app mode.
+      await _present(foreground: true);
       _visible = true;
       if (mounted) {
         await Navigator.of(context).push(MaterialPageRoute(
@@ -519,6 +521,30 @@ class _RealAppState extends State<RealApp>
   /// handler is long-running (may fetch+decrypt a blob, then a modifier wait).
   bool _pasteInFlight = false;
 
+  /// One "we can't paste for you" notice per run — see [_canSynthesizePaste].
+  bool _pasteGrantHintShown = false;
+
+  /// Whether we may synthesize the paste keystroke right now. Always true on
+  /// Windows; on macOS it is the Accessibility grant, which the user can revoke
+  /// (or never give) at any time.
+  ///
+  /// Every paste path puts the item on the clipboard BEFORE calling this, so a
+  /// denied grant costs the keystroke and nothing else — the user presses ⌘V
+  /// themselves. Say that out loud once per run, or a hotkey that quietly does
+  /// nothing visible reads as broken.
+  Future<bool> _canSynthesizePaste() async {
+    if (await inputInjectionAvailable()) return true;
+    if (Platform.isMacOS && !_pasteGrantHintShown) {
+      _pasteGrantHintShown = true;
+      _notify(
+        'Copied — press ⌘V to paste',
+        'Relic needs Accessibility access to paste for you. Grant it in '
+            'System Settings → Privacy & Security → Accessibility.',
+      );
+    }
+    return false;
+  }
+
   /// The quick-paste hotkeys: put the Nth-newest item from ANY device on the
   /// clipboard (decrypting + fetching its blob if needed) and paste it into the
   /// frontmost app. Works straight from the tray — no popup shown. putOnClipboard
@@ -541,10 +567,12 @@ class _RealAppState extends State<RealApp>
         _notify('Nothing to paste', emptyBody);
         return;
       }
+      // Clipboard first, keystroke second: without the macOS Accessibility
+      // grant the keystroke never fires, and the item still has to be there.
       await widget.repo.putOnClipboard(r);
       // The chord's modifiers are still physically held; wait for them to clear
       // before synthesizing Ctrl+V, or it lands as a modified chord.
-      await sendPasteChordSafe();
+      if (await _canSynthesizePaste()) await sendPasteChordSafe();
     } catch (_) {
       // Most likely the blob isn't downloaded yet (offline, or the peer hasn't
       // finished uploading). It's on the clipboard only if putOnClipboard got
@@ -591,8 +619,8 @@ class _RealAppState extends State<RealApp>
         await windowManager.setBounds(await _summonRect(_popupDims));
       }
     }
-    await windowManager.show();
-    await windowManager.focus();
+    // Agent mode (the popup) or app mode (settings, onboarding)? See [_present].
+    await _present(foreground: _connecting || _settingsOpen);
     // Re-assert bounds once the window is actually on the target monitor — this
     // corrects a cross-DPI scale mismatch that otherwise renders the content at
     // the wrong size (clipping the X / gear). Cheap and idempotent.
@@ -605,9 +633,54 @@ class _RealAppState extends State<RealApp>
     }
     _visible = true;
     _shownAt = DateTime.now();
+    // One frame between the resize and the focus. A hidden window produces no
+    // frames, so the bounds we just set can leave the tree needing layout with
+    // nothing scheduled — and a text field that takes focus in that state
+    // measures a render box that was never laid out (the `hasSize` assertion in
+    // docs/macos-port.md's QA backlog; the launch-time half of it is fixed in
+    // popup.dart). Waiting on the frame is imperceptible and makes the order
+    // explicit.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
     _popupSummonTick.value++; // focus lands in the search box
-    if (mounted) setState(() {});
+    setState(() {});
   }
+
+  /// Put the window on screen.
+  ///
+  /// [foreground] false is agent mode, the popup: on macOS the window is an
+  /// NSPanel that takes key WITHOUT activating the app, so the app you summoned
+  /// Relic from keeps the foreground and the paste handover on pick still has
+  /// somewhere to land. True is app mode — settings, onboarding, the recovery
+  /// kit — which is a whole UI the user is about to work in, so the app comes
+  /// forward for real (an LSUIElement agent has to ask forcefully, hence
+  /// [activateApp]).
+  ///
+  /// The fallback is Windows, where taking the foreground on show is the
+  /// convention anyway, and any macOS build whose native side predates the
+  /// panel bridge.
+  Future<void> _present({required bool foreground}) async {
+    if (await presentWindow(activate: foreground)) return;
+    if (foreground) await activateApp();
+    await windowManager.show();
+    await windowManager.focus();
+  }
+
+  /// Take the window off screen. On macOS this also hands the foreground back
+  /// to the previous app whenever Relic holds it (after settings, or any OS
+  /// dialog we opened) — the popup itself never took it.
+  Future<void> _dismiss() async {
+    if (await dismissWindow()) return;
+    await windowManager.hide();
+  }
+
+  /// Switching the OPEN window from the popup to settings/onboarding. The popup
+  /// is showing without the app ever having taken the foreground (agent mode),
+  /// and the surface that replaces it is a full UI the user is about to work
+  /// in, so the app comes forward. Agent mode returns by itself when the window
+  /// hides — [_dismiss] hands the foreground back. No-op on Windows, where the
+  /// window took the foreground on show anyway.
+  void _toAppMode() => unawaited(activateApp());
 
   /// The work area (origin + size) of whichever monitor the cursor is on, with
   /// a sane fallback. Shared by the popup and the toast positioning.
@@ -790,9 +863,13 @@ class _RealAppState extends State<RealApp>
   /// The reset runs while the window is hidden, after [_visible] goes false, so
   /// the mini picker's live re-hug ignores the resulting result-count change.
   Future<void> _hide() async {
-    await windowManager.hide();
+    // Clear [_visible] FIRST. On macOS the window is a panel, so ordering it
+    // out fires a resign-key blur straight back at [onWindowBlur]; seeing the
+    // window already marked hidden is what stops that from re-entering here and
+    // firing the tray hint twice.
     _visible = false;
     _pinned = false; // every close path funnels through here
+    await _dismiss();
     _popupResetTick.value++;
     // One-time education the first time the window disappears: without this,
     // a new user who clicks away has no idea how to get Relic back.
@@ -800,7 +877,8 @@ class _RealAppState extends State<RealApp>
       widget.repo.markTrayHintShown();
       _notify(
         'Relic is still running',
-        'It lives in your tray. Press ${widget.repo.historyHotkey.display} to open it anytime.',
+        'It lives in your ${Platform.isMacOS ? 'menu bar' : 'tray'}. '
+            'Press ${widget.repo.historyHotkey.display} to open it anytime.',
       );
     }
   }
@@ -815,15 +893,14 @@ class _RealAppState extends State<RealApp>
   Future<void> _oauthBrowserHandoff(bool away) async {
     try {
       if (away) {
-        await windowManager.hide();
         _visible = false;
+        await _dismiss();
       } else {
-        // LSUIElement agents are refused normal activation while the OAuth
-        // browser is frontmost — ask forcefully first (no-op on Windows).
-        await activateApp();
         await windowManager.setAlwaysOnTop(true);
-        await windowManager.show();
-        await windowManager.focus();
+        // App mode: the browser is frontmost and we are coming back to finish
+        // the sign-in, so take the foreground (LSUIElement agents are refused a
+        // polite activation — [_present] asks forcefully).
+        await _present(foreground: true);
         _visible = true;
       }
     } catch (_) {}
@@ -940,9 +1017,13 @@ class _RealAppState extends State<RealApp>
       final seqBefore = await clipboardSequence();
       final before = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
       // Synthesize Ctrl+C at the source app — EXCEPT into a terminal (Ctrl+C
-      // with no selection is SIGINT: it would kill whatever's running) or
-      // when the popup itself is focused (we'd copy our own search box).
-      final skipCopy = _visible || srcApp == 'terminal';
+      // with no selection is SIGINT: it would kill whatever's running), when
+      // the popup itself is focused (we'd copy our own search box), or when
+      // macOS hasn't granted Accessibility (the copy can't fire, and polling
+      // 600ms for a clipboard change that will never come just delays the
+      // "annotate what you already copied" fallback below).
+      final skipCopy =
+          _visible || srcApp == 'terminal' || !await inputInjectionAvailable();
       if (!skipCopy) {
         await sendCopyChordSafe();
         // Slow apps (Word/Excel) can take a few hundred ms to render formats.
@@ -1186,6 +1267,12 @@ class _RealAppState extends State<RealApp>
   }
 
   // --- tray ---
+  // Left click opens the history, right click opens the menu — the same
+  // mapping on both platforms. macOS menu-bar items more often open their menu
+  // on either button, but the whole point of Relic's icon is one click to your
+  // clipboard, and the menu's first item is "Open history" for anyone who
+  // reaches for it the Mac way. (Control-click can't be told apart here:
+  // tray_manager reports a plain mouse-down with no modifiers.)
   @override
   void onTrayIconMouseDown() => _toggle(Summon.tray);
   @override
@@ -1322,19 +1409,37 @@ class _RealAppState extends State<RealApp>
   Future<void> _runSelfUpdate(UpdateInfo info) async {
     if (_selfUpdating) return;
     _selfUpdating = true;
+    var announced = false;
     try {
-      _notify('Updating Relic to ${info.version}',
-          'Downloading now. Relic will restart by itself.');
-      await installUpdate(info); // no return on success: the app exits
+      // The "we're on it" notification waits for the download to actually
+      // start. Only Windows has the silent in-place installer; everywhere else
+      // installUpdate throws before it touches the network, and promising a
+      // restart we are not going to do reads as a broken update.
+      await installUpdate(info, onStatus: (_) {
+        if (announced) return;
+        announced = true;
+        _notify('Updating Relic to ${info.version}',
+            'Downloading now. Relic will restart by itself.');
+      }); // no return on success: the app exits
+    } on SelfUpdateUnsupported {
+      // macOS ships a DMG you drag to Applications, so the browser is the
+      // install path here, not a failure.
+      _selfUpdating = false;
+      _notify('Relic ${info.version} is ready',
+          'Opening the download page in your browser.');
+      await _openDownloadPage(info);
     } catch (_) {
       _selfUpdating = false;
       _notify('Update could not install itself',
           'Opening the download page instead.');
-      try {
-        await launchUrl(Uri.parse(info.url),
-            mode: LaunchMode.externalApplication);
-      } catch (_) {}
+      await _openDownloadPage(info);
     }
+  }
+
+  Future<void> _openDownloadPage(UpdateInfo info) async {
+    try {
+      await launchUrl(Uri.parse(info.url), mode: LaunchMode.externalApplication);
+    } catch (_) {}
   }
 
   /// Run a desktop connect action: rebuild the tray menu, dismiss the onboarding
@@ -1494,18 +1599,28 @@ class _RealAppState extends State<RealApp>
       ],
       onPick: () async {
         // hide first so the keystroke lands in the previously-focused app, then
-        // (if enabled) synthesize Ctrl+V to paste the pick directly.
+        // (if enabled) synthesize Ctrl+V to paste the pick directly. The pick
+        // already put the item on the clipboard, so a paste we can't fire (no
+        // macOS Accessibility grant) leaves the user one ⌘V away.
+        //
+        // The 120ms is the window actually going away: on macOS windowManager
+        // .hide() replies before its orderOut runs, and AppKit hands activation
+        // back to the previous app a beat after that. InputBridge waits out the
+        // remainder of the handover (it won't post while we're still frontmost),
+        // so this delay only has to cover the reply/orderOut gap.
         await _hide();
         if (widget.repo.pasteOnSelect) {
           await Future.delayed(const Duration(milliseconds: 120));
-          await sendPaste();
+          if (await _canSynthesizePaste()) await sendPaste();
         }
       },
       onSettings: () {
+        _toAppMode();
         setState(() => _settingsOpen = true);
         _sizeWindow(780, 600);
       },
       onConnect: () {
+        _toAppMode();
         setState(() {
           _connecting = true;
           _onboardStartAtSignIn = false;
@@ -1597,6 +1712,7 @@ class _RealAppState extends State<RealApp>
           TextButton(
             onPressed: () {
               widget.repo.dismissDemoNudge();
+              _toAppMode();
               setState(() {
                 _connecting = true;
                 _onboardStartAtSignIn = false;

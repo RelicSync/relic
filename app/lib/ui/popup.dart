@@ -311,10 +311,6 @@ class _PopupViewState extends State<PopupView> {
   @override
   void initState() {
     super.initState();
-    // On desktop the popup is summoned to type-and-filter, so focus the search
-    // box immediately. On mobile that would pop the keyboard up over the list
-    // before layout (and trips an IME size assertion) — let the user tap in.
-    if (!(Platform.isAndroid || Platform.isIOS)) _searchFocus.requestFocus();
     widget.resetSignal?.addListener(_resetSearchState);
     widget.summonSignal?.addListener(_focusSearchOnSummon);
     widget.miniSignal?.addListener(_onChange);
@@ -330,6 +326,15 @@ class _PopupViewState extends State<PopupView> {
     HardwareKeyboard.instance.addHandler(_onHardwareKey);
     // Seed the first page once the tree is mounted (avoids notify-during-build).
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // On desktop the popup is summoned to type-and-filter, so the search box
+      // takes focus on its own. It has to wait for this first frame: focusing
+      // an EditableText that has never been laid out sends it straight to
+      // _updateSizeAndTransform, which reads the render box's size and trips
+      // `hasSize` (the assertion in docs/macos-port.md's QA backlog — it fires
+      // at launch, where the window is still hidden, not on resize as the note
+      // guessed). On mobile the same call would pop the keyboard up over the
+      // list before the user has asked for it, so mobile just doesn't.
+      if (!(Platform.isAndroid || Platform.isIOS)) _searchFocus.requestFocus();
       _applyQuery();
       _recomputeCollections();
       _maybeShowCoach();
@@ -3094,19 +3099,26 @@ class _HelpSheet extends StatelessWidget {
     ('oldest / newest', 'sort words work inline'),
   ];
 
-  static const _keys = <(String, String)>[
-    ('Up / Down', 'move selection'),
-    ('Enter', 'copy the selected item'),
-    ('Ctrl+F', 'jump back to the search box'),
-    ('Ctrl+Click', 'multi-select'),
-    ('Shift+Click', 'select a range'),
-    ('Ctrl+A', 'select all results'),
-    ('Ctrl+Z', 'undo a delete (while the toast shows)'),
-    ('Right-click', 'row menu'),
-    ('Double-click', 'open the viewer'),
-    ('Backspace', 'edit the search from the list'),
-    ('Esc', 'close'),
-  ];
+  /// The handlers accept Ctrl and Cmd interchangeably, so this only decides
+  /// what the sheet CALLS the modifier: a Mac user reading "Ctrl+A" tries the
+  /// wrong key and concludes the shortcut is broken.
+  static List<(String, String)> get _keys {
+    final mod = Platform.isMacOS ? '⌘' : 'Ctrl+';
+    final modClick = Platform.isMacOS ? '⌘-click' : 'Ctrl+Click';
+    return [
+      ('Up / Down', 'move selection'),
+      ('Enter', 'copy the selected item'),
+      ('${mod}F', 'jump back to the search box'),
+      (modClick, 'multi-select'),
+      ('Shift+Click', 'select a range'),
+      ('${mod}A', 'select all results'),
+      ('${mod}Z', 'undo a delete (while the toast shows)'),
+      ('Right-click', 'row menu'),
+      ('Double-click', 'open the viewer'),
+      ('Backspace', 'edit the search from the list'),
+      ('Esc', 'close'),
+    ];
+  }
 
   static const _mouse = <(String, String)>[
     ('Drag a row out', 'drop text, images, or files into other apps'),

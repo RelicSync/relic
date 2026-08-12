@@ -29,11 +29,13 @@ enum InputBridge {
         result(nil)
 
       case "sendPaste":
-        postCommandChord(CGKeyCode(kVK_ANSI_V))
-        result(nil)
+        sendChord(CGKeyCode(kVK_ANSI_V), chordSafe: false) { result(nil) }
+
+      case "sendPasteChordSafe":
+        sendChord(CGKeyCode(kVK_ANSI_V), chordSafe: true) { result(nil) }
 
       case "sendCopyChordSafe":
-        sendCopyChordSafe { result(nil) }
+        sendChord(CGKeyCode(kVK_ANSI_C), chordSafe: true) { result(nil) }
 
       default:
         result(FlutterMethodNotImplemented)
@@ -42,7 +44,6 @@ enum InputBridge {
   }
 
   private static func postCommandChord(_ key: CGKeyCode) {
-    guard AXIsProcessTrustedWithOptions(nil) else { return } // silent, like Windows
     let src = CGEventSource(stateID: .combinedSessionState)
     let down = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: true)
     let up = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: false)
@@ -52,21 +53,67 @@ enum InputBridge {
     up?.post(tap: .cghidEventTap)
   }
 
-  /// Wait (≤15 × 20ms, mirroring win_input.dart) for the hotkey's physical
-  /// modifiers to clear, then post ⌘C.
-  private static func sendCopyChordSafe(then done: @escaping () -> Void) {
-    var tries = 0
+  /// Poll `ready` on the main queue every 20ms, giving up after `tries` and
+  /// running `then` anyway. 20ms × 15 is the win_input.dart budget: a normal
+  /// hotkey tap clears well inside it, so the common case adds no latency.
+  private static func waitUntil(
+    _ ready: @escaping () -> Bool,
+    tries: Int,
+    then: @escaping () -> Void
+  ) {
+    var left = tries
     func attempt() {
-      let flags = NSEvent.modifierFlags
-      let held = !flags.intersection([.shift, .option, .control, .command]).isEmpty
-      if !held || tries >= 15 {
-        postCommandChord(CGKeyCode(kVK_ANSI_C))
-        done()
+      if ready() || left <= 0 {
+        then()
         return
       }
-      tries += 1
+      left -= 1
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { attempt() }
     }
     attempt()
   }
+
+  /// Post ⌘[key] once the keystroke can actually land where the user meant it.
+  ///
+  /// Two waits, both bounded, both usually no-ops:
+  ///
+  /// - `chordSafe` callers come straight out of a global-hotkey handler with
+  ///   the chord's modifiers still physically down; posting then would read as
+  ///   ⌃⇧⌘V in an app that watches NSEvent.modifierFlags. Wait for them.
+  /// - Any caller may be firing right after the popup ordered out (paste-on-
+  ///   select). AppKit hands activation back to the previous app a beat later,
+  ///   and a CGEvent posted while we are still the active app types into a
+  ///   window that is already gone. Wait to stop being frontmost.
+  ///
+  /// Both waits fall through and post on timeout: the item is already on the
+  /// clipboard by the time any caller gets here, so the worst case is a paste
+  /// the user has to press ⌘V for, never a lost relic. Untrusted (no AX grant)
+  /// returns immediately and silently, matching the Windows contract.
+  private static func sendChord(
+    _ key: CGKeyCode,
+    chordSafe: Bool,
+    then done: @escaping () -> Void
+  ) {
+    guard AXIsProcessTrustedWithOptions(nil) else {
+      done()
+      return
+    }
+    let fire = {
+      waitUntil({ !NSApp.isActive }, tries: 10) {
+        postCommandChord(key)
+        done()
+      }
+    }
+    guard chordSafe else {
+      fire()
+      return
+    }
+    waitUntil({ NSEvent.modifierFlags.intersection(chordModifiers).isEmpty }, tries: 15, then: fire)
+  }
+
+  /// The modifiers a Relic hotkey can carry; Caps Lock and fn are deliberately
+  /// excluded (Caps Lock is a latched state, not something the user is holding).
+  private static let chordModifiers: NSEvent.ModifierFlags = [
+    .shift, .option, .control, .command,
+  ]
 }

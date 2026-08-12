@@ -8,11 +8,13 @@ import 'package:relic_app/platform/running_apps.dart';
 
 /// The blocklist picker's running-apps enumeration, run against the real OS
 /// (flutter test executes on the host). Windows sessions can legitimately be
-/// headless-ish, so content checks only apply to whatever comes back.
+/// headless-ish, and the macOS backend answers over a MethodChannel that
+/// flutter_test never registers, so content checks only apply to whatever
+/// comes back — but the shape contract is the same on both desktops.
 void main() {
   test('runningApps returns well-formed, deduped, noise-free keys', () async {
     final apps = await runningApps();
-    if (!Platform.isWindows) {
+    if (!Platform.isWindows && !Platform.isMacOS) {
       expect(apps, isEmpty);
       return;
     }
@@ -21,9 +23,9 @@ void main() {
     for (final a in apps) {
       expect(a.key, isNotEmpty);
       expect(a.key, equals(a.key.toLowerCase()),
-          reason: 'keys are the lowercase stem the watcher gate compares');
+          reason: 'keys are the lowercase app key the watcher gate compares');
       expect(a.key.endsWith('.exe'), isFalse,
-          reason: 'stems have no extension');
+          reason: 'keys carry no file extension');
       expect(kAppKeyNoise.contains(a.key), isFalse,
           reason: 'shell hosts are filtered from the picker');
       expect(a.title, isNotEmpty);

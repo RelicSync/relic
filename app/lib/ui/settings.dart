@@ -25,9 +25,11 @@ import 'package:url_launcher/url_launcher.dart';
 import '../data/backup_file.dart';
 import '../data/crash_log.dart';
 import '../data/hotkeys.dart';
+import '../platform/input_injector.dart';
 import '../platform/running_apps.dart';
 import '../platform/shell.dart';
 import '../data/self_update.dart';
+import '../data/sift.dart' show SiftSidecar;
 import '../data/update_check.dart';
 import '../data/local_desk_repo.dart';
 import '../data/repo.dart';
@@ -96,7 +98,8 @@ class SettingsView extends StatefulWidget {
   State<SettingsView> createState() => _SettingsViewState();
 }
 
-class _SettingsViewState extends State<SettingsView> {
+class _SettingsViewState extends State<SettingsView>
+    with WidgetsBindingObserver {
   late int _section = widget.startOnSync ? 4 : 0;
   static const _sections = [
     ('General', LucideIcons.slidersHorizontal),
@@ -201,6 +204,11 @@ class _SettingsViewState extends State<SettingsView> {
   );
   final FocusNode _deviceF = FocusNode();
 
+  // macOS Accessibility (TCC) grant — the gate paste-on-select and the save &
+  // annotate hotkey's selection grab ride on. Null until the first check lands.
+  bool? _axTrusted;
+  bool _axBusy = false;
+
   // "Never capture from" picker: running apps fetched on open
   bool _blockPickerOpen = false;
   bool _blockPickerLoading = false;
@@ -219,6 +227,40 @@ class _SettingsViewState extends State<SettingsView> {
     _loadVersion();
     _lastSiftStatus = widget.repo.siftStatus;
     _loadModelsBytes();
+    if (Platform.isMacOS) {
+      // Watch for resumes so the grant row refreshes itself when the user
+      // comes back from System Settings.
+      WidgetsBinding.instance.addObserver(this);
+      _refreshAccessibility();
+    }
+  }
+
+  /// macOS: re-read the Accessibility grant. Cheap channel call, so it also
+  /// backs the manual "Re-check" action.
+  Future<void> _refreshAccessibility() async {
+    final ok = await inputInjectionAvailable();
+    if (mounted) setState(() => _axTrusted = ok);
+  }
+
+  /// macOS: ask the system to show its one-time grant dialog, then open System
+  /// Settings → Privacy & Security → Accessibility so the switch is right in
+  /// front of the user. Coming back to Relic re-checks the status.
+  Future<void> _grantAccessibility() async {
+    setState(() => _axBusy = true);
+    final ok = await inputInjectionAvailable(prompt: true);
+    if (!ok) await openInputPermissionSettings();
+    if (!mounted) return;
+    setState(() {
+      _axTrusted = ok;
+      _axBusy = false;
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && Platform.isMacOS) {
+      _refreshAccessibility();
+    }
   }
 
   Future<void> _loadModelsBytes() async {
@@ -235,6 +277,7 @@ class _SettingsViewState extends State<SettingsView> {
 
   @override
   void dispose() {
+    if (Platform.isMacOS) WidgetsBinding.instance.removeObserver(this);
     widget.repo.removeListener(_onRepo);
     _deviceCtl.dispose();
     _deviceF.dispose();
@@ -434,6 +477,7 @@ class _SettingsViewState extends State<SettingsView> {
               repo.setPromotionSound,
               sub: 'Use the bundled Relic WAV only when an item is promoted.',
             ),
+            if (Platform.isMacOS) _accessibilitySection(c),
             _sectionLabel(c, 'Power features'),
             _toggleRow(
               c,
@@ -2000,7 +2044,12 @@ class _SettingsViewState extends State<SettingsView> {
         _aboutRow(c, 'Version', _appVersion.isEmpty ? '—' : _appVersion),
         _aboutRow(c, 'Encryption', 'End-to-end · XChaCha20-Poly1305'),
         _aboutRow(c, 'Local index', 'SQLite + FTS5, on this device'),
-        _aboutRow(c, 'Platform', 'Windows desktop', last: true),
+        _aboutRow(
+          c,
+          'Platform',
+          Platform.isMacOS ? 'macOS desktop' : 'Windows desktop',
+          last: true,
+        ),
         const SizedBox(height: 16),
         Row(
           children: [
@@ -2982,6 +3031,93 @@ class _SettingsViewState extends State<SettingsView> {
     );
   }
 
+  /// macOS only: the Accessibility (TCC) grant. Windows synthesizes keystrokes
+  /// with no permission at all, so this whole block is a Mac concern, gated the
+  /// same way the Windows-only rows in this pane are.
+  Widget _accessibilitySection(RelicColors c) {
+    final trusted = _axTrusted;
+    final (status, tone) = switch (trusted) {
+      null => ('Checking…', c.textMuted),
+      true => ('Allowed', c.accent),
+      false => ('Not allowed yet', c.warning),
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionLabel(c, 'Accessibility'),
+        _row(
+          c,
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    LucideIcons.accessibility,
+                    size: 17,
+                    color: c.textSecondary,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Let Relic paste for you',
+                      style: RelicTheme.sans(size: 13, color: c.text),
+                    ),
+                  ),
+                  Text(status, style: RelicTheme.mono(size: 10.5, color: tone)),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'macOS asks permission before any app can press keys for you. '
+                'Relic uses it to paste the item you pick straight into the app '
+                'you were just in, and to grab your selection when you press '
+                'the save & annotate hotkey.',
+                style: RelicTheme.sans(
+                  size: 11.5,
+                  color: c.textMuted,
+                  height: 1.45,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Everything else works without it. Picking an item still copies '
+                'it, you just press ⌘V yourself.',
+                style: RelicTheme.sans(
+                  size: 11.5,
+                  color: c.textMuted,
+                  height: 1.45,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  _btn(
+                    c,
+                    trusted == true
+                        ? 'Open Accessibility settings'
+                        : 'Allow Relic to paste',
+                    LucideIcons.accessibility,
+                    accent: trusted == false,
+                    onTap: _axBusy ? null : _grantAccessibility,
+                  ),
+                  const SizedBox(width: 10),
+                  _btn(
+                    c,
+                    'Re-check',
+                    LucideIcons.refreshCw,
+                    onTap: _axBusy ? null : _refreshAccessibility,
+                  ),
+                ],
+              ),
+            ],
+          ),
+          last: true,
+        ),
+      ],
+    );
+  }
+
   Widget _shortcutsSection(RelicColors c) {
     final repo = widget.repo;
     return Column(
@@ -2995,15 +3131,17 @@ class _SettingsViewState extends State<SettingsView> {
           onChanged: repo.setHistoryHotkey,
           registerFailed: repo.failedHotkeys.contains('history'),
         ),
-        if (Platform.isWindows)
-          _HotkeyRow(
-            repo: repo,
-            title: 'Mini picker shortcut',
-            sub: 'Summon the compact, cursor-anchored picker.',
-            binding: repo.miniHotkey,
-            onChanged: repo.setMiniHotkey,
-            registerFailed: repo.failedHotkeys.contains('mini'),
-          ),
+        // Both desktops register this hotkey (desktop.dart _initHotkeys), so
+        // the row shows on both: hiding it on macOS left a live chord nobody
+        // could see, rebind, or be told about when registration failed.
+        _HotkeyRow(
+          repo: repo,
+          title: 'Mini picker shortcut',
+          sub: 'Summon the compact, cursor-anchored picker.',
+          binding: repo.miniHotkey,
+          onChanged: repo.setMiniHotkey,
+          registerFailed: repo.failedHotkeys.contains('mini'),
+        ),
         _HotkeyRow(
           repo: repo,
           title: 'Save & annotate shortcut',
@@ -3040,7 +3178,8 @@ class _SettingsViewState extends State<SettingsView> {
     final available = repo.mlAvailable;
     final (status, statusColor) = switch (repo.siftStatus) {
       SiftStatus.unavailable => (
-        'Engine not found. Bundle sift.exe',
+        // The binary is sift.exe on Windows, sift on macOS — name the right one.
+        'Engine not found. Bundle ${SiftSidecar.binaryName}',
         c.textFaintest,
       ),
       SiftStatus.off => ('Off', c.textMuted),
@@ -3728,7 +3867,9 @@ class _HotkeyRowState extends State<_HotkeyRow> {
     }
     if (!b.hasModifier) {
       setState(
-        () => _error = 'Use at least one modifier (Ctrl / Alt / Shift / Win).',
+        () => _error = Platform.isMacOS
+            ? 'Use at least one modifier (Ctrl / Option / Shift / Cmd).'
+            : 'Use at least one modifier (Ctrl / Alt / Shift / Win).',
       );
       return KeyEventResult.handled;
     }

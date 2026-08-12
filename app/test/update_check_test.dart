@@ -8,17 +8,24 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:relic_app/data/update_check.dart';
 
 void main() {
-  // The parse core is platform-sensitive (a build only accepts its own
-  // platform's entry); these tests run on the dev machine / CI, i.e. desktop.
+  // The parse core is platform-sensitive: a build only ever accepts its own
+  // platform's entry. So the fixture keys on the host we're running on and the
+  // assertions hold on every desktop — keying it to 'windows' meant the whole
+  // parse core went unasserted the moment the suite ran on a Mac.
   final onWindows = Platform.isWindows;
+  final hostKey = Platform.isWindows
+      ? 'windows'
+      : Platform.isMacOS
+          ? 'macos'
+          : 'linux';
 
   Map<String, dynamic> manifest({String? sha}) => {
         'version': '1.2.0',
         'url': 'https://relic.space/download/windows',
         'notes': 'notes',
         'platforms': {
-          'windows': {
-            'url': 'https://relic.space/download/windows',
+          hostKey: {
+            'url': 'https://relic.space/download/$hostKey',
             'sha256': ?sha,
           },
         },
@@ -26,18 +33,29 @@ void main() {
 
   test('newer version with sha256 yields a self-updatable UpdateInfo', () {
     final info = updateFromManifest(manifest(sha: 'AB12'), '1.1.9');
-    if (!onWindows) return; // no windows entry accepted elsewhere
     expect(info, isNotNull);
     expect(info!.version, '1.2.0');
     expect(info.sha256, 'AB12');
+    expect(info.url, 'https://relic.space/download/$hostKey',
+        reason: 'the offer must be this platform\'s own artifact');
   });
 
   test('missing sha256 still offers the update, just without self-install',
       () {
     final info = updateFromManifest(manifest(), '1.0.0');
-    if (!onWindows) return;
     expect(info, isNotNull);
     expect(info!.sha256, isNull);
+  });
+
+  test('another platform\'s entry is never offered to this build', () {
+    final other = Platform.isWindows ? 'macos' : 'windows';
+    final info = updateFromManifest({
+      'version': '9.9.9',
+      'platforms': {
+        other: {'url': 'https://relic.space/download/$other', 'sha256': 'AB'},
+      },
+    }, '1.0.0');
+    expect(info, isNull);
   });
 
   test('same or older version yields nothing', () {

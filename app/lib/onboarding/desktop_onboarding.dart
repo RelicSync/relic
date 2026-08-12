@@ -1,3 +1,4 @@
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import '../data/api.dart';
 import '../data/oauth_flow.dart';
 import '../data/pairing.dart';
 import '../data/supabase_auth.dart';
+import '../platform/input_injector.dart';
 import '../services/onboarding_service.dart';
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
@@ -71,7 +73,20 @@ class DesktopOnboarding extends StatefulWidget {
   State<DesktopOnboarding> createState() => _DesktopOnboardingState();
 }
 
+/// Should desktop onboarding open on the macOS Accessibility ask? Only on a
+/// Mac, only when the grant is actually missing, and never on the guided
+/// "switch account" entry — that user has already been through first run and
+/// wants the sign-in form, not a permission screen. Pure so the gate is
+/// testable without a Mac or a live TCC database.
+bool shouldShowAccessibilityIntro({
+  required bool isMacOS,
+  required bool trusted,
+  required bool startAtSignIn,
+}) =>
+    isMacOS && !trusted && !startAtSignIn;
+
 enum _Step {
+  accessibility,
   welcome,
   create,
   confirmEmail,
@@ -94,6 +109,10 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
   bool _viaOAuth = false; // session came from the browser OAuth flow
   SupabaseSession? _session;
 
+  // macOS Accessibility (TCC): flips once we've sent the user out to System
+  // Settings, which turns the skip action into a "done, continue".
+  bool _axAsked = false;
+
   final _emailC = TextEditingController();
   final _passC = TextEditingController();
   final _phraseC = TextEditingController();
@@ -114,6 +133,44 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
   void initState() {
     super.initState();
     if (widget.startAtSignIn) _step = _Step.signIn;
+    // macOS opens on the Accessibility ask, then drops straight to welcome if
+    // the grant is already there (the check is a one-frame channel hop, so a
+    // granted Mac never really sees this step). Every other platform never
+    // enters the branch, so the flow is exactly as it was.
+    if (Platform.isMacOS && !widget.startAtSignIn) {
+      _step = _Step.accessibility;
+      _routeAccessibility();
+    }
+  }
+
+  /// Read the Accessibility grant and skip the ask when it's already given.
+  Future<void> _routeAccessibility() async {
+    final trusted = await inputInjectionAvailable();
+    if (!mounted) return;
+    setState(() {
+      if (!shouldShowAccessibilityIntro(
+          isMacOS: Platform.isMacOS,
+          trusted: trusted,
+          startAtSignIn: widget.startAtSignIn)) {
+        _step = _Step.welcome;
+      }
+    });
+  }
+
+  /// Surface the system grant dialog, then open System Settings → Privacy &
+  /// Security → Accessibility so the switch is right there. If the grant is
+  /// somehow already in hand we move on instead of sending the user out to
+  /// System Settings for nothing.
+  Future<void> _openAccessibility() async {
+    setState(() => _busy = true);
+    final trusted = await inputInjectionAvailable(prompt: true);
+    if (!trusted) await openInputPermissionSettings();
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _axAsked = true;
+    });
+    if (trusted) _go(_Step.welcome);
   }
 
   @override
@@ -472,6 +529,33 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
 
   Widget _body(RelicColors c) {
     switch (_step) {
+      case _Step.accessibility:
+        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _header(c, 'Let Relic paste for you',
+              'macOS asks permission before any app can press keys for you. Relic uses it to paste the item you pick straight into the app you were just in, and to grab your selection when you press the save & annotate hotkey.'),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: c.panel,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: c.borderStrong),
+            ),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(Icons.info_outline, size: 18, color: c.textMuted),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                    'Skipping is fine. Relic still keeps everything you copy, and picking an item still copies it. You just press ⌘V yourself.',
+                    style: TextStyle(color: c.textMuted, height: 1.4, fontSize: 12.5)),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 16),
+          _primary(c, 'Open Accessibility settings',
+              _busy ? null : _openAccessibility),
+          _secondary(c, _axAsked ? 'Done, continue' : 'Skip for now',
+              _busy ? null : () => _go(_Step.welcome)),
+        ]);
       case _Step.welcome:
         return Column(children: [
           const SizedBox(height: 4),

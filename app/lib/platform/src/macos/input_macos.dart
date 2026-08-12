@@ -30,16 +30,28 @@ Future<void> openAccessibilitySettings() async {
 
 /// Synthesize ⌘V into the frontmost application. Best-effort; silently does
 /// nothing without the Accessibility grant.
+///
+/// Awaiting this waits for the keystroke to be posted, not consumed: the Swift
+/// side holds the reply while it waits for us to stop being the frontmost app
+/// (the popup has only just ordered out).
 Future<void> sendPaste() async {
   try {
     await _ch.invokeMethod<void>('sendPaste');
   } catch (_) {}
 }
 
+/// Synthesize ⌘V into the frontmost application, chord-safely: the Swift side
+/// waits for the hotkey's physical modifiers to clear before posting, so the
+/// quick-paste chord doesn't land as ⌃⇧⌘V.
+Future<void> sendPasteChordSafe() async {
+  try {
+    await _ch.invokeMethod<void>('sendPasteChordSafe');
+  } catch (_) {}
+}
+
 /// Synthesize ⌘C into the frontmost application, chord-safely: the Swift side
-/// waits for the hotkey's physical modifiers to clear (and force-releases them
-/// into the event stream if they don't) before posting ⌘C, mirroring the
-/// Windows SendInput ordering.
+/// waits for the hotkey's physical modifiers to clear before posting ⌘C,
+/// mirroring the Windows SendInput ordering.
 Future<void> sendCopyChordSafe() async {
   try {
     await _ch.invokeMethod<void>('sendCopyChordSafe');

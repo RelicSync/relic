@@ -16,10 +16,13 @@ class AppDelegate: FlutterAppDelegate {
   // already prevents a true second instance of a bundled app.
   override func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
     if !flag {
-      for window in sender.windows {
-        window.makeKeyAndOrderFront(self)
+      // Only our own window: NSApp.windows also holds the menu-bar item's
+      // status window, which AppKit owns and must not be ordered around.
+      // Launching by hand is an explicit ask, so this is app mode — come
+      // forward properly instead of appearing behind the current app.
+      for window in sender.windows.compactMap({ $0 as? MainFlutterWindow }) {
+        window.present(activate: true)
       }
-      NSApp.activate(ignoringOtherApps: true)
     }
     return true
   }

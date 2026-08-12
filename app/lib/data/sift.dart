@@ -133,16 +133,25 @@ class SiftSidecar {
   /// the server — threads are fixed when a session is built.
   String speed = 'balanced';
 
-  /// Find sift.exe: next to the running app (packaged), else the dev target dir.
-  /// Returns null if no binary is present.
+  /// The sidecar binary's filename on this platform. Also what the settings
+  /// pane names when the engine is missing, so the two can't drift.
+  static String get binaryName => Platform.isWindows ? 'sift.exe' : 'sift';
+
+  /// Find the sift binary: next to the running app (packaged), else the dev
+  /// target dir. Returns null if no binary is present.
   static SiftSidecar? locate() {
     final sep = Platform.pathSeparator;
-    final exe = Platform.isWindows ? 'sift.exe' : 'sift';
+    final exe = binaryName;
     final exeDir = File(Platform.resolvedExecutable).parent.path;
+    String up(int n) => List.filled(n, '..').join(sep);
     final candidates = <String>[
-      '$exeDir$sep$exe', // packaged: alongside relic_app.exe
+      // packaged: beside relic_app.exe, or inside Relic.app/Contents/MacOS
+      '$exeDir$sep$exe',
       // dev: app/build/windows/x64/runner/Release/ → repo root/target/release
-      '$exeDir$sep..$sep..$sep..$sep..$sep..$sep..${sep}target${sep}release$sep$exe',
+      '$exeDir$sep${up(6)}${sep}target${sep}release$sep$exe',
+      // dev on macOS: the same output nests three levels deeper, inside the
+      // bundle (build/macos/Build/Products/Release/relic_app.app/Contents/MacOS)
+      '$exeDir$sep${up(9)}${sep}target${sep}release$sep$exe',
     ];
     for (final c in candidates) {
       if (File(c).existsSync()) return SiftSidecar(File(c).absolute.path);

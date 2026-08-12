@@ -16,3 +16,26 @@ Future<bool> activateApp() async {
     return false;
   }
 }
+
+/// Put the window on screen. [activate] false is the popup: the window takes
+/// key (so typing lands in the search box) while the app the user came from
+/// keeps the foreground. True is settings/onboarding, which take the
+/// foreground for real. See macos/Runner/MainFlutterWindow.swift.
+Future<bool> presentWindow({required bool activate}) async {
+  try {
+    return await _ch.invokeMethod<bool>('present', {'activate': activate}) ??
+        false;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Take the window off screen, handing the foreground back to the previous app
+/// when we hold it.
+Future<bool> dismissWindow() async {
+  try {
+    return await _ch.invokeMethod<bool>('dismiss') ?? false;
+  } catch (_) {
+    return false;
+  }
+}

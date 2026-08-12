@@ -1,4 +1,8 @@
+import 'dart:io' show Platform;
+
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:relic_app/data/hotkeys.dart';
 
 void main() {
@@ -51,5 +55,115 @@ void main() {
     expect(back, isNotNull);
     expect(back!.sameChordAs(orig), isTrue);
     expect(back.label, '3');
+  });
+
+  // --- macOS contract. The defaults are the same chords on both platforms and
+  // that is a decision, not an oversight: [ctrl] registers the PHYSICAL Control
+  // key on macOS, so the history key is ⌃⇧Q and never ⌘⇧Q (Log Out).
+
+  group('macOS mapping', () {
+    final defaults = <HotkeyBinding>[
+      HotkeyBinding.defaultHistory,
+      HotkeyBinding.defaultPromote,
+      HotkeyBinding.defaultCapture,
+      HotkeyBinding.defaultMini,
+      ...HotkeyBinding.defaultQuickPaste,
+    ];
+
+    test('every default is Ctrl+Shift, never Meta', () {
+      for (final b in defaults) {
+        expect(b.ctrl, isTrue, reason: '${b.display} lost Ctrl');
+        expect(b.shift, isTrue, reason: '${b.display} lost Shift');
+        expect(b.win, isFalse, reason: '${b.display} would be ⌘ on macOS');
+      }
+      // Q/W/E — the row the whole default set is named after.
+      expect(HotkeyBinding.defaultHistory.usbUsage, 0x00070014); // Q
+      expect(HotkeyBinding.defaultPromote.usbUsage, 0x0007001A); // W
+      expect(HotkeyBinding.defaultCapture.usbUsage, 0x00070008); // E
+    });
+
+    test('registration asks hotkey_manager for control, not meta', () {
+      // hotkey_manager's macOS plugin maps `control` → NSEvent .control and
+      // `meta` → .command. Anything that flipped these would silently move the
+      // defaults onto Command chords.
+      for (final b in defaults) {
+        final mods = b.toHotKey().modifiers;
+        expect(mods, contains(HotKeyModifier.control));
+        expect(mods, contains(HotKeyModifier.shift));
+        expect(mods, isNot(contains(HotKeyModifier.meta)));
+      }
+    });
+
+    test('chips name the keys the user is actually holding', () {
+      // Control is 'Ctrl' on both platforms — it IS the Control key on macOS,
+      // so the default's label is honest there without a special case.
+      expect(HotkeyBinding.defaultHistory.chips, ['Ctrl', 'Shift', 'Q']);
+      // Meta and Alt are the two that rename. Whichever platform this runs on,
+      // the chip must never claim a key macOS doesn't have.
+      const metaAlt = HotkeyBinding(win: true, alt: true, usbUsage: 0x00070014, label: 'Q');
+      final chips = metaAlt.chips;
+      expect(chips.last, 'Q');
+      expect(chips, isNot(contains('Ctrl')));
+      expect(chips, Platform.isMacOS ? contains('Cmd') : contains('Win'));
+      expect(chips, Platform.isMacOS ? contains('Option') : contains('Alt'));
+    });
+
+    testWidgets('the recorder files Command under win and Control under ctrl',
+        (tester) async {
+      Future<HotkeyBinding?> record(List<LogicalKeyboardKey> held) async {
+        for (final k in held) {
+          await simulateKeyDownEvent(k, platform: 'macos');
+        }
+        const e = KeyDownEvent(
+          physicalKey: PhysicalKeyboardKey.keyQ,
+          logicalKey: LogicalKeyboardKey.keyQ,
+          timeStamp: Duration.zero,
+        );
+        final b = HotkeyBinding.fromEvent(e);
+        for (final k in held) {
+          await simulateKeyUpEvent(k, platform: 'macos');
+        }
+        return b;
+      }
+
+      final cmd = await record([
+        LogicalKeyboardKey.metaLeft,
+        LogicalKeyboardKey.shiftLeft,
+      ]);
+      expect(cmd, isNotNull);
+      expect(cmd!.win, isTrue, reason: '⌘ must land in the meta/win field');
+      expect(cmd.ctrl, isFalse);
+      expect(cmd.shift, isTrue);
+      expect(cmd.label, 'Q');
+
+      final ctrl = await record([
+        LogicalKeyboardKey.controlLeft,
+        LogicalKeyboardKey.shiftLeft,
+      ]);
+      expect(ctrl, isNotNull);
+      expect(ctrl!.ctrl, isTrue);
+      expect(ctrl.win, isFalse);
+      expect(ctrl.sameChordAs(HotkeyBinding.defaultHistory), isTrue);
+    });
+
+    test('a bare modifier press is never recorded as the main key', () {
+      // fn included: macOS keyboards emit it as a real key event, and no
+      // OS hotkey API can register it as a chord's main key.
+      const bare = <(PhysicalKeyboardKey, LogicalKeyboardKey)>[
+        (PhysicalKeyboardKey.controlLeft, LogicalKeyboardKey.controlLeft),
+        (PhysicalKeyboardKey.metaRight, LogicalKeyboardKey.metaRight),
+        (PhysicalKeyboardKey.altLeft, LogicalKeyboardKey.altLeft),
+        (PhysicalKeyboardKey.shiftRight, LogicalKeyboardKey.shiftRight),
+        (PhysicalKeyboardKey.fn, LogicalKeyboardKey.fn),
+      ];
+      for (final (phys, logical) in bare) {
+        final e = KeyDownEvent(
+          physicalKey: phys,
+          logicalKey: logical,
+          timeStamp: Duration.zero,
+        );
+        expect(HotkeyBinding.fromEvent(e), isNull, reason: phys.debugName);
+      }
+    });
   });
 }

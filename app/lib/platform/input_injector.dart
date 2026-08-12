@@ -24,13 +24,12 @@ Future<void> sendPaste() async {
 /// global-hotkey handler — the "paste latest" hotkey fires while the chord's
 /// modifiers are still physically held, so this waits for (or force-releases)
 /// them before injecting, or the paste would land as a modified chord.
-/// Best-effort; the macOS path is not yet chord-safe (falls back to plain
-/// [sendPaste] until the Swift bridge grows a paste-safe method).
+/// Best-effort; failures are silent.
 Future<void> sendPasteChordSafe() async {
   if (Platform.isWindows) {
     await win.sendPasteChordSafe();
   } else if (Platform.isMacOS) {
-    await mac.sendPaste();
+    await mac.sendPasteChordSafe();
   }
 }
 
