@@ -96,10 +96,9 @@ void main() {
         logical: const Size(1024, 768), isMobile: true);
     expect(find.text('Select an item'), findsOneWidget);
     // Split View: same app, now phone-narrow — must fall back to one column.
-    // (320dp — true narrow Split View — trips a pre-existing ResultRow
-    // meta-chip overflow unrelated to the breakpoint; see the plan doc's QA
-    // list. 360dp still proves the flip is reactive.)
-    tester.view.physicalSize = const Size(360, 768);
+    // 320dp is the true narrow pane, and the rows have to survive it: the meta
+    // line sheds chips into its "+N" there rather than overflowing.
+    tester.view.physicalSize = const Size(320, 768);
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Select an item'), findsNothing);
   });

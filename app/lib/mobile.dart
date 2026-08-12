@@ -1386,10 +1386,16 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
                           );
                         }
                       }),
-                    _sheetItem(colors, LucideIcons.externalLink, 'Manage account', () {
-                      Navigator.pop(sheetCtx);
-                      _openManageAccount();
-                    }),
+                    // Option A: relic.space/account links to upgrade/billing,
+                    // so store-safe builds must not offer a path to it
+                    // (Guideline 3.1.1/3.1.3(a) — the plan's top rejection
+                    // risk).
+                    if (!storeSafeBuild)
+                      _sheetItem(colors, LucideIcons.externalLink,
+                          'Manage account', () {
+                        Navigator.pop(sheetCtx);
+                        _openManageAccount();
+                      }),
                     _sheetItem(colors, LucideIcons.qrCode, 'Add a device', () {
                       Navigator.pop(sheetCtx);
                       final r = _repo;

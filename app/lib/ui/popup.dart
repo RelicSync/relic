@@ -167,6 +167,12 @@ class PopupView extends StatefulWidget {
 class _PopupViewState extends State<PopupView> {
   final _searchCtl = TextEditingController();
   final _searchFocus = FocusNode();
+
+  /// The popup's own key-handling node (the root [Focus] in build). Held
+  /// explicitly so focus can be handed BACK to it: `unfocus()` on the search
+  /// field parks focus on the enclosing scope, which is an ancestor of this
+  /// node, and key events would stop arriving at [_onKey] altogether.
+  final _rootFocus = FocusNode(debugLabel: 'popup-root');
   final _scroll = ScrollController();
   // First-run coach marks (desktop): anchors + one-shot visibility.
   final _kSearch = GlobalKey();
@@ -358,11 +364,7 @@ class _PopupViewState extends State<PopupView> {
   void _resetSearchState() {
     if (!mounted) return;
     _debounce?.cancel();
-    final dirty = _searching ||
-        _scope != Scope.all ||
-        _sort != SortMode.relevance ||
-        _searchCtl.text.isNotEmpty;
-    if (!dirty) return;
+    if (!_searchStateDirty) return;
     _searchCtl.clear();
     _activeTags.clear();
     _manualRange = null;
@@ -599,6 +601,7 @@ class _PopupViewState extends State<PopupView> {
     _scroll.dispose();
     _searchCtl.dispose();
     _searchFocus.dispose();
+    _rootFocus.dispose();
     super.dispose();
   }
 
@@ -690,6 +693,16 @@ class _PopupViewState extends State<PopupView> {
       _activeTags.isNotEmpty ||
       _effectiveRange != null;
 
+  /// True when the browse state is anything other than the default "All,
+  /// newest-first, nothing typed" view. Drives both the on-close reset
+  /// ([_resetSearchState]) and, on touch builds, what the first Esc undoes —
+  /// whitespace in the box counts, since the user still sees it.
+  bool get _searchStateDirty =>
+      _searching ||
+      _scope != Scope.all ||
+      _sort != SortMode.relevance ||
+      _searchCtl.text.isNotEmpty;
+
   /// Add/remove a tag from the active filter set.
   void _toggleTag(String tag) {
     setState(() {
@@ -735,6 +748,32 @@ class _PopupViewState extends State<PopupView> {
       if (_selected >= n - 3 && widget.repo.hasMore) {
         widget.repo.loadMore();
       }
+    } else {
+      _scrollListToSelected();
+    }
+  }
+
+  /// Keep the arrow-selected row of the FULL list in view. Rows are a fixed
+  /// height ([ResultRow.heightFor]), so this is arithmetic rather than
+  /// `ensureVisible` — the list is lazy, and the row you just selected may not
+  /// have an element yet on a screen as tall as an iPad's. Only ever called
+  /// from [_move], i.e. only once a hardware arrow key has arrived; touch
+  /// scrolling and tap-to-select never reach it.
+  void _scrollListToSelected() {
+    if (!_scroll.hasClients) return;
+    final rowH = ResultRow.heightFor(RelicTheme.isMobileOf(context));
+    final top = _selected * rowH;
+    final bottom = top + rowH;
+    final pos = _scroll.position;
+    final off = pos.pixels;
+    double? target;
+    if (top < off) {
+      target = top;
+    } else if (bottom > off + pos.viewportDimension) {
+      target = bottom - pos.viewportDimension;
+    }
+    if (target != null) {
+      _scroll.jumpTo(target.clamp(0.0, pos.maxScrollExtent));
     }
   }
 
@@ -2244,6 +2283,13 @@ class _PopupViewState extends State<PopupView> {
     );
   }
 
+  /// Take the keyboard off the search field and give it back to the popup's
+  /// own node, so arrows / type-to-search keep working (and, on a touch build,
+  /// any software keyboard drops). A bare `unfocus()` would not do: it parks
+  /// focus on the enclosing scope, above [_rootFocus], and [_onKey] would then
+  /// never see another key.
+  void _handKeyboardToList() => _rootFocus.requestFocus();
+
   KeyEventResult _onKey(FocusNode node, KeyEvent e) {
     if (e is! KeyDownEvent) return KeyEventResult.ignored;
     if (_rowMenuFor != null && e.logicalKey == LogicalKeyboardKey.escape) {
@@ -2272,6 +2318,21 @@ class _PopupViewState extends State<PopupView> {
       }
       return KeyEventResult.handled;
     }
+    // Ctrl/Cmd+F: put the caret in the search box with the existing query
+    // selected, so the next keystroke replaces it. Type-to-search already
+    // covers the empty case; this is the one every iPad keyboard user reaches
+    // for once focus has drifted into the list (checklist §6, "search focus").
+    if (e.logicalKey == LogicalKeyboardKey.keyF &&
+        (HardwareKeyboard.instance.isControlPressed ||
+            HardwareKeyboard.instance.isMetaPressed) &&
+        _dialog == null) {
+      _searchCtl.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _searchCtl.text.length,
+      );
+      _searchFocus.requestFocus();
+      return KeyEventResult.handled;
+    }
     if (_dialog != null) {
       if (e.logicalKey == LogicalKeyboardKey.escape) {
         _setDialog(null);
@@ -2296,6 +2357,21 @@ class _PopupViewState extends State<PopupView> {
         // multi-selection clears before the popup closes.
         if (_multiSel.isNotEmpty) {
           setState(_multiSel.clear);
+          return KeyEventResult.handled;
+        }
+        // Touch builds (an iPad with a Magic Keyboard) have no window to
+        // dismiss — the host's onClose is a no-op there — so Esc walks the
+        // layers the desktop window walks on its way out: the search state
+        // that a desktop close would have reset, then the text focus, so the
+        // list has the keyboard again (and any software keyboard drops).
+        // Desktop keeps closing, unchanged.
+        if (RelicTheme.isMobileOf(context)) {
+          if (_searchStateDirty) {
+            _handKeyboardToList();
+            _resetSearchState();
+          } else if (_searchFocus.hasFocus) {
+            _handKeyboardToList();
+          }
           return KeyEventResult.handled;
         }
         widget.onClose();
@@ -2389,32 +2465,27 @@ class _PopupViewState extends State<PopupView> {
     final searching = _searching;
     // Mini picker: compact, chrome-stripped, cursor-anchored (desktop only).
     // The mode is per-summon (set by the host from which hotkey fired).
-    final mob = RelicTheme.isMobileOf(context);
-    final mini = (widget.miniSignal?.value ?? false) && !mob;
+    final mini =
+        (widget.miniSignal?.value ?? false) && !RelicTheme.isMobileOf(context);
 
     return Focus(
+      focusNode: _rootFocus,
       autofocus: true,
       onKeyEvent: _onKey,
       child: Container(
-        // On phones the popup IS the screen: flat and edge-to-edge. The
-        // floating-card chrome (radius, border, shadow) is a desktop popup
-        // affordance; on a phone it draws a visible seam against the screen
-        // edges and the home-indicator inset.
-        decoration: mob
-            ? BoxDecoration(color: c.base)
-            : BoxDecoration(
-                color: c.base,
-                borderRadius: BorderRadius.circular(Radii.popup),
-                border: Border.all(color: c.border, width: 1),
-                boxShadow: [
-                  BoxShadow(
-                    color: c.shadowStrong,
-                    blurRadius: 80,
-                    spreadRadius: -24,
-                    offset: const Offset(0, 40),
-                  ),
-                ],
-              ),
+        decoration: BoxDecoration(
+          color: c.base,
+          borderRadius: BorderRadius.circular(Radii.popup),
+          border: Border.all(color: c.border, width: 1),
+          boxShadow: [
+            BoxShadow(
+              color: c.shadowStrong,
+              blurRadius: 80,
+              spreadRadius: -24,
+              offset: const Offset(0, 40),
+            ),
+          ],
+        ),
         clipBehavior: Clip.antiAlias,
         child: Stack(
           key: _rootStackKey,
@@ -2502,16 +2573,8 @@ class _PopupViewState extends State<PopupView> {
                             // content inset) splits the icon's 24px total
                             // offset evenly, so the highlight card floats
                             // equidistant between the window edge and the
-                            // icon. Change both together. On mobile the
-                            // surface runs under the home indicator, so the
-                            // list pads its own bottom by that inset.
-                            padding: EdgeInsets.only(
-                              left: 12,
-                              right: 12,
-                              bottom: mob
-                                  ? MediaQuery.paddingOf(context).bottom
-                                  : 0,
-                            ),
+                            // icon. Change both together.
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
                             itemCount:
                                 results.length + (widget.repo.hasMore ? 1 : 0),
                             itemBuilder: (_, i) {
@@ -2620,10 +2683,8 @@ class _PopupViewState extends State<PopupView> {
               left: 0,
               right: 0,
               // On mobile, lift the toast clear of the floating + button so the
-              // Undo action isn't hidden behind (and untappable under) the FAB
-              // (plus the home-indicator inset now that the surface is
-              // edge-to-edge).
-              bottom: mob ? 96 + MediaQuery.paddingOf(context).bottom : 12,
+              // Undo action isn't hidden behind (and untappable under) the FAB.
+              bottom: RelicTheme.isMobileOf(context) ? 96 : 12,
               child: ToastStack(queue: _toasts),
             ),
             if (_showCoach)
@@ -3036,6 +3097,7 @@ class _HelpSheet extends StatelessWidget {
   static const _keys = <(String, String)>[
     ('Up / Down', 'move selection'),
     ('Enter', 'copy the selected item'),
+    ('Ctrl+F', 'jump back to the search box'),
     ('Ctrl+Click', 'multi-select'),
     ('Shift+Click', 'select a range'),
     ('Ctrl+A', 'select all results'),

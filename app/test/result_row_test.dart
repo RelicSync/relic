@@ -108,6 +108,101 @@ void main() {
     });
   });
 
+  group('meta line at Split View widths', () {
+    // Split View / Slide Over can hand the app 320dp, which leaves the meta
+    // line ~130px — less than a device·age prefix plus two tag chips. Every
+    // atom after the prefix used to be fixed-width, so the line overflowed
+    // instead of shedding chips (docs/apple-port-2026-08.md §7).
+    final crowded = Relic(
+      uid: 'u2',
+      createdAt: 1785000000,
+      updatedAt: 1785000000,
+      kind: Kind.string,
+      source: Source.clipboard,
+      promoted: true,
+      byteSize: 12,
+      content: 'gcloud auth application-default login',
+      device: 'MULTIVAC-III',
+      userTags: const ['business', 'receipts'],
+      tags: const ['url', 'code'],
+    );
+
+    // Material hands its child tight constraints, so a bare SizedBox cannot
+    // narrow the row — Align loosens them first, which is what makes this a
+    // real 320dp pane and not an 800dp one.
+    Future<void> pumpAt(WidgetTester tester, double width) =>
+        tester.pumpWidget(
+          RelicTheme(
+            colors: RelicColors.dark,
+            isMobile: true,
+            child: Directionality(
+              textDirection: TextDirection.ltr,
+              child: MediaQuery(
+                data: const MediaQueryData(),
+                child: Material(
+                  child: Align(
+                    alignment: Alignment.topLeft,
+                    child: SizedBox(
+                      width: width,
+                      child: ResultRow(
+                        relic: crowded,
+                        selected: false,
+                        nowSecs: 1785000100,
+                        onSelect: () {},
+                        onCopy: () {},
+                        onPromoteToggle: () {},
+                        onEdit: () {},
+                        onDelete: () {},
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+
+    /// Tags the row admits to: the chips actually rendered plus however many
+    /// the "+N" counter is standing in for. Dropping a chip must move it into
+    /// the counter, never make it disappear.
+    int tagsAccountedFor() {
+      var n = 0;
+      for (final label in ['business', 'receipts', '#url', '#code']) {
+        n += find.text(label).evaluate().length;
+      }
+      final counters = find.byWidgetPredicate(
+        (w) => w is Text && (w.data ?? '').startsWith('+'),
+      );
+      for (final e in counters.evaluate()) {
+        n += int.parse((e.widget as Text).data!.substring(1));
+      }
+      return n;
+    }
+
+    testWidgets('320dp (narrow Split View) does not overflow', (tester) async {
+      await pumpAt(tester, 320);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('320dp keeps the prefix and folds unfittable chips into +N',
+        (tester) async {
+      await pumpAt(tester, 320);
+      expect(find.textContaining('MULTIVAC-III'), findsOneWidget);
+      expect(tagsAccountedFor(), 4);
+    });
+
+    testWidgets('700dp+ keeps the full meta line, unclipped', (tester) async {
+      await pumpAt(tester, 760);
+      expect(tester.takeException(), isNull);
+      expect(find.textContaining('MULTIVAC-III'), findsOneWidget);
+      expect(find.text('business'), findsOneWidget);
+      expect(find.text('receipts'), findsOneWidget);
+      // Two chips is the cap; the rest collapse into the "+N" counter.
+      expect(find.text('+2'), findsOneWidget);
+      expect(tagsAccountedFor(), 4);
+    });
+  });
+
   group('analysis spinner', () {
     testWidgets('a queued item says so, with a spinner', (tester) async {
       await pumpRow(

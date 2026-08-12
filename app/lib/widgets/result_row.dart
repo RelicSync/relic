@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter/material.dart' show CircularProgressIndicator;
@@ -110,6 +111,14 @@ class ResultRow extends StatefulWidget {
     this.provisionalTags = const {},
   });
 
+  /// Rows are a fixed height so selecting an item (which reveals the action
+  /// cluster) or switching between items never changes their vertical size.
+  /// Sized to comfortably fit two lines of title + the meta line; roomier on
+  /// touch. Public because keyboard navigation has to compute a scroll offset
+  /// for a row the lazy ListView may not have built yet (popup.dart
+  /// `_scrollListToSelected`).
+  static double heightFor(bool isMobile) => isMobile ? 96 : 76;
+
   /// Whether the open-in-browser affordance should appear for this row.
   bool get _showOpen => onOpenLink != null && relic.hasLink;
 
@@ -138,11 +147,6 @@ class _ResultRowState extends State<ResultRow> {
   /// switch between the compact desktop metrics and roomier phone ones.
   bool _m = false;
   double _v(double desktop, double mobile) => _m ? mobile : desktop;
-
-  /// Rows are a fixed height so selecting an item (which reveals the action
-  /// cluster) or switching between items never changes their vertical size.
-  /// Sized to comfortably fit two lines of title + the meta line.
-  static const double _rowHeight = 76;
 
   /// How long after a tap a second one still counts as a double-click.
   ///
@@ -200,7 +204,7 @@ class _ResultRowState extends State<ResultRow> {
                 widget.onContextMenu!(d.globalPosition);
               },
         child: SizedBox(
-          height: _v(_rowHeight, 96),
+          height: ResultRow.heightFor(_m),
           child: Stack(
             clipBehavior: Clip.none,
             children: [
@@ -516,56 +520,112 @@ class _ResultRowState extends State<ResultRow> {
               )
               .toList();
     final tags = visible.take(2).toList();
-    final overflow = visible.length - tags.length;
+    final beyondCap = visible.length - tags.length;
 
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Flexible(
-          child: Text(
-            metaPrefix,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: RelicTheme.mono(size: _v(10.5, 12.5), color: metaColor),
-          ),
-        ),
-        if (r.hasAttachments) ...[
-          const SizedBox(width: 7),
-          Icon(LucideIcons.paperclip, size: _v(10.5, 12.5), color: metaColor),
-          const SizedBox(width: 2),
-          Text('${r.attachments.length}',
-              style: RelicTheme.mono(size: _v(10.5, 12.5), color: metaColor)),
-        ],
-        for (final t in tags) ...[
-          const SizedBox(width: 6),
-          // User tags stay as chips; machine (auto) tags render as a quiet
-          // "#tag" so they read as metadata, not a badge. Desktop filters on
-          // tap (swallowing the row tap); phones render them display-only, as
-          // a target that small mid-row mostly collects accidental taps.
-          if (r.isUserTag(t))
-            _MetaChip(label: t, onTap: _m ? null : () => widget.onTagTap?.call(t))
-          else if (_m)
-            Text(
-              '#$t',
-              style: RelicTheme.mono(size: _v(10, 12), color: c.autotagText),
-            )
-          else
-            SwallowTap(
-              onTap: () => widget.onTagTap?.call(t),
+    final prefixStyle = RelicTheme.mono(size: _v(10.5, 12.5), color: metaColor);
+    final autotagStyle = RelicTheme.mono(size: _v(10, 12), color: c.autotagText);
+    final countStyle = RelicTheme.mono(size: 10, color: c.textFaintest);
+
+    // A narrow iPad Split View pane leaves this line ~130px — less than the
+    // prefix plus two chips, which is how it used to overflow by ~5px
+    // (docs/apple-port-2026-08.md §7). Everything after the prefix is
+    // indivisible: a chip squeezed down to "bus…" reads worse than no chip, so
+    // the line is packed by measurement rather than handed to Flexible. The
+    // prefix keeps a floor (and still ellipsizes into whatever is left over),
+    // chips are spent left to right while they fit, and the ones that don't
+    // fold into the same "+N" that already stands in for tags there was never
+    // room for. From ~200px up nothing is ever dropped, so every window that
+    // isn't a narrow pane keeps the layout it always had. The cost is a
+    // handful of short shaping calls per row build — the same work the Texts
+    // below do anyway.
+    return LayoutBuilder(
+      builder: (ctx, box) {
+        // Same fallback Text itself uses, so measuring never needs a
+        // MediaQuery the rendering could do without.
+        final scaler = MediaQuery.maybeTextScalerOf(ctx) ?? TextScaler.noScaling;
+        double textW(String s, TextStyle style) => (TextPainter(
+              text: TextSpan(text: s, style: style),
+              textDirection: TextDirection.ltr,
+              textScaler: scaler,
+            )..layout())
+            .width;
+
+        // Leading 6 is the gap each tag sits behind.
+        double tagW(String t) =>
+            6 +
+            (r.isUserTag(t)
+                ? _MetaChip.widthFor(t, textW)
+                : textW('#$t', autotagStyle));
+        // Paperclip cluster: its 7px gap, the icon, 2px, then the count.
+        final attachN = '${r.attachments.length}';
+        final attachW = r.hasAttachments
+            ? 7 + _v(10.5, 12.5) + 2 + textW(attachN, prefixStyle)
+            : 0.0;
+        // Ten mono characters ("Desktop · …") is the least that still says
+        // where and when the item came from; a shorter prefix reserves only
+        // what it actually needs.
+        final prefixFloor = math.min(
+          textW(metaPrefix, prefixStyle),
+          textW('0123456789', prefixStyle),
+        );
+        final room = box.maxWidth - prefixFloor - attachW;
+        double packedW(int n) {
+          var w = 0.0;
+          for (var i = 0; i < n; i++) {
+            w += tagW(tags[i]);
+          }
+          final folded = beyondCap + tags.length - n;
+          return folded == 0 ? w : w + 6 + textW('+$folded', countStyle);
+        }
+
+        var shown = tags.length;
+        while (shown > 0 && packedW(shown) > room) {
+          shown--;
+        }
+        final overflow = beyondCap + tags.length - shown;
+
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
               child: Text(
-                '#$t',
-                style: RelicTheme.mono(size: _v(10, 12), color: c.autotagText),
+                metaPrefix,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: prefixStyle,
               ),
             ),
-        ],
-        if (overflow > 0) ...[
-          const SizedBox(width: 6),
-          Text(
-            '+$overflow',
-            style: RelicTheme.mono(size: 10, color: c.textFaintest),
-          ),
-        ],
-      ],
+            if (r.hasAttachments) ...[
+              const SizedBox(width: 7),
+              Icon(LucideIcons.paperclip,
+                  size: _v(10.5, 12.5), color: metaColor),
+              const SizedBox(width: 2),
+              Text(attachN, style: prefixStyle),
+            ],
+            for (final t in tags.take(shown)) ...[
+              const SizedBox(width: 6),
+              // User tags stay as chips; machine (auto) tags render as a quiet
+              // "#tag" so they read as metadata, not a badge. Desktop filters on
+              // tap (swallowing the row tap); phones render them display-only, as
+              // a target that small mid-row mostly collects accidental taps.
+              if (r.isUserTag(t))
+                _MetaChip(
+                    label: t, onTap: _m ? null : () => widget.onTagTap?.call(t))
+              else if (_m)
+                Text('#$t', style: autotagStyle)
+              else
+                SwallowTap(
+                  onTap: () => widget.onTagTap?.call(t),
+                  child: Text('#$t', style: autotagStyle),
+                ),
+            ],
+            if (overflow > 0) ...[
+              const SizedBox(width: 6),
+              Text('+$overflow', style: countStyle),
+            ],
+          ],
+        );
+      },
     );
   }
 
@@ -1243,6 +1303,19 @@ class _MetaChip extends StatelessWidget {
   final String label;
   final VoidCallback? onTap; // null = display-only (phones)
   const _MetaChip({required this.label, this.onTap});
+
+  /// Rendered width of the chip, for the meta line's packing pass. Mirrors
+  /// [build] exactly: 7px padding + 1px border a side, plus the 10px tag icon
+  /// and its 3px gap on the labels that have one. [measure] supplies the text
+  /// width in the caller's text scale.
+  static double widthFor(
+    String label,
+    double Function(String, TextStyle) measure,
+  ) =>
+      16 +
+      (tagIconFor(label) != null ? 13 : 0) +
+      measure(label, RelicTheme.mono(size: 10));
+
   @override
   Widget build(BuildContext context) {
     final c = RelicTheme.of(context);

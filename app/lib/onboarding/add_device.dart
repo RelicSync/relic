@@ -14,6 +14,7 @@ import '../data/api.dart';
 import '../data/device_directory.dart';
 import '../models/relic.dart' show relativeAge;
 import '../data/pairing.dart';
+import '../platform/store_safe.dart';
 import '../data/recovery.dart';
 import '../data/save_prefs.dart';
 import '../services/onboarding_service.dart';
@@ -1071,8 +1072,17 @@ class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Option A: store-safe builds state facts and stop — no
+            // subscription language, and "Manage plan" doesn't exist on iOS.
             Text(
-                'This permanently deletes your synced vault and account on our servers. Local history on your devices is not deleted. If you have an active subscription, cancel it first in Manage plan.',
+                storeSafeBuild
+                    ? 'This permanently deletes your synced vault and account '
+                        'on our servers. Local history on your devices is not '
+                        'deleted.'
+                    : 'This permanently deletes your synced vault and account '
+                        'on our servers. Local history on your devices is not '
+                        'deleted. If you have an active subscription, cancel '
+                        'it first in Manage plan.',
                 style: TextStyle(color: c.textMuted, height: 1.4)),
             const SizedBox(height: 16),
             Text('Type your email to confirm:',

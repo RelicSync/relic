@@ -69,6 +69,9 @@ dependencies:
   url_launcher: ^6.3.1
   qr_flutter: ^4.1.0 # render the pairing QR (pure-Dart painter; safe on Windows)
   mobile_scanner: ^7.2.1 # scan the pairing QR (mobile only; guarded off desktop)
+  # iOS OAuth in an in-app ASWebAuthenticationSession (see data/oauth_flow.dart);
+  # every other platform keeps the browser + callback path it already had.
+  flutter_web_auth_2: ^5.0.3
 dev_dependencies:
   flutter_test:
     sdk: flutter
