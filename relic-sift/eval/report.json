@@ -7,10 +7,10 @@
   "secret_items": 10,
   "pii_precision": 1.0,
   "pii_recall": 1.0,
-  "tag_recall": 0.98734176,
-  "needs_review_rate": 0.1392405,
-  "p50_ms": 9,
-  "p95_ms": 760,
+  "tag_recall": 1.0,
+  "needs_review_rate": 0.12658228,
+  "p50_ms": 94,
+  "p95_ms": 419,
   "per_category": {
     "address": {
       "tp": 2,
@@ -199,7 +199,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 26,
+      "total_ms": 104,
       "top_signals": [
         "rule:aws_access_key=0.97",
         "deterministic_win:rule:aws_access_key=0.97"
@@ -214,7 +214,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 57,
       "top_signals": [
         "rule:github_token=0.97",
         "deterministic_win:rule:github_token=0.97"
@@ -229,7 +229,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 54,
       "top_signals": [
         "rule:stripe_key=0.97",
         "deterministic_win:rule:stripe_key=0.97"
@@ -244,7 +244,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 46,
       "top_signals": [
         "rule:google_api_key=0.97",
         "deterministic_win:rule:google_api_key=0.97"
@@ -259,7 +259,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 45,
       "top_signals": [
         "rule:slack_token=0.97",
         "deterministic_win:rule:slack_token=0.97"
@@ -274,7 +274,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 42,
       "top_signals": [
         "rule:jwt=0.97",
         "deterministic_win:rule:jwt=0.97"
@@ -289,7 +289,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 71,
       "top_signals": [
         "rule:private_key_pem=0.97",
         "deterministic_win:rule:private_key_pem=0.97"
@@ -304,7 +304,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 59,
       "top_signals": [
         "rule:high_entropy_token=0.90"
       ]
@@ -318,7 +318,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 44,
       "top_signals": [
         "rule:assigned_secret=0.95",
         "deterministic_win:rule:assigned_secret=0.95"
@@ -333,7 +333,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 60,
       "top_signals": [
         "rule:url=0.97",
         "deterministic_win:rule:url=0.97"
@@ -348,7 +348,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 40,
       "top_signals": [
         "rule:url=0.97",
         "deterministic_win:rule:url=0.97"
@@ -363,7 +363,7 @@
       "needs_review": true,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 48,
       "top_signals": []
     },
     {
@@ -375,7 +375,7 @@
       "needs_review": true,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 50,
       "top_signals": []
     },
     {
@@ -387,7 +387,7 @@
       "needs_review": true,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 51,
       "top_signals": []
     },
     {
@@ -411,299 +411,301 @@
       "needs_review": true,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 56,
       "top_signals": []
     },
     {
       "path": "text/python_code.txt",
       "gold": "code",
       "predicted": "code",
-      "confidence": 0.576,
+      "confidence": 0.57,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 15,
+      "total_ms": 80,
       "top_signals": [
         "format:code_density=0.50",
-        "disagreement:a=code,b=log_line->code=0.58"
+        "head:structured_data=0.39",
+        "disagreement:a=code,b=structured_data->code=0.57"
       ]
     },
     {
       "path": "text/rust_code.txt",
       "gold": "code",
       "predicted": "code",
-      "confidence": 0.827,
+      "confidence": 0.804,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 14,
+      "total_ms": 97,
       "top_signals": [
         "format:code_density=0.60",
-        "head:code=0.57"
+        "head:code=0.51"
       ]
     },
     {
       "path": "text/js_code.txt",
       "gold": "code",
       "predicted": "code",
-      "confidence": 0.891,
+      "confidence": 0.709,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 9,
+      "total_ms": 93,
       "top_signals": [
-        "format:code_density=0.60",
-        "head:code=0.73"
+        "format:code_density=0.60"
       ]
     },
     {
       "path": "text/sql_query.txt",
       "gold": "code",
       "predicted": "code",
-      "confidence": 0.421,
+      "confidence": 0.789,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 11,
+      "total_ms": 94,
       "top_signals": [
-        "head:code=0.42"
+        "head:code=0.79"
       ]
     },
     {
       "path": "text/log_server.txt",
       "gold": "log_line",
       "predicted": "log_line",
-      "confidence": 0.907,
+      "confidence": 0.968,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 12,
+      "total_ms": 119,
       "top_signals": [
         "format:log_timestamps=0.60",
-        "head:log_line=0.77"
+        "head:log_line=0.92"
       ]
     },
     {
       "path": "text/log_syslog.txt",
       "gold": "log_line",
       "predicted": "log_line",
-      "confidence": 0.887,
+      "confidence": 0.96,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 11,
+      "total_ms": 136,
       "top_signals": [
         "format:timestamp_lines=0.50",
-        "head:log_line=0.77"
+        "head:log_line=0.92"
       ]
     },
     {
       "path": "text/stack_trace_python.txt",
       "gold": "log_line",
       "predicted": "log_line",
-      "confidence": 0.833,
+      "confidence": 0.944,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 10,
+      "total_ms": 91,
       "top_signals": [
         "format:stack_trace=0.55",
         "format:code_density=0.50",
-        "head:log_line=0.63"
+        "head:log_line=0.88"
       ]
     },
     {
       "path": "text/chat_short.txt",
       "gold": "chat_message",
       "predicted": "chat_message",
-      "confidence": 0.825,
+      "confidence": 0.92,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 4,
+      "total_ms": 99,
       "top_signals": [
-        "head:chat_message=0.82"
+        "head:chat_message=0.92"
       ]
     },
     {
       "path": "text/chat_thread.txt",
       "gold": "chat_message",
       "predicted": "chat_message",
-      "confidence": 0.553,
+      "confidence": 0.654,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 8,
+      "total_ms": 96,
       "top_signals": [
-        "head:chat_message=0.55"
+        "head:chat_message=0.65"
       ]
     },
     {
       "path": "text/email_body_work.txt",
       "gold": "email_body",
       "predicted": "email_body",
-      "confidence": 0.758,
+      "confidence": 0.92,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 9,
+      "total_ms": 107,
       "top_signals": [
-        "head:email_body=0.76"
+        "head:email_body=0.92"
       ]
     },
     {
       "path": "text/email_body_support.txt",
       "gold": "email_body",
       "predicted": "email_body",
-      "confidence": 0.646,
+      "confidence": 0.747,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 9,
+      "total_ms": 83,
       "top_signals": [
-        "head:email_body=0.65"
+        "head:email_body=0.75"
       ]
     },
     {
       "path": "text/note_meeting.txt",
       "gold": "note_prose",
       "predicted": "note_prose",
-      "confidence": 0.789,
+      "confidence": 0.906,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 8,
+      "total_ms": 76,
       "top_signals": [
-        "head:note_prose=0.79"
+        "head:note_prose=0.91"
       ]
     },
     {
       "path": "text/note_grocery.txt",
       "gold": "note_prose",
       "predicted": "note_prose",
-      "confidence": 0.617,
+      "confidence": 0.533,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 6,
+      "total_ms": 106,
       "top_signals": [
-        "head:note_prose=0.62"
+        "head:note_prose=0.53"
       ]
     },
     {
       "path": "text/note_essay.txt",
       "gold": "note_prose",
       "predicted": "note_prose",
-      "confidence": 0.832,
+      "confidence": 0.782,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 9,
+      "total_ms": 80,
       "top_signals": [
-        "head:note_prose=0.83"
+        "head:note_prose=0.78"
       ]
     },
     {
       "path": "text/markdown_doc.txt",
       "gold": "note_prose",
       "predicted": "note_prose",
-      "confidence": 0.643,
+      "confidence": 0.544,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 9,
+      "total_ms": 81,
       "top_signals": [
         "format:markdown=0.45",
-        "head:todo_list=0.33",
-        "head:note_prose=0.35"
+        "head:todo_list=0.59",
+        "disagreement:a=note_prose,b=todo_list->note_prose=0.54"
       ]
     },
     {
       "path": "text/json_payload.txt",
       "gold": "structured_data",
       "predicted": "structured_data",
-      "confidence": 0.984,
+      "confidence": 0.977,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 10,
+      "total_ms": 101,
       "top_signals": [
         "format:json=0.90",
-        "head:structured_data=0.84"
+        "head:structured_data=0.77"
       ]
     },
     {
       "path": "text/yaml_config.txt",
       "gold": "structured_data",
       "predicted": "structured_data",
-      "confidence": 0.924,
+      "confidence": 0.968,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 6,
+      "total_ms": 93,
       "top_signals": [
         "format:yaml=0.60",
-        "head:structured_data=0.81"
+        "head:structured_data=0.92"
       ]
     },
     {
       "path": "text/xml_snippet.txt",
       "gold": "structured_data",
       "predicted": "structured_data",
-      "confidence": 0.871,
+      "confidence": 0.971,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 10,
+      "total_ms": 92,
       "top_signals": [
         "format:xml=0.65",
-        "head:structured_data=0.63"
+        "head:structured_data=0.92"
       ]
     },
     {
       "path": "text/csv_table.txt",
       "gold": "structured_data",
       "predicted": "structured_data",
-      "confidence": 0.8,
+      "confidence": 0.937,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 10,
+      "total_ms": 111,
       "top_signals": [
         "format:csv=0.60",
-        "head:structured_data=0.50"
+        "head:structured_data=0.84"
       ]
     },
     {
       "path": "text/credit_card_note.txt",
       "gold": "note_prose",
-      "predicted": "unsorted",
-      "confidence": 0.265,
+      "predicted": "note_prose",
+      "confidence": 0.439,
       "ok": true,
-      "needs_review": true,
+      "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 6,
-      "top_signals": []
+      "total_ms": 80,
+      "top_signals": [
+        "head:note_prose=0.44"
+      ]
     },
     {
       "path": "text/tracking_ups.txt",
@@ -714,7 +716,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 53,
       "top_signals": [
         "rule:ups_tracking=0.97",
         "deterministic_win:rule:ups_tracking=0.97"
@@ -729,7 +731,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 38,
       "top_signals": [
         "rule:usps_tracking=0.95",
         "deterministic_win:rule:usps_tracking=0.95"
@@ -744,7 +746,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 38,
       "top_signals": [
         "rule:otp_context=0.90"
       ]
@@ -772,7 +774,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 4,
+      "total_ms": 108,
       "top_signals": [
         "head:address=0.92"
       ]
@@ -781,42 +783,42 @@
       "path": "text/address_shipping.txt",
       "gold": "address",
       "predicted": "address",
-      "confidence": 0.651,
+      "confidence": 0.92,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 4,
+      "total_ms": 75,
       "top_signals": [
-        "head:address=0.65"
+        "head:address=0.92"
       ]
     },
     {
       "path": "text/todo_checkbox.txt",
       "gold": "todo_list",
       "predicted": "todo_list",
-      "confidence": 0.715,
+      "confidence": 0.92,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 5,
+      "total_ms": 75,
       "top_signals": [
-        "head:todo_list=0.71"
+        "head:todo_list=0.92"
       ]
     },
     {
       "path": "text/todo_numbered.txt",
       "gold": "todo_list",
       "predicted": "todo_list",
-      "confidence": 0.688,
+      "confidence": 0.92,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 7,
+      "total_ms": 76,
       "top_signals": [
-        "head:todo_list=0.69"
+        "head:todo_list=0.92"
       ]
     },
     {
@@ -828,7 +830,7 @@
       "needs_review": true,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 38,
       "top_signals": []
     },
     {
@@ -852,7 +854,7 @@
       "needs_review": true,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 38,
       "top_signals": []
     },
     {
@@ -864,7 +866,7 @@
       "needs_review": true,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 53,
       "top_signals": []
     },
     {
@@ -876,127 +878,127 @@
       "needs_review": true,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 0,
+      "total_ms": 53,
       "top_signals": []
     },
     {
       "path": "files/report.pdf",
       "gold": "note_prose",
       "predicted": "note_prose",
-      "confidence": 0.416,
+      "confidence": 0.75,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 10,
+      "total_ms": 102,
       "top_signals": [
         "magic:pdf:fallback=0.35",
-        "head:note_prose=0.42"
+        "head:note_prose=0.75"
       ]
     },
     {
       "path": "files/letter.pdf",
       "gold": "email_body",
       "predicted": "email_body",
-      "confidence": 0.409,
+      "confidence": 0.863,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 8,
+      "total_ms": 108,
       "top_signals": [
         "magic:pdf:fallback=0.35",
-        "head:email_body=0.41"
+        "head:email_body=0.86"
       ]
     },
     {
       "path": "files/spec.docx",
       "gold": "note_prose",
-      "predicted": "file_office",
-      "confidence": 0.35,
+      "predicted": "note_prose",
+      "confidence": 0.556,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 10,
+      "total_ms": 96,
       "top_signals": [
-        "magic:office:fallback=0.35"
+        "magic:office:fallback=0.35",
+        "head:note_prose=0.56"
       ]
     },
     {
       "path": "files/page.html",
       "gold": "note_prose",
       "predicted": "note_prose",
-      "confidence": 0.599,
+      "confidence": 0.779,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 12,
+      "total_ms": 96,
       "top_signals": [
-        "head:note_prose=0.60"
+        "head:note_prose=0.78"
       ]
     },
     {
       "path": "files/readme.md",
       "gold": "note_prose",
       "predicted": "note_prose",
-      "confidence": 0.525,
+      "confidence": 0.484,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 10,
+      "total_ms": 110,
       "top_signals": [
         "format:markdown=0.45",
-        "head:code=0.44",
-        "disagreement:a=note_prose,b=code->note_prose=0.52"
+        "head:structured_data=0.44",
+        "disagreement:a=note_prose,b=structured_data->note_prose=0.48"
       ]
     },
     {
       "path": "files/config.json",
       "gold": "structured_data",
       "predicted": "structured_data",
-      "confidence": 0.96,
+      "confidence": 0.987,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 15,
+      "total_ms": 102,
       "top_signals": [
         "format:json=0.90",
-        "head:structured_data=0.60"
+        "head:structured_data=0.87"
       ]
     },
     {
       "path": "files/data.csv",
       "gold": "structured_data",
       "predicted": "structured_data",
-      "confidence": 0.595,
+      "confidence": 0.831,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 12,
+      "total_ms": 131,
       "top_signals": [
         "format:csv=0.60",
-        "disagreement:a=structured_data,b=email_body->structured_data=0.60"
+        "head:structured_data=0.58"
       ]
     },
     {
       "path": "files/app_config.yaml",
       "gold": "structured_data",
       "predicted": "structured_data",
-      "confidence": 0.807,
+      "confidence": 0.961,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 7,
+      "total_ms": 96,
       "top_signals": [
         "format:yaml=0.60",
-        "head:log_line=0.41",
-        "head:structured_data=0.52"
+        "head:structured_data=0.90"
       ]
     },
     {
@@ -1036,7 +1038,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 1910,
+      "total_ms": 1133,
       "top_signals": [
         "no_exif+screen_dims=0.70",
         "ocr:text_density=0.45",
@@ -1052,7 +1054,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 1027,
+      "total_ms": 587,
       "top_signals": [
         "no_exif+screen_dims=0.70",
         "clip:screenshot=0.92"
@@ -1067,9 +1069,10 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 605,
+      "total_ms": 287,
       "top_signals": [
         "no_exif+screen_dims=0.70",
+        "head:chat_message=0.36",
         "clip:screenshot=0.92"
       ]
     },
@@ -1082,7 +1085,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 738,
+      "total_ms": 388,
       "top_signals": [
         "png_no_exif=0.55",
         "rule:aws_access_key=0.97",
@@ -1099,11 +1102,10 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 760,
+      "total_ms": 419,
       "top_signals": [
         "png_no_exif=0.55",
         "ocr:receipt_keywords=0.60",
-        "ocr:text_density=0.45",
         "clip:receipt=0.92"
       ]
     },
@@ -1116,7 +1118,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 738,
+      "total_ms": 336,
       "top_signals": [
         "png_no_exif=0.55",
         "ocr:receipt_keywords=0.60",
@@ -1132,7 +1134,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 752,
+      "total_ms": 389,
       "top_signals": [
         "png_no_exif=0.55",
         "ocr:receipt_keywords=0.60",
@@ -1143,66 +1145,66 @@
       "path": "images/scan_letter.png",
       "gold": "document_scan",
       "predicted": "document_scan",
-      "confidence": 0.75,
+      "confidence": 0.86,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 1013,
+      "total_ms": 471,
       "top_signals": [
         "png_no_exif=0.55",
-        "clip:document_scan=0.83",
-        "disagreement:a=screenshot,b=document_scan->document_scan=0.75"
+        "ocr:text_density=0.45",
+        "clip:document_scan=0.92",
+        "disagreement:a=screenshot,b=document_scan->document_scan=0.86"
       ]
     },
     {
       "path": "images/scan_recipe.png",
       "gold": "document_scan",
       "predicted": "document_scan",
-      "confidence": 0.719,
+      "confidence": 0.86,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 879,
+      "total_ms": 450,
       "top_signals": [
         "png_no_exif=0.55",
-        "clip:document_scan=0.80",
-        "disagreement:a=screenshot,b=document_scan->document_scan=0.72"
+        "ocr:text_density=0.45",
+        "clip:document_scan=0.92",
+        "disagreement:a=screenshot,b=document_scan->document_scan=0.86"
       ]
     },
     {
       "path": "images/diagram_flowchart.png",
       "gold": "diagram",
       "predicted": "diagram",
-      "confidence": 0.816,
+      "confidence": 0.828,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 550,
+      "total_ms": 329,
       "top_signals": [
         "no_exif+screen_dims=0.70",
-        "clip:diagram=0.91",
-        "disagreement:a=screenshot,b=diagram->diagram=0.82"
+        "clip:diagram=0.92",
+        "disagreement:a=screenshot,b=diagram->diagram=0.83"
       ]
     },
     {
       "path": "images/diagram_barchart.png",
       "gold": "diagram",
-      "predicted": "screenshot",
-      "confidence": 0.697,
+      "predicted": "diagram",
+      "confidence": 0.828,
       "ok": true,
       "needs_review": false,
-      "missing_tags": [
-        "diagram"
-      ],
+      "missing_tags": [],
       "label_ok": true,
-      "total_ms": 721,
+      "total_ms": 299,
       "top_signals": [
         "no_exif+screen_dims=0.70",
-        "clip:diagram=0.80",
-        "disagreement:a=screenshot,b=diagram->screenshot=0.70"
+        "clip:diagram=0.92",
+        "disagreement:a=screenshot,b=diagram->diagram=0.83"
       ]
     },
     {
@@ -1214,7 +1216,7 @@
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 625,
+      "total_ms": 177,
       "top_signals": [
         "jpeg_no_exif=0.50",
         "clip:photo=0.92"
@@ -1224,124 +1226,123 @@
       "path": "images/photo_02_city.jpg",
       "gold": "photo",
       "predicted": "photo",
-      "confidence": 0.714,
+      "confidence": 0.96,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 441,
+      "total_ms": 175,
       "top_signals": [
         "jpeg_no_exif=0.50",
-        "clip:photo=0.43"
+        "clip:photo=0.92"
       ]
     },
     {
       "path": "images/photo_03_forest.jpg",
       "gold": "photo",
       "predicted": "photo",
-      "confidence": 0.764,
+      "confidence": 0.96,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 518,
+      "total_ms": 181,
       "top_signals": [
         "jpeg_no_exif=0.50",
-        "clip:screenshot=0.39",
-        "clip:photo=0.53"
+        "clip:photo=0.92"
       ]
     },
     {
       "path": "images/photo_04_coast.jpg",
       "gold": "photo",
       "predicted": "photo",
-      "confidence": 0.865,
+      "confidence": 0.96,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 448,
+      "total_ms": 174,
       "top_signals": [
         "jpeg_no_exif=0.50",
-        "clip:photo=0.73"
+        "clip:photo=0.92"
       ]
     },
     {
       "path": "images/photo_05_meadow.jpg",
       "gold": "photo",
       "predicted": "photo",
-      "confidence": 0.798,
+      "confidence": 0.96,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 446,
+      "total_ms": 177,
       "top_signals": [
         "jpeg_no_exif=0.50",
-        "clip:photo=0.60",
-        "clip:document_scan=0.37"
+        "clip:photo=0.92"
       ]
     },
     {
       "path": "images/photo_06_river.jpg",
       "gold": "photo",
       "predicted": "photo",
-      "confidence": 0.644,
+      "confidence": 0.955,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 478,
+      "total_ms": 175,
       "top_signals": [
-        "jpeg_no_exif=0.50"
+        "jpeg_no_exif=0.50",
+        "clip:photo=0.91"
       ]
     },
     {
       "path": "images/meme_deploy.png",
       "gold": "meme",
       "predicted": "meme",
-      "confidence": 0.817,
+      "confidence": 0.828,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 491,
+      "total_ms": 275,
       "top_signals": [
         "png_no_exif=0.55",
-        "clip:meme=0.91",
-        "disagreement:a=screenshot,b=meme->meme=0.82"
+        "clip:meme=0.92",
+        "disagreement:a=screenshot,b=meme->meme=0.83"
       ]
     },
     {
       "path": "images/meme_classifier.png",
       "gold": "meme",
       "predicted": "meme",
-      "confidence": 0.702,
+      "confidence": 0.828,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 512,
+      "total_ms": 278,
       "top_signals": [
         "png_no_exif=0.55",
-        "clip:meme=0.78",
-        "disagreement:a=screenshot,b=meme->meme=0.70"
+        "clip:meme=0.92",
+        "disagreement:a=screenshot,b=meme->meme=0.83"
       ]
     },
     {
       "path": "images/qr_pairing.png",
       "gold": "unsorted",
       "predicted": "document_scan",
-      "confidence": 0.693,
+      "confidence": 0.658,
       "ok": true,
       "needs_review": false,
       "missing_tags": [],
       "label_ok": true,
-      "total_ms": 453,
+      "total_ms": 102,
       "top_signals": [
         "png_no_exif=0.55",
-        "clip:document_scan=0.77",
-        "disagreement:a=screenshot,b=document_scan->document_scan=0.69"
+        "clip:document_scan=0.73",
+        "disagreement:a=screenshot,b=document_scan->document_scan=0.66"
       ]
     }
   ]

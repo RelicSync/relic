@@ -1,6 +1,6 @@
-# sift eval — relic-sift\corpus\manifest.json (79 items, ml=true, ocr=true)
+# sift eval — relic-sift/corpus/manifest.json (79 items, ml=true, ocr=true)
 
-**79 items** · accuracy **100.0%** · macro-F1 **1.000** · secret recall **100.0%** (10 items) · label recall 100.0% · required-tag pass 98.7% · needs_review 13.9% · p50 9 ms · p95 760 ms
+**79 items** · accuracy **100.0%** · macro-F1 **1.000** · secret recall **100.0%** (10 items) · label recall 100.0% · required-tag pass 100.0% · needs_review 12.7% · p50 94 ms · p95 419 ms
 
 ## Per-category
 
@@ -31,7 +31,3 @@
 
 ## Misses (0)
 
-
-## Missing required relic_tags (1)
-
-- images/diagram_barchart.png: missing ["diagram"]

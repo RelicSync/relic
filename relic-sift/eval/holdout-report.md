@@ -1,6 +1,6 @@
-# sift eval — relic-sift\corpus\holdout\manifest.json (17 items, ml=true, ocr=true)
+# sift eval — relic-sift/corpus/holdout/manifest.json (17 items, ml=true, ocr=true)
 
-**17 items** · accuracy **100.0%** · macro-F1 **1.000** · secret recall **100.0%** (3 items) · label recall 100.0% · required-tag pass 100.0% · needs_review 0.0% · p50 9 ms · p95 412 ms
+**17 items** · accuracy **100.0%** · macro-F1 **1.000** · secret recall **100.0%** (3 items) · label recall 100.0% · required-tag pass 100.0% · needs_review 0.0% · p50 105 ms · p95 294 ms
 
 ## Per-category
 

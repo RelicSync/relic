@@ -158,8 +158,7 @@
           "pii_present"
         ],
         "relic_tags": [
-          "email",
-          "pii"
+          "email"
         ]
       },
       "note": ""
@@ -179,8 +178,7 @@
           "pii_present"
         ],
         "relic_tags": [
-          "phone",
-          "pii"
+          "phone"
         ]
       },
       "note": ""
@@ -496,8 +494,7 @@
         ],
         "relic_tags": [
           "data",
-          "csv",
-          "pii"
+          "csv"
         ]
       },
       "note": ""
@@ -515,9 +512,7 @@
         "labels": [
           "pii_present"
         ],
-        "relic_tags": [
-          "pii"
-        ]
+        "relic_tags": []
       },
       "note": ""
     },
@@ -724,8 +719,7 @@
           "pii_present"
         ],
         "relic_tags": [
-          "iban",
-          "pii"
+          "iban"
         ]
       },
       "note": ""

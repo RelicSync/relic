@@ -98,7 +98,11 @@ impl Sift {
             false
         };
         if config.enable_ml && ort_ready {
-            if models::is_present(&config.model_dir, &models::BGE) {
+            // Gate on the spec the loader will actually resolve (Gemma with a
+            // BGE fallback) — a literal BGE check reads Gemma-only installs as
+            // "not downloaded", and every fresh install is Gemma-only since
+            // `models download` purges BGE once Gemma lands.
+            if models::is_present(&config.model_dir, models::classifier_spec(&config.model_dir)) {
                 match TextClassifier::load(&config.model_dir, &taxonomy) {
                     Ok(m) => text_model = Some(m),
                     Err(e) => warnings.push(format!("text model unavailable: {e}")),

@@ -149,9 +149,7 @@
         "labels": [
           "pii_present"
         ],
-        "relic_tags": [
-          "pii"
-        ]
+        "relic_tags": []
       },
       "note": ""
     },

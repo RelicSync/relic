@@ -123,7 +123,7 @@ text_item(
     "unsorted",
     any_of=STRUCTURAL_ANY,
     labels=["pii_present"],
-    relic_tags=["email", "pii"],
+    relic_tags=["email"],
 )
 text_item(
     "phone_number.txt",
@@ -131,7 +131,7 @@ text_item(
     "unsorted",
     any_of=STRUCTURAL_ANY,
     labels=["pii_present"],
-    relic_tags=["phone", "pii"],
+    relic_tags=["phone"],
 )
 text_item("ipv4.txt", "192.168.50.114", "unsorted", any_of=STRUCTURAL_ANY, relic_tags=["ip"])
 text_item("hex_color.txt", "#7C3AED", "unsorted", any_of=STRUCTURAL_ANY, relic_tags=["color"])
@@ -264,7 +264,7 @@ text_item(
     "id,name,email,signup_date\n1,Ana,ana@example.com,2026-01-15\n2,Ben,ben@example.com,2026-02-20\n3,Iris,iris@example.com,2026-03-08\n",
     "structured_data",
     labels=["pii_present"],
-    relic_tags=["data", "csv", "pii"],
+    relic_tags=["data", "csv"],
 )
 
 # PII in prose
@@ -274,7 +274,6 @@ text_item(
     "note_prose",
     any_of=["chat_message", "unsorted", "structured_data"],
     labels=["pii_present"],
-    relic_tags=["pii"],
 )
 
 # ---------------------------------------------------------------------------
@@ -347,7 +346,7 @@ text_item(
     "unsorted",
     any_of=STRUCTURAL_ANY,
     labels=["pii_present"],
-    relic_tags=["iban", "pii"],
+    relic_tags=["iban"],
 )
 
 # ---------------------------------------------------------------------------
