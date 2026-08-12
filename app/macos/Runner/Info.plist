@@ -4,6 +4,8 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Relic</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIconFile</key>
@@ -37,11 +39,19 @@
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Relic saves a copy of files you copy from your Desktop so you can paste them again later.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Relic saves a copy of files you copy from your Documents folder so you can paste them again later.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Relic saves a copy of files you copy from your Downloads folder so you can paste them again later.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>$(PRODUCT_COPYRIGHT)</string>
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>Relic saves a copy of files you copy from external drives so you can paste them again later.</string>
 </dict>
 </plist>

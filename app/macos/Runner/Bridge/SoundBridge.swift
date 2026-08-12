@@ -19,8 +19,12 @@ enum SoundBridge {
           result(false)
           return
         }
+        // lookupKey returns a path relative to the BUNDLE ROOT
+        // (Contents/Frameworks/App.framework/Resources/flutter_assets/…), not
+        // to Contents/Resources — Bundle.path(forResource:) never finds it.
         let key = FlutterDartProject.lookupKey(forAsset: asset)
-        guard let path = Bundle.main.path(forResource: key, ofType: nil),
+        let path = Bundle.main.bundlePath + "/" + key
+        guard FileManager.default.fileExists(atPath: path),
               let sound = NSSound(contentsOfFile: path, byReference: true) else {
           result(false)
           return

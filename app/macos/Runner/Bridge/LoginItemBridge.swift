@@ -29,7 +29,12 @@ enum LoginItemBridge {
           result(!enable && SMAppService.mainApp.status != .enabled)
         }
       case "get":
-        result(SMAppService.mainApp.status == .enabled)
+        // .requiresApproval means the item IS registered and the user turned it
+        // off in System Settings → Login Items. Reporting that as "off" makes
+        // launch reconciliation re-register on every launch, overriding a
+        // deliberate OS-level choice, so it counts as on here.
+        let status = SMAppService.mainApp.status
+        result(status == .enabled || status == .requiresApproval)
       default:
         result(FlutterMethodNotImplemented)
       }

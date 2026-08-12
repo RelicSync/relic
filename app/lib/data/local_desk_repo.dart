@@ -558,7 +558,16 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
 
   void setLaunchAtLogin(bool on) {
     _launchAtLogin = on;
-    unawaited(setLaunchAtStartup(on));
+    // macOS SMAppService.register() legitimately fails (app outside
+    // /Applications, unsigned build, pre-13) — don't leave the toggle claiming
+    // a state the OS refused. The Windows Run-key write effectively always
+    // succeeds, so this is a no-op there.
+    unawaited(setLaunchAtStartup(on).then((ok) {
+      if (ok || _launchAtLogin != on) return;
+      _launchAtLogin = !on;
+      _savePrefs();
+      notifyListeners();
+    }));
     _savePrefs();
     notifyListeners();
   }

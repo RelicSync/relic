@@ -2674,6 +2674,8 @@ class _SettingsViewState extends State<SettingsView> {
 
   /// Blocklist fallback for programs that aren't running: pick the .exe
   /// itself; the stored key is the file's stem, same as the watcher reads.
+  /// Windows-only — a macOS key comes from the .app's bundle id, which no file
+  /// pick can give us, so the Mac relies on the running-apps list.
   Future<void> _browseBlockExe() async {
     try {
       final res = await FilePicker.platform.pickFiles(
@@ -2690,8 +2692,8 @@ class _SettingsViewState extends State<SettingsView> {
   }
 
   /// "Never capture from" — a chip list of blocked apps plus a picker of
-  /// what's open right now (same exe-stem identity the watcher gate uses),
-  /// with browse-for-.exe covering programs that aren't running.
+  /// what's open right now (same app-key identity the watcher gate uses),
+  /// with browse-for-.exe covering programs that aren't running on Windows.
   Widget _blocklistSection(RelicColors c) {
     final blocked = widget.repo.captureBlocklist.toList()..sort();
     final pickable = _blockPickerApps
@@ -2773,9 +2775,11 @@ class _SettingsViewState extends State<SettingsView> {
                             color: hovered ? c.text : c.textMuted),
                       ),
                       const SizedBox(width: 10),
-                      _btn(c, 'Browse…', LucideIcons.folderOpen,
-                          onTap: _browseBlockExe),
-                      const SizedBox(width: 8),
+                      if (Platform.isWindows) ...[
+                        _btn(c, 'Browse…', LucideIcons.folderOpen,
+                            onTap: _browseBlockExe),
+                        const SizedBox(width: 8),
+                      ],
                       _btn(c, 'Done', LucideIcons.x,
                           onTap: () =>
                               setState(() => _blockPickerOpen = false)),
@@ -2793,7 +2797,9 @@ class _SettingsViewState extends State<SettingsView> {
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 10),
                       child: Text(
-                          'Nothing else is open. Use Browse to pick a program file.',
+                          Platform.isWindows
+                              ? 'Nothing else is open. Use Browse to pick a program file.'
+                              : 'Nothing else is open. Open the app you want to block, then refresh.',
                           style: RelicTheme.sans(
                               size: 11.5, color: c.textMuted)),
                     )

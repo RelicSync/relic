@@ -28,24 +28,47 @@ List<double>? cursorScreenPointPhysical() =>
 Future<String?> foregroundAppKey() async {
   if (Platform.isWindows) return win.foregroundAppExe();
   if (Platform.isMacOS) {
-    final id = await mac.frontmostBundleId();
-    if (id == null) return null;
-    final lower = id.toLowerCase();
-    return _macFriendlyBundle[lower] ?? lower.split('.').last;
+    final app = await mac.frontmostApp();
+    if (app == null) return null;
+    return macAppKey(app.bundleId, app.name);
   }
   return null;
+}
+
+/// Relic's own macOS bundle id — PRODUCT_BUNDLE_IDENTIFIER in
+/// macos/Runner/Configs/AppInfo.xcconfig; change both together.
+const _relicMacBundleId = 'space.relic.mac';
+
+/// macOS: the app key for a bundle id plus the localized name macOS reports
+/// for it. Null for Relic itself, which must never be a source tag or a
+/// paste-destination ranking context (desktop.dart's summon read).
+///
+/// Bundle ids are not stems: the last component is routinely meaningless
+/// ("com.spotify.client", "us.zoom.xos", "notion.id"), so the localized name
+/// carries the fallback and the id only backstops a nameless app.
+String? macAppKey(String bundleId, String name) {
+  final id = bundleId.toLowerCase();
+  if (id == _relicMacBundleId) return null;
+  final friendly = _macFriendlyBundle[id];
+  if (friendly != null) return friendly;
+  final fromName = name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+  if (fromName.length >= 2) {
+    return fromName.length > 24 ? fromName.substring(0, 24) : fromName;
+  }
+  return id.split('.').last;
 }
 
 /// App keys that would be noise as a source tag: our own app, the shell
 /// (file copies arrive with the file manager focused), and hosts too generic
 /// to mean anything. Public because the blocklist picker filters the same
-/// noise out of its running-apps list.
+/// noise out of its running-apps list. Relic's own macOS bundle is absent on
+/// purpose: [macAppKey] nulls it outright, so it never reaches a key.
 const kAppKeyNoise = {
   // Windows exe stems
   'relic_app', 'relic', 'explorer', 'applicationframehost', 'searchhost',
   'shellexperiencehost', 'dllhost', 'sihost', 'lockapp', 'rundll32',
-  // macOS bundle stems
-  'relicapp', 'finder', 'dock', 'loginwindow', 'screencaptureui',
+  // macOS keys (see the com.apple.* rows of _macFriendlyBundle)
+  'finder', 'dock', 'loginwindow', 'screencaptureui',
   'universalcontrol', 'windowserver',
 };
 
@@ -77,9 +100,9 @@ const _friendly = {
   'cmd': 'terminal',
 };
 
-/// macOS: bundle id (lowercased) → app key, for ids whose last component is
-/// wrong or inconsistent as a stem. Anything else falls back to the last
-/// dot-component of the bundle id.
+/// macOS: bundle id (lowercased) → app key, for ids whose derived key would be
+/// wrong, inconsistent, or locale-dependent. Anything else falls back to the
+/// localized name (see [macAppKey]).
 const _macFriendlyBundle = {
   'com.microsoft.edgemac': 'edge',
   'com.microsoft.vscode': 'vscode',
@@ -100,6 +123,11 @@ const _macFriendlyBundle = {
   'com.jetbrains.clion': 'clion',
   'com.jetbrains.goland': 'goland',
   'com.google.android.studio': 'androidstudio',
+  'com.spotify.client': 'spotify',
+  'notion.id': 'notion',
+  'us.zoom.xos': 'zoom',
+  'company.thebrowser.browser': 'arc',
+  'com.apple.mobilesms': 'messages',
   // terminals: same SIGINT hazard as Windows — the copy chord must skip them
   'com.apple.terminal': 'terminal',
   'com.googlecode.iterm2': 'terminal',
@@ -107,6 +135,13 @@ const _macFriendlyBundle = {
   'com.mitchellh.ghostty': 'terminal',
   'net.kovidgoyal.kitty': 'terminal',
   'io.alacritty': 'terminal',
+  // system surfaces, pinned so the kAppKeyNoise keys hold in every locale
+  'com.apple.finder': 'finder',
+  'com.apple.dock': 'dock',
+  'com.apple.loginwindow': 'loginwindow',
+  'com.apple.screencaptureui': 'screencaptureui',
+  'com.apple.universalcontrol': 'universalcontrol',
+  'com.apple.windowserver': 'windowserver',
 };
 
 /// The machine tag to stamp on a capture from the current foreground app, or

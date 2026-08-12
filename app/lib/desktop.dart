@@ -1049,15 +1049,18 @@ class _RealAppState extends State<RealApp>
     if (appKey != null && repo.captureBlocklist.contains(appKey)) return;
     final srcApp = foregroundAppTagFrom(appKey);
 
-    // Explorer file copy (CF_HDROP) takes priority over text/image reps. The
-    // change event can land a beat before Explorer finishes placing CF_HDROP
-    // (or while Explorer still holds the clipboard open), so a single empty
-    // read isn't conclusive — re-poll briefly before giving up on files, or a
-    // real Ctrl+C on a file is silently dropped.
+    // A file copy takes priority over text/image reps. On Windows the change
+    // event can land a beat before Explorer finishes placing CF_HDROP (or
+    // while Explorer still holds the clipboard open), so a single empty read
+    // isn't conclusive — re-poll briefly before giving up on files, or a real
+    // Ctrl+C on a file is silently dropped. NSPasteboard has no such race, and
+    // the re-poll would cost every non-file capture ~200ms of channel hops.
     var files = await clipboardFilePaths();
-    for (var tries = 0; files.isEmpty && tries < 5; tries++) {
-      await Future<void>.delayed(const Duration(milliseconds: 40));
-      files = await clipboardFilePaths();
+    if (Platform.isWindows) {
+      for (var tries = 0; files.isEmpty && tries < 5; tries++) {
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+        files = await clipboardFilePaths();
+      }
     }
     if (files.isNotEmpty) {
       if (!repo.captureFilesEnabled) return; // files disabled → skip entirely
