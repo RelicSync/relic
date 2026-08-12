@@ -90,10 +90,6 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
 
   // Recovery-kit re-entry proof: quiz the user on two random groups before they
   // can leave the kit screen (first save only).
-  final _kitProofA = TextEditingController();
-  final _kitProofB = TextEditingController();
-  (int, int) _kitPicks = (0, 0);
-  List<String> _kitGroups = const [];
 
   // Self-host form (persistent so text survives rebuilds).
   final _shUrl = TextEditingController();
@@ -112,8 +108,6 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
   @override
   void dispose() {
     _pairing?.cancel(); // stop any orphan relay poll when the flow is torn down
-    _kitProofA.dispose();
-    _kitProofB.dispose();
     _shUrl.dispose();
     _shPass.dispose();
     _shSecret.dispose();
@@ -241,15 +235,12 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
     }
   }
 
-  /// Enter the recovery-kit step: render the kit, pick the two groups the
-  /// re-entry proof will quiz, and clear any previous answers.
+  /// Enter the recovery-kit step. (The old re-type-two-groups proof was cut
+  /// 2026-08-12 as too much friction on a phone keyboard; the copy/download
+  /// buttons and the warning header carry the weight now. Desktop still has
+  /// its own version of the proof — see docs/android-apple-parity.md.)
   void _enterRecoveryKit(WorkerRepo repo) {
     _pendingRepo = repo;
-    final kit = RecoveryKit.fromMk(repo.masterKey!, repo.accountEmail ?? '');
-    _kitGroups = RecoveryKit.groups(kit);
-    _kitPicks = pickTwoGroups(_kitGroups.length);
-    _kitProofA.clear();
-    _kitProofB.clear();
     _go(_Step.recoveryKit);
   }
 
@@ -675,11 +666,6 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
   Widget _recoveryKitView(RelicColors c) {
     final repo = _pendingRepo!;
     final kit = RecoveryKit.fromMk(repo.masterKey!, repo.accountEmail ?? '');
-    final proofOk = _kitGroups.isNotEmpty &&
-        Crockford.normalize(_kitProofA.text) ==
-            Crockford.normalize(_kitGroups[_kitPicks.$1]) &&
-        Crockford.normalize(_kitProofB.text) ==
-            Crockford.normalize(_kitGroups[_kitPicks.$2]);
     return _scroll(key: const ValueKey('kit'), [
       _header(c, 'Save your recovery kit',
           'The only way back into your data if you forget your vault passphrase. We cannot recover it for you.'),
@@ -705,18 +691,8 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         const SizedBox(width: 10),
         Expanded(child: _secondaryBtn(c, 'Download', () => _downloadKit(kit))),
       ]),
-      if (_kitGroups.isNotEmpty) ...[
-        const SizedBox(height: 20),
-        Text('Confirm you saved it: re-type these two groups from your kit.',
-            style: TextStyle(color: c.textMuted, height: 1.4)),
-        const SizedBox(height: 12),
-        _field(c, _kitProofA, 'Type group ${_kitPicks.$1 + 1}',
-            onChanged: (_) => setState(() {})),
-        _field(c, _kitProofB, 'Type group ${_kitPicks.$2 + 1}',
-            onChanged: (_) => setState(() {})),
-      ],
-      const SizedBox(height: 8),
-      _primaryBtn(c, 'Continue', proofOk ? () => _finish(repo) : null),
+      const SizedBox(height: 16),
+      _primaryBtn(c, 'Continue', () => _finish(repo)),
     ]);
   }
 
@@ -742,6 +718,31 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
     final name = TextEditingController(text: _deviceName);
     return _scroll(key: const ValueKey('signin'), [
       _header(c, 'Add this device', 'Sign in to your Relic account.'),
+      // The switch-account entry (startAtSignIn) skips the welcome step, so
+      // the OAuth doors must exist here too — most accounts are OAuth, and
+      // without these the flow dead-ends on email/password.
+      OAuthButton(
+          provider: SupabaseProvider.google,
+          onPressed: _busy ? null : () => _startOAuth(SupabaseProvider.google)),
+      const SizedBox(height: 10),
+      OAuthButton(
+          provider: SupabaseProvider.github,
+          onPressed: _busy ? null : () => _startOAuth(SupabaseProvider.github)),
+      const SizedBox(height: 10),
+      OAuthButton(
+          provider: SupabaseProvider.apple,
+          onPressed: _busy ? null : () => _startOAuth(SupabaseProvider.apple)),
+      const SizedBox(height: 14),
+      Row(children: [
+        Expanded(child: Divider(color: c.borderStrong)),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: Text('or use your email',
+              style: TextStyle(color: c.textMuted, fontSize: 12)),
+        ),
+        Expanded(child: Divider(color: c.borderStrong)),
+      ]),
+      const SizedBox(height: 14),
       _field(c, email, 'Email', keyboard: TextInputType.emailAddress),
       _field(c, pass, 'Account password', obscure: true),
       Padding(
