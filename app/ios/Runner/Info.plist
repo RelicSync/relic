@@ -70,6 +70,12 @@
 	     access; iOS requires this usage string or the app is rejected/crashes. -->
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Relic saves images you choose to export to your photo library.</string>
+	<!-- receive_sharing_intent links PHAsset APIs (a fallback path the share
+	     extension never takes — payloads always arrive as files in the App
+	     Group container). App Store processing scans for the linked API and
+	     demands the purpose string anyway. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Relic reads photos you share into it so they can be saved to your vault.</string>
 	<!-- Scanning a pairing QR to add this device to an existing vault. -->
 	<key>NSCameraUsageDescription</key>
 	<string>Relic uses the camera to scan a pairing QR code when you add this device to your vault.</string>
