@@ -1,7 +1,8 @@
 import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { deleteAccount } from "../src/account";
+import type { Auth } from "../src/auth";
 import { setupSchema } from "./helpers";
 
 // deno-lint-ignore no-explicit-any
@@ -88,5 +89,124 @@ describe("deleteAccount", () => {
     await deleteAccount(E, { account: "A", tier: "pro" });
     const r = await E.DB.prepare("SELECT COUNT(*) AS n FROM billing_events").first();
     expect(r.n).toBe(1);
+  });
+
+  it("drops the account_links row that binds a Supabase sub to the account", async () => {
+    await seed("A");
+    await E.DB.prepare(
+      "INSERT INTO account_links (supabase_sub, account_id) VALUES ('sub-A','A')",
+    ).run();
+    await deleteAccount(E, { account: "A", tier: "pro" });
+    const r = await E.DB.prepare("SELECT COUNT(*) AS n FROM account_links").first();
+    expect(r.n).toBe(0);
+  });
+});
+
+// The Supabase identity teardown (App Store Guideline 5.1.1(v)): deleting the
+// account must delete the auth row + its email, not only Relic's own data.
+describe("deleteAccount Supabase identity", () => {
+  // deno-lint-ignore no-explicit-any
+  let fetchMock: any;
+  const realFetch = globalThis.fetch;
+
+  // A service-role key shape, deliberately fake.
+  const SVC = "svc_role_test_key"; // scan-ok
+  const supabaseEnv = () => ({
+    ...E,
+    SUPABASE_URL: "https://auth.example.test",
+    SUPABASE_SERVICE_ROLE_KEY: SVC,
+  });
+  const supabaseAuth = (account: string, sub: string): Auth => ({
+    account, tier: "pro", supabase: true, supabaseSub: sub,
+  });
+
+  beforeEach(() => {
+    fetchMock = vi.fn(async () => new Response("", { status: 200 }));
+    globalThis.fetch = fetchMock;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it("calls the admin delete endpoint with the sub and service-role headers", async () => {
+    await seed("A");
+    const res = await deleteAccount(supabaseEnv(), supabaseAuth("A", "A"));
+    expect(await res.json()).toMatchObject({ deleted: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://auth.example.test/auth/v1/admin/users/A");
+    expect(init.method).toBe("DELETE");
+    expect(init.headers.Authorization).toBe(`Bearer ${SVC}`);
+    expect(init.headers.apikey).toBe(SVC);
+  });
+
+  it("deletes the JWT sub, not the account id, when account_links redirects it", async () => {
+    // Legacy vault "legacyAcct" that a Supabase identity "sub-9" signs in to.
+    await seed("legacyAcct");
+    await E.DB.prepare(
+      "INSERT INTO account_links (supabase_sub, account_id) VALUES ('sub-9','legacyAcct')",
+    ).run();
+    await deleteAccount(supabaseEnv(), supabaseAuth("legacyAcct", "sub-9"));
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://auth.example.test/auth/v1/admin/users/sub-9");
+  });
+
+  it("skips the admin call when SUPABASE_SERVICE_ROLE_KEY is not bound", async () => {
+    await seed("A");
+    // E has no service-role key: a self-host / not-yet-configured deploy.
+    const res = await deleteAccount({ ...E, SUPABASE_URL: "https://auth.example.test" }, supabaseAuth("A", "A"));
+    expect(await res.json()).toMatchObject({ deleted: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await rowCount("accounts", "A")).toBe(0); // data teardown unaffected
+  });
+
+  it("skips the admin call for legacy device-token identities", async () => {
+    await seed("A");
+    // No supabase flag / sub: nothing to delete in the identity provider.
+    await deleteAccount(supabaseEnv(), { account: "A", tier: "pro" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("still succeeds, and logs loudly, when the admin call fails", async () => {
+    await seed("A");
+    fetchMock.mockImplementation(async () => new Response("boom", { status: 500 }));
+    const errs = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await deleteAccount(supabaseEnv(), supabaseAuth("A", "A"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ deleted: true });
+    // The data is genuinely gone even though the identity call failed.
+    for (const t of PER_ACCOUNT_TABLES) expect(await rowCount(t, "A")).toBe(0);
+    expect(await r2Count("users/A/")).toBe(0);
+
+    const logged = errs.mock.calls.map(([m]) => String(m)).join("\n");
+    expect(logged).toContain("supabase_user_delete_failed");
+    expect(logged).toContain('"sub":"A"'); // the handle for manual cleanup
+    errs.mockRestore();
+  });
+
+  it("treats a 404 from the admin API as already deleted", async () => {
+    await seed("A");
+    fetchMock.mockImplementation(async () => new Response("", { status: 404 }));
+    const errs = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await deleteAccount(supabaseEnv(), supabaseAuth("A", "A"));
+    expect(await res.json()).toMatchObject({ deleted: true });
+    expect(errs).not.toHaveBeenCalled();
+    errs.mockRestore();
+  });
+
+  it("still succeeds when the admin call throws (network error)", async () => {
+    await seed("A");
+    fetchMock.mockImplementation(async () => {
+      throw new Error("network down");
+    });
+    const errs = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await deleteAccount(supabaseEnv(), supabaseAuth("A", "A"));
+    expect(await res.json()).toMatchObject({ deleted: true });
+    expect(errs.mock.calls.map(([m]) => String(m)).join("\n"))
+      .toContain("supabase_user_delete_error");
+    errs.mockRestore();
   });
 });

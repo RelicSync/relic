@@ -24,12 +24,21 @@ id = "YOUR_KV_NAMESPACE_ID"
 preview_id = "YOUR_KV_PREVIEW_ID"
 
 # Non-secret config. Secrets (STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
-# SUPABASE_JWT_SECRET, RESEND_API_KEY) are set with `wrangler secret put`.
+# SUPABASE_JWT_SECRET, SUPABASE_SERVICE_ROLE_KEY, RESEND_API_KEY) are set with
+# `wrangler secret put` and never appear in this file.
 [vars]
 APP_BASE_URL = "https://your-domain.example"
 # Supabase auth bridge (optional; uncomment and fill in to enable JWT auth.
 # Omitted -> the worker runs with legacy device-token auth only).
 # SUPABASE_URL = "https://YOUR-PROJECT.supabase.co"
+#
+# If you enable Supabase, also set the SECRET (not a var):
+#   npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+# It is the Supabase service_role key, used for exactly one call: deleting the
+# user's auth identity during DELETE /account, so "delete my account" removes
+# the email from Supabase too (App Store Guideline 5.1.1(v)). Leave it unset and
+# that one call is skipped; everything else, including the full data teardown,
+# works unchanged. Treat the key as highly privileged: it bypasses RLS.
 # Stripe price -> tier map (optional; omit to disable billing entirely).
 STRIPE_PRICE_MAP = '{"price_YOUR_PRO_MONTHLY":"pro","price_YOUR_PRO_YEARLY":"pro","price_YOUR_MAX_MONTHLY":"max","price_YOUR_MAX_YEARLY":"max"}'
 

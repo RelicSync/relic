@@ -1,9 +1,16 @@
 // DELETE /account — irreversible account teardown. Cancels the Stripe
 // subscription, wipes every R2 object under the account prefix (keyparams, relic
-// envelopes, blobs), drops all per-account D1 rows, and clears the account's KV
-// pairing/revocation keys. Because content is E2E-encrypted and the Worker never
-// held the key, deleting the R2 objects + keyparams makes it unrecoverable — a
-// true delete, not a soft one.
+// envelopes, blobs), drops all per-account D1 rows, clears the account's KV
+// pairing/revocation keys, and finally deletes the Supabase auth identity.
+// Because content is E2E-encrypted and the Worker never held the key, deleting
+// the R2 objects + keyparams makes it unrecoverable — a true delete, not a soft
+// one.
+//
+// ORDER MATTERS: Relic's own data goes first, the identity last. If the identity
+// call fails we still return success (the data really is gone, and the client
+// has already signed itself out); the failure is logged loudly for manual
+// cleanup. Deleting the identity first would risk the opposite: the auth row
+// gone while the vault survives, unreachable and undeletable.
 //
 // NOTE: billing_events is a GLOBAL Stripe idempotency ledger keyed by event id
 // (no account_id) — intentionally left intact so replays stay inert.
@@ -41,6 +48,63 @@ async function purgeKvPrefix(kv: KVNamespace, prefix: string): Promise<void> {
   } while (cursor);
 }
 
+// Delete the user's Supabase (GoTrue) auth identity via the admin API. Without
+// this, "delete my account" only deletes the account's DATA — the auth row, and
+// the email address in it, survives and can still be signed in against. App
+// Store Guideline 5.1.1(v) requires the account itself to go, and the privacy
+// policy promises the email is removed.
+//
+// Best-effort, in the same spirit as the Stripe cancel above and the Resend
+// sends in stripe.ts: it can never fail the deletion. Skipped silently when
+// there is no Supabase identity to delete (legacy device-token auth, self-host
+// deployments — see selfhost/src/adapters/env.ts) or when the service-role key
+// isn't configured. A configured-but-failing call logs at error level WITH the
+// sub, which is the handle a maintainer needs to finish the job by hand.
+async function deleteSupabaseUser(env: Env, auth: Auth): Promise<void> {
+  const sub = auth.supabaseSub;
+  if (!auth.supabase || !sub) return; // no Supabase identity behind this request
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.log(JSON.stringify({
+      evt: "supabase_user_delete_skipped",
+      account: auth.account,
+      reason: !env.SUPABASE_URL ? "no_supabase_url" : "no_service_role_key",
+    }));
+    return;
+  }
+  // NOTE: SUPABASE_URL is the canonical auth origin (custom auth domain in
+  // production, the *.supabase.co project URL otherwise). Both proxy GoTrue, so
+  // /auth/v1/admin/users/{id} is correct either way. The key goes in BOTH
+  // Authorization and apikey — GoTrue's admin routes want both.
+  const base = env.SUPABASE_URL.replace(/\/+$/, "");
+  try {
+    const r = await fetch(`${base}/auth/v1/admin/users/${encodeURIComponent(sub)}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      },
+    });
+    // 404 = already gone (a retried delete). Same end state, so: success.
+    if (r.ok || r.status === 404) {
+      console.log(JSON.stringify({
+        evt: "supabase_user_deleted", account: auth.account, status: r.status,
+      }));
+      return;
+    }
+    console.error(JSON.stringify({
+      evt: "supabase_user_delete_failed",
+      account: auth.account,
+      sub, // logged on purpose: the identity that must be deleted by hand
+      status: r.status,
+      body: (await r.text().catch(() => "")).slice(0, 300),
+    }));
+  } catch (e) {
+    console.error(JSON.stringify({
+      evt: "supabase_user_delete_error", account: auth.account, sub, err: String(e),
+    }));
+  }
+}
+
 export async function deleteAccount(env: Env, auth: Auth): Promise<Response> {
   const acct = auth.account;
 
@@ -76,6 +140,7 @@ export async function deleteAccount(env: Env, auth: Auth): Promise<Response> {
     env.DB.prepare("DELETE FROM tokens WHERE account_id = ?1").bind(acct),
     env.DB.prepare("DELETE FROM subscriptions WHERE account_id = ?1").bind(acct),
     env.DB.prepare("DELETE FROM shares WHERE account_id = ?1").bind(acct),
+    env.DB.prepare("DELETE FROM account_links WHERE account_id = ?1").bind(acct),
     env.DB.prepare("DELETE FROM accounts WHERE account_id = ?1").bind(acct),
   ]);
 
@@ -84,6 +149,9 @@ export async function deleteAccount(env: Env, auth: Auth): Promise<Response> {
     await purgeKvPrefix(env.PAIR, `pair:${acct}:`);
     await purgeKvPrefix(env.PAIR, `rev:${acct}:`);
   }
+
+  // 5) LAST: the Supabase auth identity itself. Best-effort — see the function.
+  await deleteSupabaseUser(env, auth);
 
   return json({ deleted: true, objects });
 }

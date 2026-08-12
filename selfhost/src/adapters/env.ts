@@ -4,6 +4,9 @@
 // Everything billing/auth-related is deliberately left undefined:
 //   - No SUPABASE_URL / SUPABASE_JWT_SECRET  -> authenticate() skips the JWT path
 //     entirely and uses the legacy device-token path (sha256 lookup in `tokens`).
+//     No SUPABASE_SERVICE_ROLE_KEY either: there is no Supabase identity behind
+//     a self-hosted request, so DELETE /account skips the identity-delete call
+//     and does its full data teardown as usual (worker/src/account.ts).
 //   - No STRIPE_*                            -> every /stripe/* route 503s and
 //     billing is inert (the worker already early-returns without the keys).
 //   - No RL_* limiters                       -> rateLimit() fails open (proceeds).

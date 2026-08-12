@@ -45,6 +45,12 @@ export interface Env {
   // minted before the custom-domain switch (or by old client builds) carry this
   // issuer, so both are accepted. Same JWKS either way.
   SUPABASE_JWT_SECRET?: string; // secret — ONLY if using legacy HS256 tokens
+  SUPABASE_SERVICE_ROLE_KEY?: string; // secret — GoTrue admin key. Used for
+  // exactly one thing: DELETE /auth/v1/admin/users/{sub} during account
+  // deletion, so deleting an account also deletes the identity (and its email)
+  // in Supabase — App Store Guideline 5.1.1(v). Absent (self-host, legacy
+  // device-token deploys, any setup with no Supabase) -> that call is skipped
+  // and the rest of the teardown is unaffected. See src/account.ts.
 
   // --- Stripe (docs/setup/03-stripe.md) ---
   STRIPE_SECRET_KEY?: string; // secret (restricted key)

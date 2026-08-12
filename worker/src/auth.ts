@@ -29,6 +29,10 @@ export interface Auth {
   device?: string; // the X-Relic-Device id, when the client sent one
   supabase?: boolean; // true when the identity came from a Supabase JWT (not a
   // legacy device token). Legacy tokens are grandfathered past the verify gate.
+  supabaseSub?: string; // Supabase path only: the token's `sub` — the GoTrue
+  // user id. Usually identical to `account`, but NOT when an account_links row
+  // redirects this identity onto a pre-existing account, so never assume.
+  // DELETE /account uses it to delete the identity itself (src/account.ts).
   emailVerified?: boolean; // Supabase path only: the token's email-verification
   // signal (see isEmailVerified). Undefined = unknown / not applicable.
   tokenIssuedAt?: number; // Supabase path only: the JWT's iat (unix seconds).
@@ -173,6 +177,7 @@ export async function authenticate(req: Request, env: Env): Promise<Auth | Respo
         tier,
         email: claims.email,
         supabase: true,
+        supabaseSub: claims.sub,
         emailVerified: claims.emailVerified,
         tokenIssuedAt: claims.iat,
       };
