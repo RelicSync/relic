@@ -1,0 +1,12 @@
+// Base configuration for the RelicShare share extension (Debug).
+// Same three layers the Runner target gets from Debug.xcconfig:
+//   1. the CocoaPods search paths / link flags for receive_sharing_intent
+//      (optional include: it only exists after `pod install`, which the Flutter
+//      tool runs for you — never run it by hand),
+//   2. Generated.xcconfig for FLUTTER_BUILD_NAME / FLUTTER_BUILD_NUMBER so the
+//      appex version always matches the app it is embedded in,
+//   3. RelicIds.xcconfig for RELIC_SHARE_BUNDLE_ID / RELIC_APP_GROUP, so the
+//      extension's bundle id and App Group can never drift from the app's.
+#include? "Pods/Target Support Files/Pods-RelicShare/Pods-RelicShare.debug.xcconfig"
+#include "Generated.xcconfig"
+#include "RelicIds.xcconfig"

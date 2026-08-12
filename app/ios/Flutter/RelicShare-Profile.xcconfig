@@ -1,0 +1,5 @@
+// Base configuration for the RelicShare share extension (Profile).
+// See RelicShare-Debug.xcconfig for what each include contributes.
+#include? "Pods/Target Support Files/Pods-RelicShare/Pods-RelicShare.profile.xcconfig"
+#include "Generated.xcconfig"
+#include "RelicIds.xcconfig"

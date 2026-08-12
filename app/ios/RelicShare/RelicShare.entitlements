@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The only shared surface between the extension and the app. Value comes
+	     from Flutter/RelicIds.xcconfig (see Runner/Runner.entitlements). -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>$(RELIC_APP_GROUP)</string>
+	</array>
+</dict>
+</plist>

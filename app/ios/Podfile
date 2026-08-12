@@ -34,6 +34,15 @@ target 'Runner' do
   target 'RunnerTests' do
     inherit! :search_paths
   end
+
+  # The RelicShare share extension links receive_sharing_intent's
+  # RSIShareViewController. :search_paths gives it the framework search paths and
+  # -framework flags without a second copy of the pods; the frameworks themselves
+  # live in Runner.app/Frameworks and the appex finds them through the
+  # @executable_path/../../Frameworks rpath set on the target.
+  target 'RelicShare' do
+    inherit! :search_paths
+  end
 end
 
 post_install do |installer|

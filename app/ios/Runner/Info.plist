@@ -73,6 +73,11 @@
 	<!-- Scanning a pairing QR to add this device to an existing vault. -->
 	<key>NSCameraUsageDescription</key>
 	<string>Relic uses the camera to scan a pairing QR code when you add this device to your vault.</string>
+	<!-- The App Group the RelicShare extension hands shared payloads over in.
+	     receive_sharing_intent reads this key on both sides; the value comes from
+	     Flutter/RelicIds.xcconfig so the app and the appex cannot drift. -->
+	<key>AppGroupId</key>
+	<string>$(RELIC_APP_GROUP)</string>
 	<!-- Custom URL scheme so a Shortcut (e.g. bound to Back Tap / Action
 	     Button) can fire relic://capture to capture the clipboard. -->
 	<key>CFBundleURLTypes</key>
@@ -85,6 +90,21 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>relic</string>
+			</array>
+		</dict>
+		<!-- Private hand-off scheme. RelicShare opens
+		     ShareMedia-space.relic.app:share after staging the payload in the
+		     App Group; the plugin only accepts URLs prefixed with its own bundle
+		     id, so this is not a general entry point. Required by
+		     receive_sharing_intent 1.8.1. -->
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>space.relic.app.share</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>ShareMedia-$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 			</array>
 		</dict>
 	</array>
