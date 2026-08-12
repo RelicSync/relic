@@ -6,6 +6,7 @@ import FlutterMacOS
 /// RegisterGeneratedPlugins.
 enum RelicBridges {
   static func register(with messenger: FlutterBinaryMessenger) {
+    ActivationBridge.register(with: messenger)
     ClipboardBridge.register(with: messenger)
     InputBridge.register(with: messenger)
     ForegroundAppBridge.register(with: messenger)

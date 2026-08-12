@@ -7,8 +7,10 @@
 // The application's name. By default this is also the title of the Flutter window.
 PRODUCT_NAME = relic_app
 
-// The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = app.relic.relicApp
+// The application's bundle identifier. Family: space.relic.* (relic.space),
+// distinct from the iOS app id space.relic.app — Keychain access groups and
+// TCC grants key off this; do not change after release.
+PRODUCT_BUNDLE_IDENTIFIER = space.relic.mac
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 app.relic. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 Relic. All rights reserved.

@@ -10,5 +10,12 @@
 	<true/>
 	<key>com.apple.security.network.server</key>
 	<true/>
+	<!-- flutter_secure_storage uses the data-protection keychain on macOS;
+	     without this access group (which requires real, non-ad-hoc signing)
+	     every read/write fails with errSecMissingEntitlement (-34018). -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	</array>
 </dict>
 </plist>

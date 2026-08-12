@@ -15,6 +15,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app_globals.dart';
+import 'platform/app_activation.dart';
 import 'platform/clipboard_bridge.dart';
 import 'platform/foreground_app.dart';
 import 'platform/gem_toast.dart';
@@ -817,6 +818,9 @@ class _RealAppState extends State<RealApp>
         await windowManager.hide();
         _visible = false;
       } else {
+        // LSUIElement agents are refused normal activation while the OAuth
+        // browser is frontmost — ask forcefully first (no-op on Windows).
+        await activateApp();
         await windowManager.setAlwaysOnTop(true);
         await windowManager.show();
         await windowManager.focus();
