@@ -122,8 +122,13 @@ Future<UpdateResult> checkForUpdate(String current, {http.Client? client}) async
 /// Pure manifest → decision core of [checkForUpdate], split out for tests.
 @visibleForTesting
 UpdateInfo? updateFromManifest(Map<String, dynamic> j, String current) {
-  final remote = (j['version'] as String?)?.trim();
   final entry = _platformEntry(j);
+  // Platforms release on their own cadence: an entry carrying its own
+  // `version` is authoritative for this platform, the top-level version is
+  // the shared fallback. Without this, a Windows-only release would offer
+  // every Mac an "update" whose download is still the old Mac build.
+  final remote = ((entry?['version'] as String?) ?? (j['version'] as String?))
+      ?.trim();
   final url = entry == null ? null : (entry['url'] as String?)?.trim();
   if (remote == null || remote.isEmpty || url == null || url.isEmpty) {
     return null;

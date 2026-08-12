@@ -84,6 +84,29 @@ void main() {
     expect(info, isNull);
   });
 
+  // Platforms release on their own cadence: the entry's own version must beat
+  // the top-level one, or a Windows-only release "updates" every Mac to a
+  // download that is still the old Mac build.
+  test('platform entry version outranks the shared top-level version', () {
+    final m = {
+      'version': '9.9.9', // another platform just shipped
+      'platforms': {
+        hostKey: {'url': 'https://relic.space/download/$hostKey', 'version': '1.2.0'},
+      },
+    };
+    expect(updateFromManifest(m, '1.2.0'), isNull,
+        reason: 'our platform has nothing newer, whatever the top level says');
+    final offered = updateFromManifest(m, '1.1.0');
+    expect(offered, isNotNull);
+    expect(offered!.version, '1.2.0');
+  });
+
+  test('entry without its own version still falls back to top-level', () {
+    final info = updateFromManifest(manifest(sha: 'AB12'), '1.1.0');
+    expect(info, isNotNull);
+    expect(info!.version, '1.2.0');
+  });
+
 
   // ---- checkForUpdate outcomes -------------------------------------------
   // The whole point of UpdateResult: "couldn't check" must never be dressed up
