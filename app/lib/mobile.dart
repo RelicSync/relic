@@ -1248,6 +1248,10 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     showModalBottomSheet<void>(
       context: ctx,
       isScrollControlled: true,
+      // A scroll-controlled sheet may grow to full height; without this it
+      // slides under the iOS status bar and the close button lands in the
+      // unreachable clock/battery strip.
+      useSafeArea: true,
       // Transparent: the panel color lives inside the StatefulBuilder (below) so
       // it repaints live when appearance flips. A backgroundColor set here is
       // captured once at open time and would stay stale until the sheet reopens.
@@ -2010,7 +2014,10 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
         child: Scaffold(
           backgroundColor: colors.base,
           resizeToAvoidBottomInset: false,
-          body: SafeArea(child: body),
+          // bottom: false — the popup surface runs under the home indicator
+          // (it pads its own list/toast by the inset); a bottom SafeArea here
+          // leaves a dead bar under the FAB on iPhone.
+          body: SafeArea(bottom: false, child: body),
           // Manual capture — only once connected, and never over a dialog.
           floatingActionButton: _repo == null || _popupModal
               ? null

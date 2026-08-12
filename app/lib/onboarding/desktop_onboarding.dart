@@ -475,7 +475,9 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
       case _Step.welcome:
         return Column(children: [
           const SizedBox(height: 4),
-          const RelicWordmark(gemSize: 34),
+          // Wordmark follows the theme ink — the cream default is only
+          // readable on dark.
+          RelicWordmark(gemSize: 34, color: c.text),
           const SizedBox(height: 20),
           Text('Everything you copy,\non every device.',
               textAlign: TextAlign.center,

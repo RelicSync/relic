@@ -2389,26 +2389,32 @@ class _PopupViewState extends State<PopupView> {
     final searching = _searching;
     // Mini picker: compact, chrome-stripped, cursor-anchored (desktop only).
     // The mode is per-summon (set by the host from which hotkey fired).
-    final mini =
-        (widget.miniSignal?.value ?? false) && !RelicTheme.isMobileOf(context);
+    final mob = RelicTheme.isMobileOf(context);
+    final mini = (widget.miniSignal?.value ?? false) && !mob;
 
     return Focus(
       autofocus: true,
       onKeyEvent: _onKey,
       child: Container(
-        decoration: BoxDecoration(
-          color: c.base,
-          borderRadius: BorderRadius.circular(Radii.popup),
-          border: Border.all(color: c.border, width: 1),
-          boxShadow: [
-            BoxShadow(
-              color: c.shadowStrong,
-              blurRadius: 80,
-              spreadRadius: -24,
-              offset: const Offset(0, 40),
-            ),
-          ],
-        ),
+        // On phones the popup IS the screen: flat and edge-to-edge. The
+        // floating-card chrome (radius, border, shadow) is a desktop popup
+        // affordance; on a phone it draws a visible seam against the screen
+        // edges and the home-indicator inset.
+        decoration: mob
+            ? BoxDecoration(color: c.base)
+            : BoxDecoration(
+                color: c.base,
+                borderRadius: BorderRadius.circular(Radii.popup),
+                border: Border.all(color: c.border, width: 1),
+                boxShadow: [
+                  BoxShadow(
+                    color: c.shadowStrong,
+                    blurRadius: 80,
+                    spreadRadius: -24,
+                    offset: const Offset(0, 40),
+                  ),
+                ],
+              ),
         clipBehavior: Clip.antiAlias,
         child: Stack(
           key: _rootStackKey,
@@ -2496,8 +2502,16 @@ class _PopupViewState extends State<PopupView> {
                             // content inset) splits the icon's 24px total
                             // offset evenly, so the highlight card floats
                             // equidistant between the window edge and the
-                            // icon. Change both together.
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            // icon. Change both together. On mobile the
+                            // surface runs under the home indicator, so the
+                            // list pads its own bottom by that inset.
+                            padding: EdgeInsets.only(
+                              left: 12,
+                              right: 12,
+                              bottom: mob
+                                  ? MediaQuery.paddingOf(context).bottom
+                                  : 0,
+                            ),
                             itemCount:
                                 results.length + (widget.repo.hasMore ? 1 : 0),
                             itemBuilder: (_, i) {
@@ -2606,8 +2620,10 @@ class _PopupViewState extends State<PopupView> {
               left: 0,
               right: 0,
               // On mobile, lift the toast clear of the floating + button so the
-              // Undo action isn't hidden behind (and untappable under) the FAB.
-              bottom: RelicTheme.isMobileOf(context) ? 96 : 12,
+              // Undo action isn't hidden behind (and untappable under) the FAB
+              // (plus the home-indicator inset now that the surface is
+              // edge-to-edge).
+              bottom: mob ? 96 + MediaQuery.paddingOf(context).bottom : 12,
               child: ToastStack(queue: _toasts),
             ),
             if (_showCoach)

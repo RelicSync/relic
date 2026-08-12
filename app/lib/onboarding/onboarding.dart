@@ -554,7 +554,9 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
 
   Widget _welcome(RelicColors c) => _scroll(key: const ValueKey('welcome'), [
         const SizedBox(height: 28),
-        const Center(child: RelicWordmark(gemSize: 40)),
+        // Wordmark follows the theme ink — the cream default is only readable
+        // on dark.
+        Center(child: RelicWordmark(gemSize: 40, color: c.text)),
         const SizedBox(height: 24),
         Text('Everything you copy,\non every device.',
             textAlign: TextAlign.center,

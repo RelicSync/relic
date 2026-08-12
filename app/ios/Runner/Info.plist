@@ -88,5 +88,11 @@
 			</array>
 		</dict>
 	</array>
+	<!-- Relic's E2EE uses standard, published algorithms (see relic_crypto),
+	     which qualifies for the mass-market exemption; the full reasoning and
+	     the questionnaire answers live in docs/apple-store-submission.md in the
+	     private repo. Revisit before submission if the crypto surface changes. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>
