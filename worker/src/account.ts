@@ -67,7 +67,7 @@ async function deleteSupabaseUser(env: Env, auth: Auth): Promise<void> {
     console.log(JSON.stringify({
       evt: "supabase_user_delete_skipped",
       account: auth.account,
-      reason: !env.SUPABASE_URL ? "no_supabase_url" : "no_service_role_key",
+      reason: !env.SUPABASE_URL ? "no_supabase_url" : "no_service_role_key", // scan-ok: key name in a log reason
     }));
     return;
   }

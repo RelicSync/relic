@@ -34,7 +34,7 @@ APP_BASE_URL = "https://your-domain.example"
 #
 # If you enable Supabase, also set the SECRET (not a var):
 #   npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
-# It is the Supabase service_role key, used for exactly one call: deleting the
+# It is the Supabase service_role key (scan-ok: name, not a value), used for one call: deleting the
 # user's auth identity during DELETE /account, so "delete my account" removes
 # the email from Supabase too (App Store Guideline 5.1.1(v)). Leave it unset and
 # that one call is skipped; everything else, including the full data teardown,
