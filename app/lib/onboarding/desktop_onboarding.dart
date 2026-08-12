@@ -57,6 +57,12 @@ class DesktopOnboarding extends StatefulWidget {
   /// ([away] false). No-op when null.
   final Future<void> Function(bool away)? onBrowserHandoff;
 
+  /// Desktop only: pin/unpin the host window's always-on-top level. The
+  /// Accessibility step unpins while the user is over in System Settings —
+  /// pinned, our window sits immovably on top of the very switch we sent them
+  /// to flip — and pins again when the flow comes back forward. No-op when null.
+  final Future<void> Function(bool pinned)? onPinWindow;
+
   const DesktopOnboarding({
     super.key,
     required this.onSignInPassphrase,
@@ -69,6 +75,7 @@ class DesktopOnboarding extends StatefulWidget {
     required this.onTryDemo,
     this.startAtSignIn = false,
     this.onBrowserHandoff,
+    this.onPinWindow,
   });
 
   @override
@@ -234,7 +241,13 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
   Future<void> _openAccessibility() async {
     setState(() => _busy = true);
     final trusted = await inputInjectionAvailable(prompt: true);
-    if (!trusted) await openInputPermissionSettings();
+    if (!trusted) {
+      // Come off the always-on-top level before System Settings opens: pinned,
+      // this window sits on top of the very Accessibility switch we are about
+      // to send the user to flip. Every path back re-pins.
+      await widget.onPinWindow?.call(false);
+      await openInputPermissionSettings();
+    }
     if (!mounted) return;
     setState(() {
       _busy = false;
@@ -252,6 +265,7 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
   /// the flow continues where nobody can see it.
   Future<void> _onAccessibilityGranted() async {
     if (!mounted) return;
+    await widget.onPinWindow?.call(true);
     await activateApp();
     if (!mounted) return;
     _go(_Step.welcome);
@@ -593,7 +607,17 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
     return Theme(
       data: materialThemeFor(c),
       child: Container(
-        color: c.base,
+        // Same window-edge treatment as the popup (border + rounded corners).
+        // This surface fills a frameless window that floats over the browser
+        // during OAuth — and the sign-in tab is styled in Relic's own palette,
+        // so without an edge the passphrase screen is indistinguishable from
+        // the page behind it and reads as a *website* asking for the phrase.
+        decoration: BoxDecoration(
+          color: c.base,
+          borderRadius: BorderRadius.circular(Radii.popup),
+          border: Border.all(color: c.borderStrong, width: 1),
+        ),
+        clipBehavior: Clip.antiAlias,
         alignment: Alignment.center,
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 380),
@@ -643,6 +667,8 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
                   ? null
                   : () {
                       _axWatcher.cancel(); // the user got there first
+                      // Idempotent when the trip out never happened (Skip).
+                      unawaited(widget.onPinWindow?.call(true));
                       _go(_Step.welcome);
                     }),
         ]);

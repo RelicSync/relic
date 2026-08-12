@@ -1540,6 +1540,11 @@ class _RealAppState extends State<RealApp>
       return DesktopOnboarding(
         startAtSignIn: _onboardStartAtSignIn,
         onBrowserHandoff: _oauthBrowserHandoff,
+        // The Accessibility step drops the pin while the user is in System
+        // Settings (else we cover the switch), and restores it on the way back.
+        // _show also re-asserts the pin on every summon, so a missed restore
+        // can never make the pin loss permanent.
+        onPinWindow: (pinned) => windowManager.setAlwaysOnTop(pinned),
         onCancel: () {
           setState(() {
             _connecting = false;
