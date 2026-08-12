@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Applied to Contents/MacOS/sift by scripts/build_release_macos.sh, not
+	     by Xcode (the sidecar is a cargo binary copied into the bundle).
+	     onnxruntime is dlopened at runtime: from the model cache when `sift
+	     models download` has run, else the copy we ship beside the binary.
+	     The cached one is Microsoft's ad-hoc-signed dylib, which library
+	     validation rejects under the hardened runtime — so the sidecar turns
+	     library validation off. It loads nothing else foreign. -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

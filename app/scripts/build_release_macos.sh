@@ -93,13 +93,69 @@ if [[ -n "$IDENTITY" ]]; then
 else
   SIGN_ARGS=(--force --sign -)
 fi
-ENTITLEMENTS="$APP_DIR/macos/Runner/Release.entitlements"
+#     App entitlements, real-identity path only. Runner/Release.entitlements is
+#     an Xcode *template*: it carries $(AppIdentifierPrefix), which only the
+#     build expands, and the build also adds application-identifier +
+#     team-identifier — without which a keychain-access-group means nothing. So
+#     re-sign from the expanded copy Xcode emitted (.xcent), minus
+#     get-task-allow: a debuggable binary is an automatic notarization
+#     rejection.
+#     Ad-hoc gets NO entitlements: those keys are *restricted*, and AMFI
+#     SIGKILLs a process that claims them under a signature it cannot validate
+#     ("Code has restricted entitlements, but the validation of its code
+#     signature failed"). Carrying them would cost nothing less than the app's
+#     ability to launch, and buy nothing — the data-protection keychain already
+#     fails -34018 without a real certificate.
+APP_SIGN_ARGS=("${SIGN_ARGS[@]}")
+if [[ -n "$IDENTITY" ]]; then
+  XCENT="$(find "$APP_DIR/build/macos/Build/Intermediates.noindex" \
+    -path "*/Release/*" -name "*.app.xcent" -print -quit 2>/dev/null || true)"
+  if [[ -n "$XCENT" ]]; then
+    SIGN_ENTITLEMENTS="$(mktemp -t relic-entitlements)"
+    cp "$XCENT" "$SIGN_ENTITLEMENTS"
+    /usr/libexec/PlistBuddy -c "Delete :com.apple.security.get-task-allow" \
+      "$SIGN_ENTITLEMENTS" >/dev/null 2>&1 || true
+  else
+    echo "warning: no expanded .xcent found; signing with the raw template" >&2
+    SIGN_ENTITLEMENTS="$APP_DIR/macos/Runner/Release.entitlements"
+  fi
+  APP_SIGN_ARGS+=(--entitlements "$SIGN_ENTITLEMENTS")
+fi
+# The Xcode build embeds a *development* profile (registered Macs only — the
+# restricted keychain entitlement gets the app SIGKILLed everywhere else), so
+# the signed path swaps in the Developer ID profile (ProvisionsAllDevices).
+# The profile was minted once via archive/export with automatic signing and
+# checked in; it contains no secrets (every shipped app carries it).
+DEVID_PROFILE="$APP_DIR/macos/Runner/DeveloperID.provisionprofile"
+if [[ -n "$IDENTITY" ]]; then
+  [[ -f "$DEVID_PROFILE" ]] || { echo "missing $DEVID_PROFILE (see docs/macos-port.md Phase 6)" >&2; exit 1; }
+  cp "$DEVID_PROFILE" "$APP_BUNDLE/Contents/embedded.provisionprofile"
+fi
+# sift dlopens libonnxruntime — the bundled copy (ours, same signature) or, in
+# preference, the one `sift models download` caches, which is Microsoft's
+# ad-hoc-signed build. Under the hardened runtime, library validation would
+# refuse that one, so the sidecar opts out. Nothing else here loads foreign code.
+SIFT_ENTITLEMENTS="$APP_DIR/macos/Runner/Sift.entitlements"
 echo "==> codesign (${IDENTITY:-ad-hoc})"
+for fw in "$APP_BUNDLE/Contents/Frameworks"/*.framework; do
+  [[ -d "$fw" ]] || continue
+  target="$fw"
+  [[ -d "$fw/Versions/A" ]] && target="$fw/Versions/A"
+  codesign "${SIGN_ARGS[@]}" "$target"
+done
 codesign "${SIGN_ARGS[@]}" "$MACOS_DIR/libonnxruntime.dylib"
-codesign "${SIGN_ARGS[@]}" "$MACOS_DIR/sift"
+codesign "${SIGN_ARGS[@]}" --entitlements "$SIFT_ENTITLEMENTS" "$MACOS_DIR/sift"
 codesign "${SIGN_ARGS[@]}" "$HELPERS_DIR/relic"
-codesign "${SIGN_ARGS[@]}" --entitlements "$ENTITLEMENTS" "$APP_BUNDLE"
+codesign "${APP_SIGN_ARGS[@]}" "$APP_BUNDLE"
 codesign --verify --deep --strict "$APP_BUNDLE"
+
+# Belt-and-braces: the swap above must have left a ProvisionsAllDevices
+# profile sealed into the bundle, or the app dies on every non-registered Mac.
+if [[ -n "$IDENTITY" ]]; then
+  security cms -D -i "$APP_BUNDLE/Contents/embedded.provisionprofile" 2>/dev/null \
+    | grep -q "ProvisionsAllDevices" \
+    || { echo "embedded.provisionprofile is not a Developer ID profile" >&2; exit 1; }
+fi
 
 [[ "$SKIP_DMG" == 1 ]] && { echo "==> done (skipped DMG): $APP_BUNDLE"; exit 0; }
 
@@ -108,19 +164,41 @@ mkdir -p "$DIST"
 DMG="$DIST/relic-$VER.dmg"
 rm -f "$DMG"
 echo "==> packaging $DMG"
+# Stage first either way: create-dmg copies the *contents* of its source
+# argument, so handing it the .app would scatter Contents/ over the volume
+# root. The bundle is also renamed here — the target is relic_app.app, users
+# get Relic.app.
+STAGE="$(mktemp -d)"
+chmod 755 "$STAGE"   # mktemp -d is 0700, and that mode becomes the volume root's
+ditto "$APP_BUNDLE" "$STAGE/Relic.app"
+PACKAGED=0
 if command -v create-dmg >/dev/null 2>&1; then
-  create-dmg --volname "Relic $VER" --app-drop-link 450 150 "$DMG" "$APP_BUNDLE"
-else
-  STAGE="$(mktemp -d)"
-  cp -R "$APP_BUNDLE" "$STAGE/Relic.app"
+  # create-dmg makes its own /Applications link, so the stage holds only the
+  # app. It lays the window out by driving Finder, which needs an interactive
+  # session that has granted automation rights — over ssh or from a build
+  # agent that times out (-1712). Cosmetic, so failing over is fine.
+  if create-dmg --volname "Relic $VER" \
+      --window-size 600 400 --icon-size 128 \
+      --icon "Relic.app" 150 190 --app-drop-link 450 190 \
+      "$DMG" "$STAGE"; then
+    PACKAGED=1
+  else
+    echo "==> create-dmg failed; falling back to a plain hdiutil image"
+    rm -f "$DIST"/rw.*.dmg
+  fi
+fi
+if [[ "$PACKAGED" == 0 ]]; then
   ln -s /Applications "$STAGE/Applications"
   hdiutil create -volname "Relic $VER" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
-  rm -rf "$STAGE"
 fi
+rm -rf "$STAGE"
 
 # --- notarize + staple (keychain profile locally, API key in CI; only
 #     meaningful for a real-identity signature — Apple rejects ad-hoc)
 if [[ -n "$IDENTITY" ]]; then
+  # A signed DMG passes Gatekeeper on its own; the staple below then covers it
+  # offline too.
+  codesign --force --timestamp --sign "$IDENTITY" "$DMG"
   if [[ -n "$NOTARY_PROFILE" ]]; then
     echo "==> notarizing (keychain profile)"
     xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait

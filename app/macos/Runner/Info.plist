@@ -24,7 +24,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 			<key>CFBundleURLName</key>
-			<string>app.relic.relic_app</string>
+			<string>space.relic.mac</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>relic</string>
