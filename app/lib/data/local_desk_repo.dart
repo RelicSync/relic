@@ -239,35 +239,118 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   // DIFFERENT account later can be detected and must not auto-upload the
   // previous account's items into it.
   String? _syncedAccount;
-  int _mergeOfferCount = 0;
 
-  /// Items on this device that were last synced with a different account than
-  /// the one now connected (0 = no offer pending). Set at bind time when the
-  /// account changed; the items stay local until the user explicitly accepts
-  /// [acceptMergeOffer] or dismisses via [dismissMergeOffer].
+  /// Holdback stamp for items whose owning account was never recorded — the
+  /// pre-holdback installs that carried a merge-offer COUNT in prefs and
+  /// nothing else (see [_migrateLegacyHoldback]). Unlike a real identity it
+  /// never auto-releases on a bind: nothing knows which account to match it
+  /// against, so only accept or delete can clear it.
+  static const kHeldPreviousAccount = 'previous-account';
+
+  /// The user answered "keep them on this device": the holdback stays in place
+  /// but the offer stops asking. Cleared whenever a NEW holdback is created.
+  bool _mergeOfferDismissed = false;
+
+  /// Only set while a pre-holdback prefs file is being migrated; see
+  /// [_migrateLegacyHoldback].
+  int _legacyMergeOfferCount = 0;
+
+  /// Cached `held_by IS NOT NULL` count. The popup and settings read
+  /// [mergeOfferCount] on every build, and the holdback only changes on a bind
+  /// or an explicit decision, so it's counted then rather than per frame.
+  int _heldCount = 0;
+
+  void _refreshHeldCount() => _heldCount = _db?.countHeld() ?? 0;
+
+  /// Items on this device that belong to a DIFFERENT account than the one now
+  /// connected (0 = nothing pending). They are held back at bind time: hidden
+  /// from the list, search, counts and sync until the user decides in Settings
+  /// — upload them here ([acceptMergeOffer]), keep them tucked away
+  /// ([dismissMergeOffer]), or delete them ([deleteMergeOffer]). Reports 0 once
+  /// dismissed even though the items are still held.
   @override
-  int get mergeOfferCount => _mergeOfferCount;
+  int get mergeOfferCount => _mergeOfferDismissed ? 0 : _heldCount;
 
-  /// User said "upload this device's items into the connected account": queue
-  /// a push for every local row (idempotent for rows the account already has).
+  /// How many items are tucked away, dismissed or not. [mergeOfferCount] is
+  /// what ASKS (banner, notification); this is what still EXISTS, so Settings
+  /// can keep a quiet way to upload or delete them after a "keep them".
+  int get heldCount => _heldCount;
+
+  /// User said "upload this device's items into the connected account": release
+  /// the holdback (the items reappear in the vault) and queue a push for every
+  /// row (idempotent for rows the account already has).
   Future<void> acceptMergeOffer() async {
-    if (_mergeOfferCount == 0 || _mk == null) return;
-    for (final r in (_db?.allRows() ?? const <Relic>[])) {
-      _db?.queueOp(r.uid, 'push', r.updatedAt);
+    final db = _db;
+    if (db == null || _mk == null || db.countHeld() == 0) return;
+    db.releaseAllHeld();
+    for (final r in db.allRows()) {
+      db.queueOp(r.uid, 'push', r.updatedAt);
     }
-    _mergeOfferCount = 0;
+    _mergeOfferDismissed = false;
+    _refreshHeldCount();
     _savePrefs();
+    _refreshWindow();
     notifyListeners();
     await _flushPending();
   }
 
-  /// User said "keep them local": drop the offer, items never upload unless
-  /// individually edited later.
+  /// User said "keep them on this device": the rows STAY held (hidden, never
+  /// uploaded) and the offer goes quiet. Signing back into the account they
+  /// belong to brings them back on its own.
   void dismissMergeOffer() {
-    if (_mergeOfferCount == 0) return;
-    _mergeOfferCount = 0;
+    if (_mergeOfferDismissed || (_db?.countHeld() ?? 0) == 0) return;
+    _mergeOfferDismissed = true;
     _savePrefs();
     notifyListeners();
+  }
+
+  /// User said "delete them from this device": the held rows and their blobs
+  /// go for good. Returns how many were removed.
+  ///
+  /// No delete tombstones are queued. These items were never uploaded to the
+  /// account this device is signed into, so a tombstone would be addressed to
+  /// an account that has never heard of them — and if the uid happened to
+  /// exist there, it would delete a stranger's item.
+  Future<int> deleteMergeOffer() async {
+    final db = _db;
+    if (db == null) return 0;
+    final rows = db.heldRows();
+    if (rows.isEmpty) return 0;
+    final keys = <String>{
+      for (final r in rows)
+        if (r.blobKey != null) r.blobKey!,
+    };
+    for (final row in rows) {
+      db.deleteAndQueue(row.uid, _now, queueDelete: false); // local-only
+      _vec.remove(row.uid); // cached embeddings
+      _enrichFails.remove(row.uid); // stale failure counters
+    }
+    // Blob keys can be shared across rows: only sweep files nothing surviving
+    // still points at. One listSync for the lot (see _deleteBlobFilesBulk).
+    for (final row in db.allWithBlob()) {
+      keys.remove(row.blobKey);
+    }
+    _deleteBlobFilesBulk(keys);
+    _mergeOfferDismissed = false;
+    _refreshHeldCount();
+    _savePrefs();
+    _refreshWindow();
+    notifyListeners();
+    return rows.length;
+  }
+
+  /// Pre-holdback installs (the first version of the merge offer) recorded the
+  /// offer as a COUNT in prefs and left every row fully visible — the bug this
+  /// replaces. There is no record of which account those items belonged to, so
+  /// tag the OLDEST [_legacyMergeOfferCount] rows (the ones that predate the
+  /// switch) with the [kHeldPreviousAccount] sentinel and let the count go: it
+  /// is derived from the rows from now on.
+  void _migrateLegacyHoldback(RelicDb db) {
+    final n = _legacyMergeOfferCount;
+    _legacyMergeOfferCount = 0;
+    if (n <= 0 || db.countHeld() > 0) return;
+    db.holdOldest(n, kHeldPreviousAccount);
+    _savePrefs(); // rewrites without the legacy merge_offer_count key
   }
 
   /// Shared bind preamble for BOTH connect paths (Supabase + legacy token).
@@ -279,6 +362,12 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   /// cursors (or the pull misses the new account's items), the uploaded-blob
   /// ledger (or blobs never upload to the new account), and the outbound
   /// queue (ops from the old account must not replay against the new one).
+  ///
+  /// The previous account's items are also HELD BACK: stamped with the identity
+  /// that owned them and hidden from every read path, rather than left sitting
+  /// in the history list where they read as this account's items that refuse to
+  /// sync. Signing back into that account releases exactly its own rows, so
+  /// hopping between two accounts on one machine shows each its own vault.
   bool _prepareBind(String identity) {
     final prev = _syncedAccount;
     final switched = prev != null && prev != identity;
@@ -291,15 +380,39 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       _uploaded.clear();
       _saveUploaded();
       _db?.clearAllPendingSync();
-      _mergeOfferCount = _db?.countAll() ?? 0;
+      _db?.holdAll(prev);
+      _mergeOfferDismissed = false; // a new holdback asks again
+      // Re-copying content that just went into hiding must capture it afresh
+      // rather than being swallowed by the dedupe guards.
+      _lastCaptured = null;
+      _lastBlobHash = null;
+      _lastBlobUid = null;
     }
+    // Coming back to an account this device is holding items for: they are its
+    // own items again, seamlessly. The sentinel is never matched — nothing
+    // knows which account those rows belong to (see [_migrateLegacyHoldback]).
+    final released =
+        identity == kHeldPreviousAccount ? 0 : (_db?.releaseHeld(identity) ?? 0);
     _syncedAccount = identity;
+    _refreshHeldCount();
     _savePrefs();
+    if (switched || released > 0) {
+      _hybridUids = null;
+      _refreshWindow();
+      notifyListeners();
+    }
     return !switched;
   }
 
   @visibleForTesting
   bool debugPrepareBind(String identity) => _prepareBind(identity);
+
+  /// Test seam for the account-switch paths that gate on "is this vault bound
+  /// to an account" ([acceptMergeOffer] needs a key to push with). Only the
+  /// gate is exercised: with no [_syncUrl], flushing is still a no-op, so the
+  /// queued ops stay observable instead of going to a network.
+  @visibleForTesting
+  void debugSetMasterKey(Uint8List? mk) => _mk = mk;
 
   /// For the QR-pairing + device-registry screens (shared with mobile): the
   /// unlocked master key to deliver, and the current Worker bearer token.
@@ -1231,7 +1344,11 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _lastBackupSummary = j['last_backup_summary'] as String? ?? '';
         _deviceName = j['device_name'] as String? ?? '';
         _syncedAccount = j['synced_account'] as String?;
-        _mergeOfferCount = (j['merge_offer_count'] as num?)?.toInt() ?? 0;
+        _mergeOfferDismissed = j['merge_offer_dismissed'] as bool? ?? false;
+        // Legacy key: a count with no marked rows behind it. Consumed once by
+        // _migrateLegacyHoldback and never written again.
+        _legacyMergeOfferCount =
+            (j['merge_offer_count'] as num?)?.toInt() ?? 0;
         _customTags
           ..clear()
           ..addAll((j['custom_tags'] as List?)?.cast<String>() ?? const []);
@@ -1316,7 +1433,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
             'last_backup_summary': _lastBackupSummary,
           'device_name': _deviceName,
           if (_syncedAccount != null) 'synced_account': _syncedAccount,
-          if (_mergeOfferCount > 0) 'merge_offer_count': _mergeOfferCount,
+          // The offer's SIZE is derived from the held rows now; only the
+          // "don't ask again" answer needs persisting.
+          if (_mergeOfferDismissed) 'merge_offer_dismissed': true,
           'custom_tags': _customTags.toList(),
           'capture_blocklist': _captureBlocklist.toList(),
           'hk_history': _hkHistory.toJson(),
@@ -1388,6 +1507,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     final db = RelicDb.open(_dbFile.path);
     _db = db;
     _migrateLegacyJson(db);
+    _migrateLegacyHoldback(db);
+    _refreshHeldCount();
     for (final v in db.allVectors()) {
       (_vec[v.uid] ??= []).add(v.vec); // rows arrive ordered by (uid, chunk)
     }

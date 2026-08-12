@@ -147,10 +147,10 @@ abstract class RelicRepo {
   /// desktop "sign in to sync" banner only shows where it's actually meaningful.
   bool get syncEnabled => true;
 
-  /// Items held local after an account switch, awaiting the user's
-  /// upload-or-keep decision (see LocalDeskRepo). 0 = no offer pending; the
-  /// popup shows a banner while it is, or the offer sits invisible in Settings
-  /// and reads as "sync is broken".
+  /// Items tucked away on this device after an account switch — hidden from
+  /// the list, search and sync while they await the user's upload / keep /
+  /// delete decision (see LocalDeskRepo). 0 = nothing pending; the popup shows
+  /// a banner while there is, or the history silently looks shorter.
   int get mergeOfferCount => 0;
 
   // --- Power features (opt-in; desktop-only in practice, default off/no-op so

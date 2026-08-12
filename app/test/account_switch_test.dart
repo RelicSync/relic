@@ -21,6 +21,7 @@ import 'package:relic_app/data/relic_db.dart';
 import 'package:relic_app/data/supabase_auth.dart';
 import 'package:relic_app/data/worker_repo.dart';
 import 'package:relic_app/models/relic.dart';
+import 'package:relic_app/widgets/chrome.dart';
 
 // Same rationale as clear_history_test: restore real networking so the
 // discard-port baseUrl fails transiently (ops stay queued) instead of the
@@ -56,6 +57,117 @@ void main() {
       expect(db.countAll(), 2);
       expect(db.countUnpromoted(), 1);
     });
+
+    test('holdAll hides rows from every read path, releaseHeld restores them',
+        () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      db.upsert(_mk('u1', 'alpha keeper', createdAt: 100));
+      db.upsert(_mk('u2', 'beta keeper', createdAt: 200));
+      expect(db.countAll(), 2);
+
+      expect(db.holdAll('supabase:acct-one'), 2);
+      expect(db.countHeld(), 2);
+      expect(db.heldByOf('u1'), 'supabase:acct-one');
+
+      // Everything the user (or the sync push) can reach goes quiet.
+      expect(db.countAll(), 0);
+      expect(db.countUnpromoted(), 0);
+      expect(db.isEmpty, isTrue);
+      expect(db.allRows(), isEmpty, reason: 'never pushed to the new account');
+      expect(db.queryPage('', Scope.all, 50, 0), isEmpty);
+      expect(db.queryPage('alpha', Scope.all, 50, 0), isEmpty);
+      expect(db.countMatching('alpha', Scope.all), 0);
+      expect(db.ftsCandidates('alpha', Scope.all, 10), isEmpty);
+      expect(db.trigramCandidates('keeper', Scope.all, 10), isEmpty);
+      expect(db.byUids(['u1', 'u2']), isEmpty);
+      expect(db.mostRecentUid(), isNull);
+      expect(db.nthMostRecentUid(1), isNull);
+      expect(db.uidByContent('alpha keeper'), isNull,
+          reason: 'a re-copy must capture afresh, not vanish into a held row');
+
+      // Items captured AFTER the switch are the new account's, and visible.
+      db.upsert(_mk('u3', 'fresh copy', createdAt: 300));
+      expect(db.queryPage('', Scope.all, 50, 0).map((r) => r.uid), ['u3']);
+      expect(db.countAll(), 1);
+      expect(db.mostRecentUid(), 'u3');
+
+      // Signing back into the original account brings exactly its rows back.
+      expect(db.releaseHeld('supabase:acct-one'), 2);
+      expect(db.countHeld(), 0);
+      expect(db.countAll(), 3);
+      expect(db.countMatching('alpha', Scope.all), 1);
+      expect(db.queryPage('', Scope.all, 50, 0).map((r) => r.uid),
+          ['u3', 'u2', 'u1']);
+    });
+
+    test('releaseHeld only frees its own identity; releaseAllHeld frees the lot',
+        () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      db.upsert(_mk('a1', 'account one item'));
+      db.holdAll('supabase:one');
+      db.upsert(_mk('b1', 'account two item'));
+      db.holdAll('supabase:two');
+      expect(db.countHeld(), 2);
+
+      expect(db.releaseHeld('supabase:one'), 1);
+      expect(db.heldByOf('a1'), isNull);
+      expect(db.heldByOf('b1'), 'supabase:two');
+
+      expect(db.releaseAllHeld(), 1);
+      expect(db.countHeld(), 0);
+      expect(db.countAll(), 2);
+    });
+
+    test('held rows are exempt from clear-history and keep their blob alive',
+        () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      db.upsert(_mk('old', 'previous account').copyWith(blobKey: 'blob-old'));
+      db.holdAll('supabase:one');
+      db.upsert(_mk('new', 'this account').copyWith(blobKey: 'blob-new'));
+
+      final res = db.clearUnpromoted(500, queueDeletes: true);
+      expect(res.uids, ['new'], reason: 'only the visible history is cleared');
+      expect(res.orphanBlobKeys, {'blob-new'});
+      expect(res.orphanBlobKeys, isNot(contains('blob-old')),
+          reason: 'a held row still references its bytes');
+      expect(db.countHeld(), 1);
+      expect(db.pendingOps().map((p) => p.uid), ['new'],
+          reason: 'no tombstone for the held row against this account');
+      // Blob accounting still sees it, so the cache sweeper cannot collect it.
+      expect(db.allWithBlob().map((r) => r.uid), contains('old'));
+    });
+
+    test('held rows are exempt from retention eviction', () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      db.upsert(_mk('old1', 'one', createdAt: 100));
+      db.upsert(_mk('old2', 'two', createdAt: 200));
+      db.holdAll('supabase:one');
+      db.upsert(_mk('new1', 'three', createdAt: 300));
+
+      expect(db.countUnpromoted(), 1);
+      expect(db.unpromotedBeyond(0).map((r) => r.uid), ['new1']);
+      expect(db.unpromotedOlderThan(250).map((r) => r.uid), isEmpty);
+    });
+
+    test('holdOldest tags the N oldest rows (legacy prefs migration)', () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      for (var i = 0; i < 5; i++) {
+        db.upsert(_mk('u$i', 'item $i', createdAt: 100 + i));
+      }
+      expect(db.holdOldest(2, 'previous-account'), 2);
+      expect(db.heldByOf('u0'), 'previous-account');
+      expect(db.heldByOf('u1'), 'previous-account');
+      expect(db.heldByOf('u2'), isNull);
+      expect(db.countAll(), 3);
+      // The sentinel is not an account, so no bind can release it.
+      expect(db.releaseHeld('supabase:anyone'), 0);
+      expect(db.countHeld(), 2);
+    });
   });
 
   final sandbox = Platform.environment['RELIC_DATA_DIR'];
@@ -90,12 +202,150 @@ void main() {
         reason: 'a switch must never auto-upload the old account\'s items');
     expect(repo.mergeOfferCount, n);
 
-    // Dismiss keeps them local and forgets the offer.
+    // ...and they are TUCKED AWAY: gone from the list and from search, not
+    // sitting in the history looking like this account's broken sync.
+    expect(repo.all, isEmpty);
+    await repo.setQuery('mine', Scope.all);
+    expect(repo.visible, isEmpty);
+
+    // Anything copied after the switch belongs to the new account and shows.
+    repo.captureText('theirs gamma');
+    await repo.setQuery('', Scope.all);
+    expect(repo.visible.map((r) => r.content), ['theirs gamma']);
+    await repo.setQuery('gamma', Scope.all);
+    expect(repo.visible, hasLength(1));
+    await repo.setQuery('', Scope.all);
+
+    // Dismiss keeps them tucked away and stops asking.
     repo.dismissMergeOffer();
     expect(repo.mergeOfferCount, 0);
+    expect(repo.all.map((r) => r.content), ['theirs gamma'],
+        reason: 'dismiss hides the offer, not the holdback');
 
     // Back to acct-two again later: same account now, push-all fine.
     expect(repo.debugPrepareBind('supabase:acct-two'), isTrue);
+
+    // Signing back into the ORIGINAL account releases exactly its rows and
+    // holds acct-two's instead.
+    expect(repo.debugPrepareBind('supabase:acct-one'), isFalse);
+    expect(repo.all.map((r) => r.content),
+        containsAll(<String>['mine alpha', 'mine beta']));
+    expect(repo.all.any((r) => r.content == 'theirs gamma'), isFalse);
+    expect(repo.mergeOfferCount, 1, reason: 'gamma is acct-two\'s now');
+  });
+
+  test('sandboxed: dismiss survives a reload; accept releases and queues pushes',
+      () async {
+    if (guarded) {
+      markTestSkipped('RELIC_DATA_DIR sandbox not set — skipping repo test');
+      return;
+    }
+    _wipeSandbox(sandbox);
+    var repo = LocalDeskRepo();
+    await repo.load();
+    repo.setMlEnrich(false);
+    repo.captureText('held one');
+    repo.captureText('held two');
+    final n = repo.all.length;
+
+    expect(repo.debugPrepareBind('supabase:first'), isTrue);
+    expect(repo.debugPrepareBind('supabase:second'), isFalse);
+    expect(repo.mergeOfferCount, n);
+    repo.dismissMergeOffer();
+    expect(repo.mergeOfferCount, 0);
+    repo.dispose();
+
+    // Reload: the dismissal is remembered, the rows are still held and hidden.
+    repo = LocalDeskRepo();
+    await repo.load();
+    addTearDown(repo.dispose);
+    repo.setMlEnrich(false);
+    expect(repo.mergeOfferCount, 0, reason: 'dismissal persisted');
+    expect(repo.all, isEmpty, reason: 'still tucked away after a restart');
+
+    // Accepting brings them back and queues a push for every row.
+    repo.debugSetMasterKey(Uint8List.fromList(List.filled(32, 3)));
+    await repo.acceptMergeOffer();
+    expect(repo.all, hasLength(n));
+    expect(repo.mergeOfferCount, 0);
+    expect(repo.sync.pending, n, reason: 'every row queued for this account');
+  });
+
+  test('sandboxed: deleting the holdback erases it without any tombstone push',
+      () async {
+    if (guarded) {
+      markTestSkipped('RELIC_DATA_DIR sandbox not set — skipping repo test');
+      return;
+    }
+    _wipeSandbox(sandbox);
+    final repo = LocalDeskRepo();
+    await repo.load();
+    addTearDown(repo.dispose);
+    repo.setMlEnrich(false);
+    repo.captureText('doomed one');
+    repo.captureText('doomed two');
+    final n = repo.all.length;
+
+    expect(repo.debugPrepareBind('supabase:first'), isTrue);
+    expect(repo.debugPrepareBind('supabase:second'), isFalse);
+    expect(repo.mergeOfferCount, n);
+    repo.debugSetMasterKey(Uint8List.fromList(List.filled(32, 4)));
+
+    expect(await repo.deleteMergeOffer(), n);
+    expect(repo.mergeOfferCount, 0);
+    expect(repo.all, isEmpty);
+    // The current account never had these items; a tombstone addressed to it
+    // would at best be noise and at worst delete a stranger's row.
+    expect(repo.sync.pending, 0, reason: 'no delete ops queued');
+    // Gone for good: signing back into the old account brings nothing back.
+    expect(repo.debugPrepareBind('supabase:first'), isFalse);
+    expect(repo.all, isEmpty);
+    expect(repo.mergeOfferCount, 0);
+  });
+
+  test('sandboxed: a legacy merge_offer_count tags the oldest rows on load',
+      () async {
+    if (guarded) {
+      markTestSkipped('RELIC_DATA_DIR sandbox not set — skipping repo test');
+      return;
+    }
+    _wipeSandbox(sandbox);
+    var repo = LocalDeskRepo();
+    await repo.load();
+    repo.setMlEnrich(false);
+    for (var i = 0; i < 4; i++) {
+      repo.captureText('legacy item $i');
+    }
+    expect(repo.all, hasLength(4));
+    repo.dispose();
+
+    // Rewrite prefs the way the FIRST version of the holdback left them: a
+    // count, no marked rows, no record of which account they belonged to.
+    final prefsFile =
+        File('$sandbox${Platform.pathSeparator}prefs.json');
+    final prefs =
+        jsonDecode(prefsFile.readAsStringSync()) as Map<String, dynamic>;
+    prefs['merge_offer_count'] = 2;
+    prefs['synced_account'] = 'supabase:current';
+    prefsFile.writeAsStringSync(jsonEncode(prefs));
+
+    repo = LocalDeskRepo();
+    await repo.load();
+    addTearDown(repo.dispose);
+    repo.setMlEnrich(false);
+
+    // The two OLDEST are now held (hidden), and the offer keeps its size.
+    expect(repo.mergeOfferCount, 2);
+    expect(repo.all.map((r) => r.content).toSet(),
+        {'legacy item 2', 'legacy item 3'});
+    // The legacy key is gone; the count is derived from the rows from here on.
+    final rewritten =
+        jsonDecode(prefsFile.readAsStringSync()) as Map<String, dynamic>;
+    expect(rewritten.containsKey('merge_offer_count'), isFalse);
+    // The sentinel belongs to no account, so a bind never auto-releases it.
+    expect(repo.debugPrepareBind('supabase:previous-owner'), isFalse);
+    expect(repo.mergeOfferCount, 4,
+        reason: 'the sentinel rows stay held, plus the two just switched away');
   });
 
   group('WorkerRepo cache guard', () {
@@ -229,10 +479,21 @@ void main() {
   });
 }
 
-Relic _mk(String uid, String content) => Relic(
+/// Repo-level tests share ONE RELIC_DATA_DIR (it is read from the environment
+/// once), so each starts by emptying it — otherwise the previous test's vault
+/// and prefs are still sitting there.
+void _wipeSandbox(String dir) {
+  for (final e in Directory(dir).listSync()) {
+    try {
+      e.deleteSync(recursive: true);
+    } catch (_) {}
+  }
+}
+
+Relic _mk(String uid, String content, {int createdAt = 100}) => Relic(
       uid: uid,
-      createdAt: 100,
-      updatedAt: 100,
+      createdAt: createdAt,
+      updatedAt: createdAt,
       kind: Kind.string,
       source: Source.clipboard,
       promoted: false,

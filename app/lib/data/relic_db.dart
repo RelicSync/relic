@@ -96,6 +96,21 @@ class RelicDb {
     // wire format is untouched and each device ranks by its own habits.
     _ensureColumn(db, 'use_count', 'REAL NOT NULL DEFAULT 0');
     _ensureColumn(db, 'last_used_at', 'INTEGER');
+    // Account-switch HOLDBACK. NULL for every ordinary row. When the user signs
+    // into a different account than this vault last synced with, the existing
+    // rows are stamped with the PREVIOUS identity ('supabase:<sub>' /
+    // 'legacy:<scope>', or the 'previous-account' sentinel for pre-holdback
+    // installs) instead of being uploaded — see the 2026-07-14 leak. A held row
+    // is invisible to every normal read path (list, search, counts, sync push,
+    // capture dedupe, retention) until the user decides in Settings; signing
+    // back into that account releases exactly its own rows. Local-only: the
+    // wire format never carries it, and `upsert` never writes it, so a pull
+    // that re-touches a held row cannot un-hide it.
+    _ensureColumn(db, 'held_by', 'TEXT');
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_relics_held ON relics(held_by) '
+      'WHERE held_by IS NOT NULL;',
+    );
     db.execute(
       'CREATE INDEX IF NOT EXISTS idx_relics_created ON relics(created_at DESC);',
     );
@@ -958,24 +973,32 @@ class RelicDb {
     int deletedAt, {
     required bool queueDeletes,
   }) {
-    const history = 'SELECT uid FROM relics WHERE promoted = 0';
+    // Held rows are exempt: "clear all history" clears the history the user can
+    // SEE. Sweeping the previous account's hidden items into it (and queueing
+    // tombstones for them against the current account) would destroy data the
+    // user has not decided about yet.
+    const history =
+        'SELECT uid FROM relics WHERE promoted = 0 AND held_by IS NULL';
     _db.execute('BEGIN');
     try {
       final uids = _db
-          .select('SELECT uid FROM relics WHERE promoted = 0')
+          .select('SELECT uid FROM relics WHERE promoted = 0 AND held_by IS NULL')
           .map((r) => r['uid'] as String)
           .toList();
       if (uids.isEmpty) {
         _db.execute('COMMIT');
         return (uids: const [], orphanBlobKeys: const {});
       }
+      // A blob is orphaned only when NOTHING that survives still points at it —
+      // surviving means promoted OR held.
       final orphanKeys = _db
           .select('''
             SELECT DISTINCT blob_key FROM relics
-             WHERE promoted = 0 AND blob_key IS NOT NULL
+             WHERE promoted = 0 AND held_by IS NULL AND blob_key IS NOT NULL
                AND blob_key NOT IN (
                  SELECT blob_key FROM relics
-                  WHERE promoted = 1 AND blob_key IS NOT NULL)
+                  WHERE (promoted = 1 OR held_by IS NOT NULL)
+                    AND blob_key IS NOT NULL)
           ''')
           .map((r) => r['blob_key'] as String)
           .toSet();
@@ -985,7 +1008,8 @@ class RelicDb {
       if (queueDeletes) {
         _db.execute('''
           INSERT INTO pending_ops (uid, op, queued_at)
-            SELECT uid, 'delete', ? FROM relics WHERE promoted = 0
+            SELECT uid, 'delete', ? FROM relics
+             WHERE promoted = 0 AND held_by IS NULL
             ON CONFLICT(uid, op) DO UPDATE SET queued_at = excluded.queued_at
         ''', [deletedAt]);
       }
@@ -997,7 +1021,7 @@ class RelicDb {
         'DELETE FROM ai_records WHERE uid IN ($history)',
         'DELETE FROM query_memory WHERE uid IN ($history)',
         "DELETE FROM context_memory WHERE kind = 'uid' AND key IN ($history)",
-        'DELETE FROM relics WHERE promoted = 0',
+        'DELETE FROM relics WHERE promoted = 0 AND held_by IS NULL',
       ]) {
         _db.execute(sql);
       }
@@ -1221,6 +1245,92 @@ class RelicDb {
     _db.execute('UPDATE ai_records SET pushed = 1 WHERE pushed = 0');
   }
 
+  // --- account-switch holdback (the `held_by` column) ---
+  //
+  // Policy, applied deliberately query by query in this file:
+  //
+  //  * HIDDEN from held rows: the list/browse query, every search leg (FTS,
+  //    trigram, tag-intent, the LIKE fallback), the uid materializer [byUids],
+  //    counts the user reads (countAll / countUnpromoted / countTag /
+  //    countMatching / tagFrequencies / countNeedingEnrich), the sync push
+  //    surface [allRows], capture dedupe [uidByContent], the recency lookups
+  //    behind paste-latest and quick-paste, snippet triggers, retention
+  //    eviction, the vault-full gate, blob prefetch, and the enrichment /
+  //    attachment-text / AI-record backlogs.
+  //  * STILL COUNTED: [allWithBlob] and [localAggregate] — blob GC and disk
+  //    accounting must keep seeing held rows, or the cache sweeper would
+  //    collect bytes the user has not agreed to lose. Their FTS/trigram/vector
+  //    index rows are kept too, so accepting them back needs no reindex; the
+  //    read paths above are what makes them invisible.
+  //  * BY-UID lookups ([getByUid], [updatedAtOf], [touch], [recordUse], …) stay
+  //    unfiltered: nothing hands the UI a held uid, and the accept/delete paths
+  //    need to resolve one.
+
+  /// Stamp every currently-visible row as belonging to [identity] — the
+  /// account this vault synced with BEFORE the switch. Returns how many.
+  int holdAll(String identity) {
+    _db.execute(
+      'UPDATE relics SET held_by = ? WHERE held_by IS NULL',
+      [identity],
+    );
+    return _db.updatedRows;
+  }
+
+  /// Release the rows held for [identity] (the user signed back into that
+  /// account, so its items are its own again). Returns how many came back.
+  int releaseHeld(String identity) {
+    _db.execute('UPDATE relics SET held_by = NULL WHERE held_by = ?', [
+      identity,
+    ]);
+    return _db.updatedRows;
+  }
+
+  /// Release EVERY held row — the "upload all into this account" decision.
+  int releaseAllHeld() {
+    _db.execute('UPDATE relics SET held_by = NULL WHERE held_by IS NOT NULL');
+    return _db.updatedRows;
+  }
+
+  int countHeld() =>
+      (_db.select('SELECT COUNT(*) AS n FROM relics WHERE held_by IS NOT NULL')
+              .first['n'] as num)
+          .toInt();
+
+  /// (uid, blobKey) for every held row — what the "delete them from this
+  /// device" action deletes, and what its blob cleanup needs.
+  List<({String uid, String? blobKey})> heldRows() => _db
+      .select(
+        'SELECT uid, blob_key FROM relics WHERE held_by IS NOT NULL '
+        'ORDER BY created_at DESC',
+      )
+      .map((r) => (uid: r['uid'] as String, blobKey: r['blob_key'] as String?))
+      .toList();
+
+  /// The holdback stamp on one row (null = visible). Testing/diagnostics.
+  String? heldByOf(String uid) {
+    final rs = _db.select('SELECT held_by FROM relics WHERE uid = ?', [uid]);
+    return rs.isEmpty ? null : rs.first['held_by'] as String?;
+  }
+
+  /// Legacy-install migration: stamp the [n] OLDEST currently-visible rows with
+  /// [identity]. Installs that took the first version of the holdback carry a
+  /// merge-offer COUNT in prefs but no marked rows, and the identity those
+  /// items belonged to was never recorded — so the oldest N (the ones that
+  /// predate the switch) are tagged with a sentinel. Returns how many.
+  ///
+  /// Ties on `created_at` break by rowid, i.e. capture order: a burst of copies
+  /// inside one second must not make the boundary arbitrary.
+  int holdOldest(int n, String identity) {
+    if (n <= 0) return 0;
+    _db.execute(
+      '''UPDATE relics SET held_by = ? WHERE uid IN (
+           SELECT uid FROM relics WHERE held_by IS NULL
+            ORDER BY created_at ASC, rowid ASC LIMIT ?)''',
+      [identity, n],
+    );
+    return _db.updatedRows;
+  }
+
   void recordSyncRejection(String uid, String op, int status, int rejectedAt) {
     _db.execute(
       '''INSERT INTO sync_rejections (uid, op, status, rejected_at)
@@ -1322,6 +1432,9 @@ class RelicDb {
 
   /// (uid, blobKey) for every relic with a blob, newest first — used to map
   /// on-disk blob files back to relics when clearing/re-downloading the cache.
+  /// Deliberately includes HELD rows: blob accounting has to see them, or the
+  /// cache sweeper would treat their bytes as unreferenced and collect data the
+  /// user hasn't decided about yet.
   List<({String uid, String blobKey})> allWithBlob() => _db
       .select(
         "SELECT uid, blob_key FROM relics WHERE blob_key IS NOT NULL ORDER BY created_at DESC",
@@ -1486,7 +1599,7 @@ class RelicDb {
                 CASE WHEN r.kind <> 'string' THEN substr(r.content, 1, ?) END,
                 substr(r.attachment_text, 1, ?), 0
            FROM relics r
-          WHERE r.enrich_level >= ?
+          WHERE r.enrich_level >= ? AND r.held_by IS NULL
             AND (COALESCE(TRIM(r.title), '') <> ''
                  OR COALESCE(r.tags, '[]') NOT IN ('[]', '')
                  OR (r.kind <> 'string' AND COALESCE(TRIM(r.content), '') <> '')
@@ -1526,7 +1639,7 @@ class RelicDb {
       .select(
         '''SELECT a.uid FROM ai_records a
            JOIN relics r ON r.uid = a.uid
-           WHERE r.enrich_level < a.ai_level
+           WHERE r.enrich_level < a.ai_level AND r.held_by IS NULL
            ORDER BY a.ai_at ASC LIMIT ?''',
         [limit],
       )
@@ -1575,7 +1688,8 @@ class RelicDb {
   /// (stream + vault) so semantic search reaches everything.
   List<Relic> needingEnrich(int level, int limit) => _db
       .select(
-        'SELECT * FROM relics WHERE enrich_level < ? ORDER BY created_at DESC LIMIT ?',
+        'SELECT * FROM relics WHERE enrich_level < ? AND held_by IS NULL '
+        'ORDER BY created_at DESC LIMIT ?',
         [level, limit],
       )
       .map(_toRelic)
@@ -1599,7 +1713,7 @@ class RelicDb {
   List<Relic> needingVectors(int level, int limit) => _db
       .select(
         '''SELECT * FROM relics r
-            WHERE r.enrich_level >= ?
+            WHERE r.enrich_level >= ? AND r.held_by IS NULL
               AND COALESCE(TRIM(r.content), '') <> ''
               AND NOT EXISTS (SELECT 1 FROM vectors v WHERE v.uid = r.uid)
             ORDER BY r.created_at DESC LIMIT ?''',
@@ -1612,7 +1726,9 @@ class RelicDb {
   /// items…" progress line. Full-table scan (enrich_level is unindexed);
   /// fine at the enrich worker's 6 s cadence.
   int countNeedingEnrich(int level) => (_db
-          .select('SELECT COUNT(*) AS n FROM relics WHERE enrich_level < ?',
+          .select(
+              'SELECT COUNT(*) AS n FROM relics '
+              'WHERE enrich_level < ? AND held_by IS NULL',
               [level])
           .first['n'] as num)
       .toInt();
@@ -1622,7 +1738,9 @@ class RelicDb {
   ({Map<String, int> machine, Map<String, int> user}) tagFrequencies(
     bool vaultOnly,
   ) {
-    final where = vaultOnly ? 'WHERE promoted = 1' : '';
+    final where = vaultOnly
+        ? 'WHERE promoted = 1 AND held_by IS NULL'
+        : 'WHERE held_by IS NULL';
     final machine = <String, int>{};
     final user = <String, int>{};
     for (final r in _db.select('SELECT tags, user_tags FROM relics $where')) {
@@ -1682,6 +1800,7 @@ class RelicDb {
       .select(
         "SELECT uid FROM relics WHERE attachments IS NOT NULL "
         "AND attachments != '' AND attachment_text IS NULL "
+        'AND held_by IS NULL '
         "ORDER BY created_at DESC LIMIT ?",
         [limit],
       )
@@ -1699,7 +1818,8 @@ class RelicDb {
     final col = userTag ? 'user_tags' : 'tags';
     final fromLower = from.toLowerCase();
     final rows = _db.select(
-      'SELECT uid, $col AS j FROM relics WHERE lower($col) LIKE ?',
+      'SELECT uid, $col AS j FROM relics '
+      'WHERE lower($col) LIKE ? AND held_by IS NULL',
       ['%"$fromLower"%'],
     );
     var n = 0;
@@ -1742,7 +1862,8 @@ class RelicDb {
     final col = userTag ? 'user_tags' : 'tags';
     final tagLower = tag.toLowerCase();
     final rows = _db.select(
-      'SELECT uid, $col AS j FROM relics WHERE lower($col) LIKE ?',
+      'SELECT uid, $col AS j FROM relics '
+      'WHERE lower($col) LIKE ? AND held_by IS NULL',
       ['%"$tagLower"%'],
     );
     var n = 0;
@@ -1788,7 +1909,8 @@ class RelicDb {
     final ph = List.filled(uids.length, '?').join(',');
     return _db
         .select(
-          'SELECT uid FROM relics WHERE promoted = 1 AND uid IN ($ph)',
+          'SELECT uid FROM relics '
+          'WHERE promoted = 1 AND held_by IS NULL AND uid IN ($ph)',
           uids,
         )
         .map((r) => r['uid'] as String)
@@ -1799,7 +1921,9 @@ class RelicDb {
   /// bytes are local — for ML-independent document text extraction. Newest first.
   List<Relic> filesNeedingText(int limit) => _db
       .select(
-        "SELECT * FROM relics WHERE kind = 'file' AND have_blob = 1 AND (content IS NULL OR content = '') ORDER BY created_at DESC LIMIT ?",
+        "SELECT * FROM relics WHERE kind = 'file' AND have_blob = 1 "
+        "AND (content IS NULL OR content = '') AND held_by IS NULL "
+        'ORDER BY created_at DESC LIMIT ?',
         [limit],
       )
       .map(_toRelic)
@@ -1821,7 +1945,8 @@ class RelicDb {
   }
 
   int countTag(String tag, {bool vaultOnly = false}) {
-    final scope = vaultOnly ? 'AND promoted = 1' : '';
+    final scope =
+        vaultOnly ? 'AND promoted = 1 AND held_by IS NULL' : 'AND held_by IS NULL';
     final like = _tagLike(tag);
     final rs = _db.select(
       'SELECT COUNT(*) AS n FROM relics '
@@ -1835,7 +1960,8 @@ class RelicDb {
   /// most-recent first, capped at [limit]. Used by query-side tag expansion to
   /// feed the RRF fusion.
   List<String> uidsWithTag(String tag, {bool vaultOnly = false, int limit = 50}) {
-    final scope = vaultOnly ? 'AND promoted = 1' : '';
+    final scope =
+        vaultOnly ? 'AND promoted = 1 AND held_by IS NULL' : 'AND held_by IS NULL';
     final like = _tagLike(tag);
     return _db
         .select(
@@ -1853,7 +1979,8 @@ class RelicDb {
   /// the picker's trigger-boost matches what the user typed against it. Newest
   /// first, so a fresher snippet wins a trigger collision.
   List<(String, String)> snippetTriggers({bool vaultOnly = false, int limit = 200}) {
-    final scope = vaultOnly ? 'AND promoted = 1' : '';
+    final scope =
+        vaultOnly ? 'AND promoted = 1 AND held_by IS NULL' : 'AND held_by IS NULL';
     final like = _tagLike('snippet');
     return _db
         .select(
@@ -1933,9 +2060,13 @@ class RelicDb {
       _db.execute('DELETE FROM reminders WHERE id = ?', [id]);
 
   /// Find an existing text relic with identical content (for capture dedupe).
+  /// Held rows are invisible here on purpose: matching one would swallow the
+  /// new copy into a hidden item, and the user would watch a fresh capture
+  /// vanish. A re-copy of held content simply becomes a new, visible relic.
   String? uidByContent(String content) {
     final rs = _db.select(
-      'SELECT uid FROM relics WHERE content_hash = ? AND content = ? LIMIT 1',
+      'SELECT uid FROM relics '
+      'WHERE content_hash = ? AND content = ? AND held_by IS NULL LIMIT 1',
       [_hash(content), content],
     );
     return rs.isEmpty ? null : rs.first['uid'] as String;
@@ -1943,7 +2074,8 @@ class RelicDb {
 
   String? mostRecentUid() {
     final rs = _db.select(
-      'SELECT uid FROM relics ORDER BY created_at DESC LIMIT 1',
+      'SELECT uid FROM relics WHERE held_by IS NULL '
+      'ORDER BY created_at DESC LIMIT 1',
     );
     return rs.isEmpty ? null : rs.first['uid'] as String;
   }
@@ -1953,7 +2085,8 @@ class RelicDb {
   String? nthMostRecentUid(int n) {
     if (n < 1) return null;
     final rs = _db.select(
-      'SELECT uid FROM relics ORDER BY created_at DESC LIMIT 1 OFFSET ?',
+      'SELECT uid FROM relics WHERE held_by IS NULL '
+      'ORDER BY created_at DESC LIMIT 1 OFFSET ?',
       [n - 1],
     );
     return rs.isEmpty ? null : rs.first['uid'] as String;
@@ -2035,7 +2168,10 @@ class RelicDb {
     int? createdAfter,
     int? createdBefore,
   }) {
-    final vault = scope == Scope.vault ? 'AND r.promoted = 1' : '';
+    // Scope gate for every candidate/result query: held rows (the previous
+    // account's, awaiting the user's decision) are never search results.
+    final scopeAnd = 'AND r.held_by IS NULL'
+        "${scope == Scope.vault ? ' AND r.promoted = 1' : ''}";
     final order = oldestFirst ? 'ASC' : 'DESC';
     final tail = limit == null ? '' : 'LIMIT ? OFFSET ?';
     final lim = limit == null ? const <Object?>[] : [limit, offset ?? 0];
@@ -2109,6 +2245,7 @@ class RelicDb {
     // No free text → browse / filter-only (tags/operators), ordered by date.
     if (text.isEmpty) {
       final conds = <String>[
+        'r.held_by IS NULL',
         if (scope == Scope.vault) 'r.promoted = 1',
         ...tagSql,
         ...opConds,
@@ -2129,7 +2266,7 @@ class RelicDb {
       if (tagSql.isNotEmpty || opConds.isNotEmpty) {
         return _db.select(
           'SELECT $cols FROM relics r '
-          'WHERE ${[...tagSql, ...opConds].join(' AND ')} $vault $dateAnd '
+          'WHERE ${[...tagSql, ...opConds].join(' AND ')} $scopeAnd $dateAnd '
           'ORDER BY r.created_at $order $tail',
           [...tagArgs, ...opArgs, ...dateArgs, ...lim],
         );
@@ -2149,7 +2286,7 @@ class RelicDb {
     // relevance on a date-sorted query.
     ResultSet runMatch(String expr) => _db.select(
           '''SELECT $cols FROM relics_fts JOIN relics r ON r.uid = relics_fts.uid
-               WHERE relics_fts MATCH ? $vault $tagAnd $opAnd $dateAnd
+               WHERE relics_fts MATCH ? $scopeAnd $tagAnd $opAnd $dateAnd
                ORDER BY $ftsOrder $tail''',
           [expr, ...tagArgs, ...opArgs, ...dateArgs, ...lim],
         );
@@ -2213,7 +2350,7 @@ class RelicDb {
       ];
       return _db.select(
         '''SELECT $cols FROM relics r
-             WHERE $termSql $vault $tagAnd $opAnd $dateAnd
+             WHERE $termSql $scopeAnd $tagAnd $opAnd $dateAnd
              ORDER BY r.created_at $order $tail''',
         [...likeArgs, ...tagArgs, ...opArgs, ...dateArgs, ...lim],
       );
@@ -2232,7 +2369,10 @@ class RelicDb {
     final terms = _queryTerms(search);
     final match = _ftsExpr(search);
     if (match == null) return const [];
-    final vault = scope == Scope.vault ? 'AND r.promoted = 1' : '';
+    // Scope gate for every candidate/result query: held rows (the previous
+    // account's, awaiting the user's decision) are never search results.
+    final scopeAnd = 'AND r.held_by IS NULL'
+        "${scope == Scope.vault ? ' AND r.promoted = 1' : ''}";
     final (dateConds, dateArgs) =
         _dateConds(createdAfter, createdBefore, 'r.created_at');
     final dateAnd = dateConds.isEmpty ? '' : 'AND ${dateConds.join(' AND ')}';
@@ -2243,7 +2383,7 @@ class RelicDb {
               'SELECT r.uid FROM relics_fts JOIN relics r ON r.uid = relics_fts.uid '
               // Same weighted rank as the instant view, so the hybrid lexical
               // anchor doesn't reshuffle results when the refine lands.
-              'WHERE relics_fts MATCH ? $vault $dateAnd ORDER BY $kFtsRank LIMIT ?',
+              'WHERE relics_fts MATCH ? $scopeAnd $dateAnd ORDER BY $kFtsRank LIMIT ?',
               [expr, ...dateArgs, limit],
             )
             .map((r) => r['uid'] as String)
@@ -2304,7 +2444,10 @@ class RelicDb {
     }
 
     final expr = words.map(wordExpr).join(' OR ');
-    final vault = scope == Scope.vault ? 'AND r.promoted = 1' : '';
+    // Scope gate for every candidate/result query: held rows (the previous
+    // account's, awaiting the user's decision) are never search results.
+    final scopeAnd = 'AND r.held_by IS NULL'
+        "${scope == Scope.vault ? ' AND r.promoted = 1' : ''}";
     final (dateConds, dateArgs) =
         _dateConds(createdAfter, createdBefore, 'r.created_at');
     final dateAnd = dateConds.isEmpty ? '' : 'AND ${dateConds.join(' AND ')}';
@@ -2312,7 +2455,7 @@ class RelicDb {
       return _db
           .select(
             'SELECT r.uid FROM relics_tri JOIN relics r ON r.uid = relics_tri.uid '
-            'WHERE relics_tri MATCH ? $vault $dateAnd ORDER BY bm25(relics_tri) LIMIT ?',
+            'WHERE relics_tri MATCH ? $scopeAnd $dateAnd ORDER BY bm25(relics_tri) LIMIT ?',
             [expr, ...dateArgs, limit],
           )
           .map((r) => r['uid'] as String)
@@ -2363,14 +2506,17 @@ class RelicDb {
     final tagArgs = <Object?>[
       for (final t in fired) ...[_tagLike(t), _tagLike(t)],
     ];
-    final vault = scope == Scope.vault ? 'AND r.promoted = 1' : '';
+    // Scope gate for every candidate/result query: held rows (the previous
+    // account's, awaiting the user's decision) are never search results.
+    final scopeAnd = 'AND r.held_by IS NULL'
+        "${scope == Scope.vault ? ' AND r.promoted = 1' : ''}";
     final (dateConds, dateArgs) =
         _dateConds(createdAfter, createdBefore, 'r.created_at');
     final dateAnd = dateConds.isEmpty ? '' : 'AND ${dateConds.join(' AND ')}';
     if (residual.isEmpty) {
       return _db
           .select(
-            'SELECT r.uid FROM relics r WHERE ($tagSql) $vault $dateAnd '
+            'SELECT r.uid FROM relics r WHERE ($tagSql) $scopeAnd $dateAnd '
             'ORDER BY r.created_at DESC LIMIT ?',
             [...tagArgs, ...dateArgs, limit],
           )
@@ -2382,7 +2528,7 @@ class RelicDb {
         return _db
             .select(
               'SELECT r.uid FROM relics_fts JOIN relics r ON r.uid = relics_fts.uid '
-              'WHERE relics_fts MATCH ? AND ($tagSql) $vault $dateAnd '
+              'WHERE relics_fts MATCH ? AND ($tagSql) $scopeAnd $dateAnd '
               'ORDER BY $kFtsRank LIMIT ?',
               [expr, ...tagArgs, ...dateArgs, limit],
             )
@@ -2619,10 +2765,18 @@ class RelicDb {
   }
 
   /// Fetch relics by uid, returned in the given uid order (for ranked results).
+  ///
+  /// This is where a ranked list becomes rows on screen, so it is also the
+  /// backstop for the holdback: the in-memory semantic legs rank from cached
+  /// embeddings that still cover held rows, and a held uid that reaches a
+  /// ranking simply materializes to nothing (the caller prunes the gap).
   List<Relic> byUids(List<String> uids) {
     if (uids.isEmpty) return const [];
     final ph = List.filled(uids.length, '?').join(',');
-    final rows = _db.select('SELECT * FROM relics WHERE uid IN ($ph)', uids);
+    final rows = _db.select(
+      'SELECT * FROM relics WHERE uid IN ($ph) AND held_by IS NULL',
+      uids,
+    );
     final byId = {for (final row in rows) row['uid'] as String: _toRelic(row)};
     return [
       for (final u in uids)
@@ -2935,13 +3089,17 @@ class RelicDb {
   /// semantic search (filtering BEFORE top-K, so strong vault matches aren't
   /// truncated away by unpromoted neighbors).
   Set<String> promotedUids() => _db
-      .select('SELECT uid FROM relics WHERE promoted = 1')
+      .select('SELECT uid FROM relics WHERE promoted = 1 AND held_by IS NULL')
       .map((r) => r['uid'] as String)
       .toSet();
 
   /// All relics, newest first — used at connect time (push) and for `all`.
+  /// Held rows are excluded: this is both the whole-vault push surface (they
+  /// must never reach the account they don't belong to) and the repo's `all`.
   List<Relic> allRows() => _db
-      .select('SELECT * FROM relics ORDER BY created_at DESC')
+      .select(
+        'SELECT * FROM relics WHERE held_by IS NULL ORDER BY created_at DESC',
+      )
       .map(_toRelic)
       .toList();
 
@@ -2949,15 +3107,21 @@ class RelicDb {
   /// thumbnail prefetch. Bounded by [limit].
   List<({String uid, String blobKey})> photosMissingBlob(int limit) => _db
       .select(
-        "SELECT uid, blob_key FROM relics WHERE kind = 'photo' AND blob_key IS NOT NULL AND have_blob = 0 LIMIT ?",
+        "SELECT uid, blob_key FROM relics WHERE kind = 'photo' "
+        'AND blob_key IS NOT NULL AND have_blob = 0 AND held_by IS NULL '
+        'LIMIT ?',
         [limit],
       )
       .map((r) => (uid: r['uid'] as String, blobKey: r['blob_key'] as String))
       .toList();
 
-  bool get isEmpty => (_db.select('SELECT 1 FROM relics LIMIT 1')).isEmpty;
+  /// Nothing to show. A vault whose every row is held back reads as empty,
+  /// which is exactly what the user sees.
+  bool get isEmpty =>
+      (_db.select('SELECT 1 FROM relics WHERE held_by IS NULL LIMIT 1')).isEmpty;
 
-  /// Local-only account aggregates: total bytes + promoted count.
+  /// Local-only account aggregates: total bytes + promoted count. Counts HELD
+  /// rows too — this is disk accounting, and their bytes are really on disk.
   (int bytes, int vault) localAggregate() {
     final rs = _db.select(
       'SELECT COALESCE(SUM(byte_size),0) AS b, COALESCE(SUM(promoted),0) AS v FROM relics',
@@ -2968,12 +3132,18 @@ class RelicDb {
 
   /// Count of unpromoted (history/stream) relics — the pool a keep-N cap rings.
   int countUnpromoted() {
-    final rs = _db.select('SELECT COUNT(*) AS n FROM relics WHERE promoted = 0');
+    final rs = _db.select(
+      'SELECT COUNT(*) AS n FROM relics WHERE promoted = 0 AND held_by IS NULL',
+    );
     return (rs.first['n'] as num).toInt();
   }
 
+  /// Every relic the user can actually see. Held rows are counted by
+  /// [countHeld] instead — they are not part of this vault right now.
   int countAll() {
-    final rs = _db.select('SELECT COUNT(*) AS n FROM relics');
+    final rs = _db.select(
+      'SELECT COUNT(*) AS n FROM relics WHERE held_by IS NULL',
+    );
     return (rs.first['n'] as num).toInt();
   }
 
@@ -2982,7 +3152,8 @@ class RelicDb {
   /// (`worker/src/index.ts`). Returns (uid, blobKey) newest-skipped, oldest-first.
   List<({String uid, String? blobKey})> unpromotedBeyond(int keep) => _db
       .select(
-        'SELECT uid, blob_key FROM relics WHERE promoted = 0 '
+        'SELECT uid, blob_key FROM relics '
+        'WHERE promoted = 0 AND held_by IS NULL '
         'ORDER BY created_at DESC LIMIT -1 OFFSET ?',
         [keep],
       )
@@ -2994,16 +3165,19 @@ class RelicDb {
   List<({String uid, String? blobKey})> unpromotedOlderThan(int cutoff) => _db
       .select(
         'SELECT uid, blob_key FROM relics '
-        'WHERE promoted = 0 AND created_at < ?',
+        'WHERE promoted = 0 AND held_by IS NULL AND created_at < ?',
         [cutoff],
       )
       .map((r) => (uid: r['uid'] as String, blobKey: r['blob_key'] as String?))
       .toList();
 
-  /// Vault (promoted) usage: item count + total bytes. For the vault-full gate.
+  /// Vault (promoted) usage: item count + total bytes. For the vault-full gate,
+  /// which mirrors the CURRENT account's server-side quota — held rows were
+  /// never uploaded to it, so they don't count against it.
   (int count, int bytes) vaultUsage() {
     final rs = _db.select(
-      'SELECT COUNT(*) AS n, COALESCE(SUM(byte_size),0) AS b FROM relics WHERE promoted = 1',
+      'SELECT COUNT(*) AS n, COALESCE(SUM(byte_size),0) AS b FROM relics '
+      'WHERE promoted = 1 AND held_by IS NULL',
     );
     final row = rs.first;
     return ((row['n'] as num).toInt(), (row['b'] as num).toInt());

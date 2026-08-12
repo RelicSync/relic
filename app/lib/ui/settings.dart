@@ -670,8 +670,7 @@ class _SettingsViewState extends State<SettingsView>
             ],
           ),
         ),
-        if (connected && widget.repo.mergeOfferCount > 0)
-          _mergeOfferRow(c),
+        if (connected && widget.repo.heldCount > 0) _mergeOfferRow(c),
         _row(
           c,
           Row(
@@ -2589,54 +2588,72 @@ class _SettingsViewState extends State<SettingsView>
   }
 
   /// Shown after a bind detected an account switch: the previous account's
-  /// items were held back instead of auto-uploading (they stay local). The
-  /// user decides — merge them into this account, or keep them device-only.
+  /// items were held back instead of auto-uploading, and are tucked away out of
+  /// the history list so they don't read as this account's broken sync. The
+  /// user decides — bring them into this account, leave them tucked away, or
+  /// delete them from the device.
   Widget _mergeOfferRow(RelicColors c) {
-    final n = widget.repo.mergeOfferCount;
+    final n = widget.repo.heldCount;
+    // After "keep them tucked away" the offer stops asking, but the items are
+    // still here — the row stays (quieter, minus the dismiss button) so the
+    // decision can still be changed instead of becoming a dead end.
+    final asking = widget.repo.mergeOfferCount > 0;
     return _row(
       c,
-      Row(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Items from before this sign-in',
-                  style: RelicTheme.sans(
-                    size: 13,
-                    weight: FontWeight.w500,
-                    color: c.text,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '${_fmtCount(n)} items on this device were last synced with a '
-                  'different account. They stay on this computer and have not '
-                  'been uploaded here.',
-                  style: RelicTheme.sans(
-                    size: 11.5,
-                    color: c.textMuted,
-                    height: 1.4,
-                  ),
-                ),
-              ],
+          Text(
+            asking ? 'Items from before this sign-in' : 'Tucked-away items',
+            style: RelicTheme.sans(
+              size: 13,
+              weight: FontWeight.w500,
+              color: c.text,
             ),
           ),
-          const SizedBox(width: 16),
-          _btn(
-            c,
-            'Upload all',
-            LucideIcons.upload,
-            accent: true,
-            onTap: _confirmMergeUpload,
+          const SizedBox(height: 2),
+          Text(
+            asking
+                ? '${_fmtCount(n)} items on this device belong to a different '
+                    'account, so they are tucked away and hidden from your '
+                    'history. Nothing has been uploaded here.'
+                : '${_fmtCount(n)} items from another account are tucked away '
+                    'on this device. They come back on their own if you sign '
+                    'back into that account.',
+            style: RelicTheme.sans(
+              size: 11.5,
+              color: c.textMuted,
+              height: 1.4,
+            ),
           ),
-          const SizedBox(width: 8),
-          _btn(
-            c,
-            'Keep local',
-            LucideIcons.x,
-            onTap: () => setState(widget.repo.dismissMergeOffer),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              _btn(
+                c,
+                'Upload all',
+                LucideIcons.upload,
+                accent: asking,
+                onTap: _confirmMergeUpload,
+              ),
+              if (asking) ...[
+                const SizedBox(width: 8),
+                _btn(
+                  c,
+                  'Keep them tucked away',
+                  LucideIcons.eyeOff,
+                  onTap: () => setState(widget.repo.dismissMergeOffer),
+                ),
+              ],
+              const SizedBox(width: 8),
+              _btn(
+                c,
+                'Delete from device',
+                LucideIcons.trash2,
+                danger: true,
+                onTap: _confirmMergeDelete,
+              ),
+            ],
           ),
         ],
       ),
@@ -2645,7 +2662,7 @@ class _SettingsViewState extends State<SettingsView>
 
   Future<void> _confirmMergeUpload() async {
     final c = RelicTheme.of(context);
-    final n = widget.repo.mergeOfferCount;
+    final n = widget.repo.heldCount;
     final who = widget.repo.accountEmail ?? 'this account';
     final ok = await showDialog<bool>(
       context: context,
@@ -2661,9 +2678,9 @@ class _SettingsViewState extends State<SettingsView>
               style: RelicTheme.sans(
                   size: 17, weight: FontWeight.w600, color: c.text)),
           content: Text(
-            'Everything on this device uploads to $who and counts against its '
-            'storage. If these items belong to a different account, keep them '
-            'local instead.',
+            'The tucked-away items come back into your history and upload to '
+            '$who, counting against its storage. If they belong to someone '
+            'else\'s account, leave them tucked away instead.',
             style:
                 RelicTheme.sans(size: 13.5, color: c.textSecondary, height: 1.5),
           ),
@@ -2685,6 +2702,54 @@ class _SettingsViewState extends State<SettingsView>
     );
     if (ok == true && mounted) {
       await widget.repo.acceptMergeOffer();
+      if (mounted) setState(() {});
+    }
+  }
+
+  /// The third option on the merge offer: the previous account's items are gone
+  /// from this machine for good. Confirm-gated like clearing history, and worth
+  /// spelling out that signing back in won't bring them back here.
+  Future<void> _confirmMergeDelete() async {
+    final c = RelicTheme.of(context);
+    final n = widget.repo.heldCount;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dctx) => RelicTheme(
+        colors: c,
+        child: AlertDialog(
+          backgroundColor: c.panel,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(Radii.card),
+            side: BorderSide(color: c.borderStrong),
+          ),
+          title: Text('Delete ${_fmtCount(n)} items from this device?',
+              style: RelicTheme.sans(
+                  size: 17, weight: FontWeight.w600, color: c.text)),
+          content: Text(
+            'These items are erased from this computer. They are not touched '
+            'on the account they came from, so any device still signed into '
+            'that account keeps its copy. This can\'t be undone here.',
+            style:
+                RelicTheme.sans(size: 13.5, color: c.textSecondary, height: 1.5),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dctx, false),
+              child: Text('Cancel',
+                  style: RelicTheme.sans(size: 13.5, color: c.textSecondary)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dctx, true),
+              child: Text('Delete',
+                  style: RelicTheme.sans(
+                      size: 13.5, weight: FontWeight.w600, color: c.danger)),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok == true && mounted) {
+      await widget.repo.deleteMergeOffer();
       if (mounted) setState(() {});
     }
   }

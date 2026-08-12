@@ -361,16 +361,16 @@ class _RealAppState extends State<RealApp>
   /// register this device in the account's device list (best-effort).
   Future<void> _afterDesktopConnect() async {
     final repo = widget.repo;
-    // An account switch just held the previous account's items back (they stay
-    // local until the user decides in Settings). Say so out loud once — the
-    // popup banner carries it from here, but without this the first impression
-    // is "my items stopped syncing".
+    // An account switch just held the previous account's items back: they are
+    // hidden from the history and stay on this machine until the user decides
+    // in Settings. Say so out loud once — the popup banner carries it from
+    // here, but without this the history just looks like it lost items.
     if (repo.mergeOfferCount > 0) {
       LocalNotification(
-        title: 'Your previous items are still on this device',
+        title: 'Your previous items are tucked away',
         body:
-            '${repo.mergeOfferCount} items from your last account were not '
-            'uploaded to this one. Choose what to do in Settings.',
+            '${repo.mergeOfferCount} items from your last account are hidden '
+            'on this device, not uploaded here. Choose what to do in Settings.',
       ).show();
     }
     if (repo.vaultJustCreated && repo.masterKey != null) {

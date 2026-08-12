@@ -493,10 +493,10 @@ class _PopupViewState extends State<PopupView> {
         ),
       );
 
-  /// Shown while an account-switch merge offer is pending: those items look
-  /// like they simply refuse to sync unless the holdback is explained where
-  /// the user is actually looking. Routes to Settings, where the offer's
-  /// Upload all / Keep local decision lives.
+  /// Shown while an account-switch merge offer is pending. The previous
+  /// account's items are hidden from the list below (they are not this
+  /// account's), so without this the history just looks mysteriously shorter.
+  /// Routes to Settings, where the upload / keep / delete decision lives.
   Widget _mergeOfferBanner(RelicColors c) => GestureDetector(
         onTap: widget.onSettings,
         child: MouseRegion(
@@ -514,7 +514,7 @@ class _PopupViewState extends State<PopupView> {
               Expanded(
                 child: Text(
                   '${widget.repo.mergeOfferCount} items from your previous '
-                  'account are only on this device.',
+                  'account are tucked away on this device.',
                   style: RelicTheme.sans(size: 11.5, color: c.textSecondary),
                 ),
               ),
