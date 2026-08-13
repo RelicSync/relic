@@ -13,14 +13,22 @@ import 'src/windows/foreground_win.dart' as win;
 /// ("chrome", "vscode"). Blocklist entries and tags are derived from it, so
 /// they stay consistent within a platform.
 
-/// The focused control's caret in PHYSICAL screen pixels `[x, y]` (bottom-left),
-/// or null when there's no reliable caret (Windows-only; see the win backend).
-/// Used by "open history at the cursor" to anchor the picker near the caret.
-List<double>? caretScreenPointPhysical() =>
-    Platform.isWindows ? win.caretScreenPointPhysical() : null;
+/// The focused control's caret as `[x, y]` (bottom-left), or null when no app
+/// reports one. Used by caret anchoring to open the picker where the user is
+/// typing. Units differ by platform and the caller's scale derivation absorbs
+/// it: Windows answers in PHYSICAL pixels (paired with
+/// [cursorScreenPointPhysical] to derive the display scale); macOS answers in
+/// global points, which already ARE the logical space — its
+/// [cursorScreenPointPhysical] stays null, so the scale stays 1.
+Future<List<double>?> caretScreenPoint() async {
+  if (Platform.isWindows) return win.caretScreenPointPhysical();
+  if (Platform.isMacOS) return mac.caretScreenPoint();
+  return null;
+}
 
 /// The mouse cursor in PHYSICAL screen pixels `[x, y]`, or null. Paired with a
-/// logical cursor read to derive the effective display scale for caret anchoring.
+/// logical cursor read to derive the effective display scale for caret
+/// anchoring (Windows-only; macOS carets arrive in points, see above).
 List<double>? cursorScreenPointPhysical() =>
     Platform.isWindows ? win.cursorScreenPointPhysical() : null;
 

@@ -492,9 +492,9 @@ class _SettingsViewState extends State<SettingsView>
               repo.reminders,
               repo.setReminders,
               sub: 'Set a reminder on any item and get a nudge later.',
-              last: !Platform.isWindows,
+              last: !(Platform.isWindows || Platform.isMacOS),
             ),
-            if (Platform.isWindows)
+            if (Platform.isWindows || Platform.isMacOS)
               _toggleRow(
                 c,
                 'Open history at the cursor',

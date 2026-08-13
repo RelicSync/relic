@@ -751,12 +751,14 @@ class _RealAppState extends State<RealApp>
   }
 
   /// Where to place the popup on summon. With "open history at the cursor" on
-  /// (feature_paste_at_caret), anchor just below the text caret when Windows
-  /// reports one; otherwise, and everywhere else, fall back to the mouse-
-  /// anchored [_cursorRect]. The caret comes in physical pixels, so the scale
-  /// is derived empirically from a cursor read in both coordinate spaces (both
-  /// point at the same monitor in practice), and the result is clamped to the
-  /// caret monitor's work area so a bad reading can never place it off-screen.
+  /// (feature_paste_at_caret), anchor just below the text caret when the
+  /// platform reports one (Win32 GUITHREADINFO on Windows, the Accessibility
+  /// API on macOS); otherwise, and everywhere else, fall back to the mouse-
+  /// anchored [_cursorRect]. Windows carets come in physical pixels, so the
+  /// scale is derived empirically from a cursor read in both coordinate spaces
+  /// (both point at the same monitor in practice; macOS answers in points and
+  /// the derivation settles at 1), and the result is clamped to the caret
+  /// monitor's work area so a bad reading can never place it off-screen.
   Future<Rect> _summonRect(Size size) async {
     if (widget.repo.pasteAtCaret) {
       try {
@@ -798,7 +800,7 @@ class _RealAppState extends State<RealApp>
   /// physical pixels, so the scale is derived empirically from a cursor read in
   /// both coordinate spaces (both point at the same monitor in practice).
   Future<(Offset, Offset, Size)?> _caretAnchor() async {
-    final caret = caretScreenPointPhysical();
+    final caret = await caretScreenPoint();
     if (caret == null) return null;
     final curPhys = cursorScreenPointPhysical();
     final curLog = await screenRetriever.getCursorScreenPoint();

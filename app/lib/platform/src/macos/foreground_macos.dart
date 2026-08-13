@@ -39,3 +39,16 @@ MacApp? _appOf(Map<String, Object?>? m) {
   if (id == null || id.isEmpty) return null;
   return (bundleId: id, name: (m?['name'] as String?) ?? '');
 }
+
+/// The focused control's text caret as `[x, y]` in global screen POINTS
+/// (top-left origin, caret bottom-left), read through the Accessibility API —
+/// so it answers null without the AX grant, and for apps that don't expose
+/// their text (many Chromium/Electron surfaces, same holes as Windows).
+Future<List<double>?> caretScreenPoint() async {
+  try {
+    final p = await _ch.invokeListMethod<double>('caretScreenPoint');
+    return (p != null && p.length == 2) ? p : null;
+  } catch (_) {
+    return null;
+  }
+}

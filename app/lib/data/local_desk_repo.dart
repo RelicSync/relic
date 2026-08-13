@@ -970,7 +970,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   bool _multiCombine = false; // multi-select in the picker → combine & paste
   bool _snippets = false; // saved reusable text, surfaced as a picker facet
   bool _reminders = false; // per-item reminders with a native toast
-  bool _pasteAtCaret = false; // open the picker near the text cursor (Windows)
+  bool _pasteAtCaret = false; // open the picker near the text cursor (desktop)
   Timer? _reminderTimer; // sweep runs only while _reminders is on
   // Foreground app at the last popup summon (exe stem / bundle id), set by
   // the desktop shell — the "paste destination" for the context prior.
