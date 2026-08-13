@@ -192,17 +192,30 @@ if command -v create-dmg >/dev/null 2>&1; then
   # drop link on the right, the background's arrow pointing from one to the
   # other. (The ${a[@]+…} guard is for bash 3.2, which is what /bin/bash still
   # is on macOS: an empty array under `set -u` is an unbound variable there.)
-  if create-dmg --volname "Relic $VER" \
-      --window-pos 200 120 --window-size 600 400 \
-      --icon-size 100 --text-size 13 \
-      ${BG_ARGS[@]+"${BG_ARGS[@]}"} \
-      --icon "Relic.app" 150 190 --app-drop-link 450 190 \
-      --hide-extension "Relic.app" \
-      "$DMG" "$STAGE"; then
-    PACKAGED=1
-  else
-    echo "==> create-dmg failed; falling back to a plain hdiutil image"
+  # Up to three attempts: create-dmg's unmount step fails with "Resource busy"
+  # for transient reasons (Spotlight indexing the fresh volume — or a Relic
+  # someone launched off the staging volume while it was up; the guard in
+  # AppDelegate.swift now exits such a copy, but the app it defers to can pin
+  # the mount for a beat). The failure that matters is only cosmetic, but the
+  # 1.0.36 build silently shipped the artless fallback, so: retry, and shout.
+  for attempt in 1 2 3; do
+    if create-dmg --volname "Relic $VER" \
+        --window-pos 200 120 --window-size 600 400 \
+        --icon-size 100 --text-size 13 \
+        ${BG_ARGS[@]+"${BG_ARGS[@]}"} \
+        --icon "Relic.app" 150 190 --app-drop-link 450 190 \
+        --hide-extension "Relic.app" \
+        "$DMG" "$STAGE"; then
+      PACKAGED=1
+      break
+    fi
+    echo "==> create-dmg attempt $attempt failed"
     rm -f "$DIST"/rw.*.dmg
+    sleep 5
+  done
+  if [[ "$PACKAGED" == 0 ]]; then
+    echo "==> WARNING: create-dmg failed 3 times; falling back to a PLAIN image"
+    echo "==>          (no background artwork, no window layout)"
   fi
 fi
 if [[ "$PACKAGED" == 0 ]]; then
@@ -228,6 +241,22 @@ if [[ -n "$IDENTITY" ]]; then
     xcrun stapler staple "$DMG"
   fi
 fi
+
+# --- final layout check: mount what will actually ship and look inside. The
+#     app and Applications link are hard requirements; the artwork is the
+#     cosmetic one that quietly went missing once, so its state is printed
+#     either way.
+CHECK_MNT="$(mktemp -d)"
+hdiutil attach -readonly -nobrowse "$DMG" -mountpoint "$CHECK_MNT" >/dev/null
+[[ -d "$CHECK_MNT/Relic.app" ]] || { echo "==> FATAL: shipped DMG has no Relic.app"; exit 1; }
+[[ -e "$CHECK_MNT/Applications" ]] || { echo "==> FATAL: shipped DMG has no Applications link"; exit 1; }
+if [[ -f "$CHECK_MNT/.background/dmg-background.png" ]]; then
+  echo "==> layout check: app + Applications + background artwork present"
+else
+  echo "==> layout check: WARNING — no background artwork in the shipped DMG"
+fi
+hdiutil detach "$CHECK_MNT" >/dev/null || hdiutil detach "$CHECK_MNT" -force >/dev/null
+rmdir "$CHECK_MNT" 2>/dev/null || true
 
 cat <<EOF
 

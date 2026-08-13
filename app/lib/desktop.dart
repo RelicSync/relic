@@ -265,16 +265,25 @@ class _RealAppState extends State<RealApp>
     _scheduleUpdateChecks();
     // A relic:// link (cold or warm) surfaces the window, like a hotkey summon.
     DesktopLinks.onLink = _handleDeepLink;
+    // First launch (empty, unconnected vault): the onboarding will welcome the
+    // user; otherwise the app settles into the tray. Decided here because the
+    // Accessibility prompt below keys off it too.
+    final firstRun = !widget.repo.syncEnabled && widget.repo.isEmpty;
     // macOS: synthetic ⌘C/⌘V (paste-on-select, selection capture) needs the
     // Accessibility grant. Surface the one-time system prompt at startup; if
     // declined, those paths silently degrade to clipboard-only and Settings →
     // System Settings can re-grant later. No-op on Windows.
-    if (Platform.isMacOS) {
+    //
+    // NOT on first run or from a doomed DMG/translocated copy: onboarding's
+    // Accessibility step exists to explain the ask before prompting, and this
+    // raw dialog was racing it onto a brand-new user's screen (TCC shows the
+    // system prompt only once, so firing it here spends the one explained
+    // moment on an unexplained popup). Existing installs keep the probe.
+    if (Platform.isMacOS && !firstRun && _installOffer == null) {
       unawaited(inputInjectionAvailable(prompt: true));
     }
-    // First launch (empty, unconnected vault): welcome the user with the
-    // onboarding instead of settling silently into the tray. A relic:// launch
-    // link surfaces the popup. Otherwise stay hidden in the tray as usual.
+    // A relic:// launch link surfaces the popup. Otherwise stay hidden in the
+    // tray as usual.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       // Running out of the disk image: ask about installing before anything
       // else. This one comes ahead of even the autostart shortcut, because a
@@ -292,7 +301,6 @@ class _RealAppState extends State<RealApp>
         await _dismiss();
         return;
       }
-      final firstRun = !widget.repo.syncEnabled && widget.repo.isEmpty;
       if (firstRun) {
         setState(() => _connecting = true);
         await _sizeWindow(520, 560);
