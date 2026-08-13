@@ -5,20 +5,25 @@ import 'package:http/http.dart' as http;
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../platform/app_install.dart';
 import 'update_check.dart';
 
-/// One-click self-update for the Windows build.
+/// One-click self-update for the desktop builds.
 ///
 /// Streams the signed installer to a temp file, verifies it against the
-/// manifest's sha256, then hands off to a SILENT per-user Inno install
-/// (no UAC — see installer/relic.iss) that force-closes this process and
-/// relaunches the new build into the tray (`/RELAUNCH=1`, handled by the
-/// ShouldRelaunch check in the .iss).
+/// manifest's sha256, then installs:
+///   - Windows: hands off to a SILENT per-user Inno install (no UAC — see
+///     installer/relic.iss) that force-closes this process and relaunches
+///     the new build into the tray (`/RELAUNCH=1`, handled by the
+///     ShouldRelaunch check in the .iss).
+///   - macOS: mounts the DMG invisibly and swaps /Applications/Relic.app in
+///     place (platform/app_install.dart, the same ditto-swap as the first-run
+///     install offer), then exits so the detached relauncher can open the new
+///     build. Safe while running — the process keeps its binary by inode.
 ///
-/// On success this never returns: it tears the app down so the installer
-/// can swap the files without waiting on our locks. Callers catch
-/// [SelfUpdateUnsupported] (non-Windows, or a manifest without sha256) and
-/// any other failure, and fall back to opening the download page.
+/// On success this never returns. Callers catch [SelfUpdateUnsupported]
+/// (unsupported platform, or a manifest without sha256) and any other
+/// failure, and fall back to opening the download page.
 class SelfUpdateUnsupported implements Exception {}
 
 Future<void> installUpdate(
@@ -26,30 +31,56 @@ Future<void> installUpdate(
   void Function(String status)? onStatus,
 }) async {
   final sha = info.sha256;
-  if (!Platform.isWindows || sha == null) throw SelfUpdateUnsupported();
-  final dir = Directory('${Directory.systemTemp.path}\\relic-update')
+  if (sha == null || !(Platform.isWindows || Platform.isMacOS)) {
+    throw SelfUpdateUnsupported();
+  }
+  final dir = Directory(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}relic-update')
     ..createSync(recursive: true);
-  final file = File('${dir.path}\\relic-setup-${info.version}.exe');
+  if (Platform.isWindows) {
+    final file = File('${dir.path}\\relic-setup-${info.version}.exe');
+    await _download(info.url, file, onStatus);
+    onStatus?.call('Verifying…');
+    await verifyInstaller(file, sha);
+    onStatus?.call('Installing. Relic will restart…');
+    await Process.start(
+      file.path,
+      const [
+        '/VERYSILENT',
+        '/NORESTART',
+        '/SUPPRESSMSGBOXES',
+        '/FORCECLOSEAPPLICATIONS',
+        '/RELAUNCH=1',
+      ],
+      mode: ProcessStartMode.detached,
+    );
+    // Get out of the installer's way: releasing our file locks with a clean
+    // exit beats making it force-close us. It preps/extracts for a moment
+    // before touching {app}, which is all the head start we need.
+    await trayManager.destroy();
+    await windowManager.destroy();
+    return;
+  }
+  // macOS. The DMG is downloaded by us, not a browser, so it carries no
+  // quarantine flag — the swapped-in app relaunches without a Gatekeeper
+  // prompt. The sha256 check above is what stands in for that gate, and the
+  // bundle inside is Developer ID signed and notarized besides.
+  final file = File('${dir.path}/relic-${info.version}.dmg');
   await _download(info.url, file, onStatus);
   onStatus?.call('Verifying…');
   await verifyInstaller(file, sha);
   onStatus?.call('Installing. Relic will restart…');
-  await Process.start(
-    file.path,
-    const [
-      '/VERYSILENT',
-      '/NORESTART',
-      '/SUPPRESSMSGBOXES',
-      '/FORCECLOSEAPPLICATIONS',
-      '/RELAUNCH=1',
-    ],
-    mode: ProcessStartMode.detached,
-  );
-  // Get out of the installer's way: releasing our file locks with a clean
-  // exit beats making it force-close us. It preps/extracts for a moment
-  // before touching {app}, which is all the head start we need.
+  if (!await installUpdateFromDiskImage(file.path)) {
+    throw StateError('could not install the update');
+  }
+  try {
+    file.deleteSync();
+  } catch (_) {}
+  // Arm the relauncher BEFORE dying: it waits out this pid, then opens the
+  // new copy (an `open` while we run would only reactivate this process).
+  await relaunchInstalledCopyAfterExit();
   await trayManager.destroy();
-  await windowManager.destroy();
+  exit(0);
 }
 
 /// Throws unless [file]'s bytes hash to [expectedSha256] (hex, case-blind).

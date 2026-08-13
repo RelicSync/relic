@@ -42,6 +42,23 @@ class AppDelegate: FlutterAppDelegate {
         .runningApplications(withBundleIdentifier: bundleId)
         .first { $0.processIdentifier != myPid && !$0.isTerminated }
       if let other {
+        // A copy running off a DMG or translocated exists to REPLACE the
+        // running install, not defer to it: "double-click the new download
+        // while Relic runs" is the documented update path, and deferring
+        // here turned it into a silent no-op. Ask the old instance to quit
+        // and, once it is gone, carry on into the install offer. Only if it
+        // will not die do we fall through to the defer below.
+        if isInstallerish(Bundle.main.bundlePath) {
+          other.terminate()
+          // kill(pid, 0), not other.isTerminated: NSRunningApplication's
+          // properties only refresh with runloop turns, which this early
+          // blocking wait never gives it.
+          let deadline = Date().addingTimeInterval(6)
+          while kill(other.processIdentifier, 0) == 0 && Date() < deadline {
+            usleep(100_000)
+          }
+          if kill(other.processIdentifier, 0) != 0 { return }
+        }
         if let url = other.bundleURL {
           // Block until Launch Services has taken the reopen request —
           // exit(0) straight after the call could race the XPC send.
@@ -58,6 +75,18 @@ class AppDelegate: FlutterAppDelegate {
     }
     #endif
   }
+
+  #if !DEBUG
+  // Mirrors the Dart-side classification (platform/app_install.dart): a
+  // translocated shadow copy, or any read-only volume (a mounted DMG — a
+  // writable external disk someone keeps apps on stays a legitimate home).
+  private static func isInstallerish(_ path: String) -> Bool {
+    if path.contains("/AppTranslocation/") { return true }
+    let vals = try? URL(fileURLWithPath: path)
+      .resourceValues(forKeys: [.volumeIsReadOnlyKey])
+    return vals?.volumeIsReadOnly == true
+  }
+  #endif
 
   // Launching the app again (Dock, Finder, `open -a Relic`) surfaces the
   // existing instance's window — the macOS analog of the Windows runner's

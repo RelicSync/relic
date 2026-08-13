@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:relic_app/platform/app_install.dart';
+import 'package:relic_app/platform/src/macos/app_install_macos.dart' as mac;
 
 /// The "you are running Relic out of the DMG" rescue is a decision made from
 /// one string (the resolved executable path), so the whole contract is pinned
@@ -161,6 +164,65 @@ void main() {
 
     test('an executable outside any bundle has no root to copy', () {
       expect(bundleRootFor('/usr/local/bin/relic'), isNull);
+    });
+  });
+
+  // The self-update swap, against a real disk image and a scratch target —
+  // hdiutil and ditto are macOS tools, so off a Mac this group is a no-op.
+  // The target override exists exactly so this test never goes anywhere near
+  // the real /Applications.
+  group('installUpdateFromDiskImage', () {
+    Future<String> makeDmg(Directory tmp, {required bool withApp}) async {
+      final stage = Directory('${tmp.path}/stage')..createSync();
+      if (withApp) {
+        Directory('${stage.path}/Relic.app/Contents/MacOS')
+            .createSync(recursive: true);
+        File('${stage.path}/Relic.app/Contents/MacOS/relic_app')
+            .writeAsStringSync('new-build');
+      } else {
+        File('${stage.path}/readme.txt').writeAsStringSync('nothing here');
+      }
+      final dmg = '${tmp.path}/update.dmg';
+      final make = await Process.run('/usr/bin/hdiutil', [
+        'create', '-srcfolder', stage.path, //
+        '-volname', 'RelicTest', '-format', 'UDZO', dmg,
+      ]);
+      expect(make.exitCode, 0, reason: make.stderr.toString());
+      return dmg;
+    }
+
+    test('swaps the target for the app inside the image, then detaches',
+        () async {
+      if (!Platform.isMacOS) return;
+      final tmp = Directory.systemTemp.createTempSync('relic-dmg-test');
+      addTearDown(() => tmp.deleteSync(recursive: true));
+      final dmg = await makeDmg(tmp, withApp: true);
+      // An older install sits at the target; the swap must replace it whole,
+      // not merge into it (stale files beside a new binary breaks signing).
+      final target = '${tmp.path}/Applications/Relic.app';
+      Directory('$target/Contents').createSync(recursive: true);
+      File('$target/Contents/stale').writeAsStringSync('old');
+
+      expect(await mac.installUpdateFromDiskImage(dmg, target: target), isTrue);
+      expect(
+        File('$target/Contents/MacOS/relic_app').readAsStringSync(),
+        'new-build',
+      );
+      expect(File('$target/Contents/stale').existsSync(), isFalse);
+    });
+
+    test('an image with no Relic.app fails without touching the target',
+        () async {
+      if (!Platform.isMacOS) return;
+      final tmp = Directory.systemTemp.createTempSync('relic-dmg-test');
+      addTearDown(() => tmp.deleteSync(recursive: true));
+      final dmg = await makeDmg(tmp, withApp: false);
+      final target = '${tmp.path}/Applications/Relic.app';
+      Directory('$target/Contents').createSync(recursive: true);
+      File('$target/Contents/stale').writeAsStringSync('old');
+
+      expect(await mac.installUpdateFromDiskImage(dmg, target: target), isFalse);
+      expect(File('$target/Contents/stale').readAsStringSync(), 'old');
     });
   });
 }

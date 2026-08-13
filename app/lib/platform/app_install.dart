@@ -136,3 +136,21 @@ Future<bool> installIntoApplications() async {
 /// /Applications so the user can drag the app across themselves.
 Future<void> revealApplicationsFolder() =>
     revealInFileManager('/Applications');
+
+/// Replace /Applications/Relic.app with the Relic.app inside the (already
+/// sha256-verified) disk image at [dmgPath]. The macOS one-click self-update
+/// backend (data/self_update.dart). Returns false when anything along the
+/// mount → copy → detach path fails — the caller falls back to the browser
+/// download page. On true, the new build is on disk and the caller finishes
+/// the job with [relaunchInstalledCopyAfterExit] + its own exit.
+Future<bool> installUpdateFromDiskImage(String dmgPath) async {
+  if (!Platform.isMacOS) return false;
+  return mac.installUpdateFromDiskImage(dmgPath);
+}
+
+/// Arm the detached relauncher: once this process exits, the installed copy
+/// is opened fresh (an `open` while we still run would only reactivate us).
+Future<void> relaunchInstalledCopyAfterExit() async {
+  if (!Platform.isMacOS) return;
+  await mac.reopenInstalledAfterExit();
+}
