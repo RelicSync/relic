@@ -1175,7 +1175,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   Future<void> _captureShared(WorkerRepo repo, List<SharedMediaFile> files) async {
     final seen = await _Creds.shareSeen();
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    var added = 0, skipped = 0, failed = 0;
+    var added = 0, skipped = 0, failed = 0, tooBig = 0;
     var dirty = false;
     for (final f in files) {
       try {
@@ -1188,17 +1188,26 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
         if (f.type == SharedMediaType.text || f.type == SharedMediaType.url) {
           fp = ShareDedup.fingerprint('txt', utf8.encode(f.path));
           capture = () => repo.captureText(f.path);
-        } else if (f.type == SharedMediaType.image) {
-          final bytes = await File(f.path).readAsBytes();
-          fp = ShareDedup.fingerprint('img', bytes);
-          capture = () =>
-              repo.captureImage(bytes, mime: mimeType(f), filename: _basename(f.path));
         } else {
-          // Any other shared file (PDF, doc, video, …) → a file relic.
+          // An image or any other file (PDF, zip, video, …) → an image/file
+          // relic. Both are read whole into memory, so check the per-item cap
+          // against the file's length BEFORE the read: the server would
+          // reject an oversized item anyway, and a giant readAsBytes can take
+          // the whole app down long before it gets that answer.
+          if (await File(f.path).length() > repo.maxItemBytes) {
+            tooBig++;
+            continue;
+          }
           final bytes = await File(f.path).readAsBytes();
-          fp = ShareDedup.fingerprint('file', bytes);
-          capture = () =>
-              repo.captureFile(bytes, mime: mimeType(f), filename: _basename(f.path));
+          if (f.type == SharedMediaType.image) {
+            fp = ShareDedup.fingerprint('img', bytes);
+            capture = () => repo.captureImage(bytes,
+                mime: mimeType(f), filename: _basename(f.path));
+          } else {
+            fp = ShareDedup.fingerprint('file', bytes);
+            capture = () => repo.captureFile(bytes,
+                mime: mimeType(f), filename: _basename(f.path));
+          }
         }
         if (ShareDedup.alreadySeen(seen, fp)) {
           skipped++;
@@ -1226,6 +1235,12 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     } else if (skipped > 0 && mounted) {
       // The share was already captured — reassure rather than silently no-op.
       _toast(skipped == 1 ? 'Already in Relic' : 'Already in Relic ($skipped)');
+    } else if (tooBig > 0 && mounted) {
+      // Say WHY nothing landed, or the refusal reads as a bug.
+      final mb = repo.maxItemBytes ~/ (1024 * 1024);
+      _toast(tooBig == 1
+          ? 'Too big to keep — Relic items are capped at $mb MB'
+          : '$tooBig items too big to keep — the cap is $mb MB');
     } else if (failed > 0 && mounted) {
       _toast("Couldn't capture — open Relic and retry");
     }

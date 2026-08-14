@@ -29,11 +29,14 @@
 	<dict>
 		<key>NSExtensionAttributes</key>
 		<dict>
-			<!-- Photos hands images straight to the extension; movies are not
-			     offered because _captureShared reads the whole payload into
-			     memory, which a video would not survive. -->
+			<!-- Photos hands images and movies straight to the extension. The
+			     extension only file-copies the payload into the App Group (it
+			     never reads the bytes), so its ~120 MB memory ceiling is not in
+			     play; the app enforces the per-item size cap against the staged
+			     file's length before reading it. -->
 			<key>PHSupportedMediaTypes</key>
 			<array>
+				<string>Video</string>
 				<string>Image</string>
 			</array>
 			<key>NSExtensionActivationRule</key>
@@ -47,6 +50,9 @@
 				<!-- Photos multi-select; capped so a whole album cannot be shoved
 				     through the hand-off in one go. -->
 				<key>NSExtensionActivationSupportsImageWithMaxCount</key>
+				<integer>10</integer>
+				<!-- Videos from Photos or elsewhere; same cap as images. -->
+				<key>NSExtensionActivationSupportsMovieWithMaxCount</key>
 				<integer>10</integer>
 				<!-- PDFs and any other document from Files or a document picker. -->
 				<key>NSExtensionActivationSupportsFileWithMaxCount</key>

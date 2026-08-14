@@ -43,26 +43,20 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-            <!-- Share sheet: receive text/links, images, and documents (PDF,
-                 doc, zip, octet-stream, ...) shared from other apps
-                 (receive_sharing_intent); the capture path stores anything it
-                 does not recognize as a file relic. video/* and audio/* are
-                 deliberately not declared: _captureShared reads the whole
-                 payload into memory, which a movie would not survive — the
-                 same policy as the iOS share extension. -->
+            <!-- Share sheet: receive anything — text/links, images, and every
+                 file type, video and audio included (receive_sharing_intent).
+                 The only gate is the per-item size cap, which _captureShared
+                 checks against the file's length BEFORE reading it, so an
+                 over-cap share gets a toast instead of an out-of-memory. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND"/>
                 <category android:name="android.intent.category.DEFAULT"/>
-                <data android:mimeType="text/*"/>
-                <data android:mimeType="image/*"/>
-                <data android:mimeType="application/*"/>
+                <data android:mimeType="*/*"/>
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND_MULTIPLE"/>
                 <category android:name="android.intent.category.DEFAULT"/>
-                <data android:mimeType="text/*"/>
-                <data android:mimeType="image/*"/>
-                <data android:mimeType="application/*"/>
+                <data android:mimeType="*/*"/>
             </intent-filter>
             <!-- Deep link: the QS tile / an iOS-style Shortcut fire
                  relic://capture to capture the current clipboard (app_links). -->
