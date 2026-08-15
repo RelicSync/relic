@@ -1,0 +1,41 @@
+{
+    "version": "1.0.33",
+    "description": "End-to-end-encrypted, cross-platform vault for everything you copy. Local-first clipboard history with on-device AI search.",
+    "homepage": "https://github.com/RelicSync/relic",
+    "license": "AGPL-3.0-only",
+    "architecture": {
+        "64bit": {
+            "url": "https://relic.space/download/windows/relic-setup-1.0.33.exe",
+            "hash": "e842a9f80e541bc26243df541b5c15bf3d89fd88192e82d75cb76ebe503da272"
+        }
+    },
+    "innosetup": true,
+    "shortcuts": [
+        [
+            "relic_app.exe",
+            "Relic"
+        ]
+    ],
+    "bin": [
+        [
+            "cli\\relic.exe",
+            "relic"
+        ]
+    ],
+    "notes": "Launch Relic from the Start Menu shortcut. The 'relic' command on PATH is the agent-facing CLI.",
+    "checkver": {
+        "url": "https://relic.space/latest.json",
+        "jsonpath": "$.platforms.windows.version"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://relic.space/download/windows/relic-setup-$version.exe",
+                "hash": {
+                    "url": "https://relic.space/latest.json",
+                    "jsonpath": "$.platforms.windows.sha256"
+                }
+            }
+        }
+    }
+}

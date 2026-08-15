@@ -35,10 +35,17 @@ https://github.com/user-attachments/assets/94e1c2f1-62f2-44ec-9939-7e35b497c9d1
 
 | Platform | How |
 |---|---|
-| **Windows** | `winget install --id Relic.Relic` |
+| **Windows** | `winget install --id Relic.Relic` — or the [signed installer](https://github.com/RelicSync/relic/releases/latest), or Scoop (below) |
 | **Android** | [Google Play](https://play.google.com/store/apps/details?id=relic.space.app) |
 | **macOS, iPhone, Linux** | Coming soon |
 | **From source** | [`BUILD.md`](./BUILD.md) — every component builds from a clean checkout with no secret of ours |
+
+This repo is also a Scoop bucket:
+
+```powershell
+scoop bucket add relic https://github.com/RelicSync/relic
+scoop install relic
+```
 
 The app is local-only until you connect it. Sync, when you want it, is free on
 the free tier, $7/mo or $60/yr for Pro, and $12/mo or $96/yr for Max. Running
