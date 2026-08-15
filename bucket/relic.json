@@ -10,6 +10,11 @@
         }
     },
     "innosetup": true,
+    "post_install": [
+        "$dups = Get-ChildItem \"$dir\" -Filter 'sift,*.exe' | Sort-Object Name",
+        "if ($dups -and -not (Test-Path \"$dir\\sift.exe\")) { Move-Item $dups[-1].FullName \"$dir\\sift.exe\" }",
+        "Get-ChildItem \"$dir\" -Filter 'sift,*.exe' | Remove-Item -Force"
+    ],
     "shortcuts": [
         [
             "relic_app.exe",

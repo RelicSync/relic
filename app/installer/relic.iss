@@ -67,7 +67,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "{#BuildDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Excludes sift.exe: the sidecar ships via its own entry below (built + signed at
+; target\release). A stray copy in BuildDir would otherwise ride the wildcard as
+; a SECOND sift.exe entry — Inno lets the later entry win so installs stayed
+; correct, but it bloated the installer and broke innounp-based extraction
+; (Scoop), which keeps duplicates as "sift,1.exe"/"sift,2.exe".
+Source: "{#BuildDir}\*"; DestDir: "{app}"; Excludes: "sift.exe"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; The `relic` CLI: a lightweight, agent-facing shim over the local vault. It is
 ; self-contained (only needs the MSVC runtime the app already ships), so it goes
 ; in its own subdir — that lets us put just it on PATH, not the whole app dir.
