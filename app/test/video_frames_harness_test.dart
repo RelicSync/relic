@@ -284,12 +284,15 @@ void main() {
 
     // 0. THE STORY OPENER — capture + name, all on the "mock desktop". A fake
     // accountant email holds the EIN; a selection sweep + Ctrl+C chip simulate
-    // the copy, then the capture-and-annotate hotkey pops the REAL EditDialog
-    // straight into edit mode (title focused) — we type the label "EIN" and
-    // Save. The whole beat stays on the desktop; the app showcase begins at
-    // the next scene (recall). Everything but the dialog is scenery.
+    // the copy, then the chip itself MORPHS into the capture-and-annotate
+    // chord (Ctrl+Shift+E) and the REAL EditDialog pops straight into edit
+    // mode (title focused) — we type the label "EIN" and Save. The chip is
+    // how the cut teaches the hotkey: in the scene, not in a caption. The
+    // whole beat stays on the desktop; the app showcase begins at the next
+    // scene (recall). Everything but the dialog is scenery.
     final selecting = ValueNotifier<bool>(false);
     final copied = ValueNotifier<bool>(false);
+    final chipLabel = ValueNotifier<String>('Ctrl+C');
     final editOpen = ValueNotifier<bool>(false);
     final einNow = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     // title/preview null => the dialog's title field opens EMPTY (the hotkey
@@ -314,6 +317,7 @@ void main() {
       build: (c) => _FakeEmailPage(
         selecting: selecting,
         copied: copied,
+        chipLabel: chipLabel,
         editOpen: editOpen,
         edit: EditDialog(
           relic: einRelic,
@@ -338,17 +342,22 @@ void main() {
       acts: [
         (const Duration(milliseconds: 700), () async => selecting.value = true),
         (const Duration(milliseconds: 1500), () async => copied.value = true),
+        // The copy chip becomes the hotkey chord, then the panel answers it.
         (
-          const Duration(milliseconds: 2500),
+          const Duration(milliseconds: 2300),
+          () async => chipLabel.value = 'Ctrl+Shift+E'
+        ),
+        (
+          const Duration(milliseconds: 3000),
           () async {
             await repo.restore(einRelic);
             editOpen.value = true; // hotkey -> straight into edit mode
           }
         ),
         // Title field is autofocused; the typed characters land as the label.
-        ...typing('EIN', const Duration(milliseconds: 3600),
+        ...typing('EIN', const Duration(milliseconds: 3900),
             seed: 21, baseMs: 190, fieldIndex: 1),
-        (const Duration(milliseconds: 5300), () async => tapText('Save')),
+        (const Duration(milliseconds: 5500), () async => tapText('Save')),
       ],
     );
 
@@ -637,44 +646,45 @@ void main() {
       ],
     );
 
-    // 12. Mini picker IN CONTEXT: a simulated airline "manage booking" web
-    // form; the picker pops at the focused field, a couple of typed chars
-    // pin the confirmation code, Enter pastes it into the form.
+    // 12. Mini picker IN CONTEXT — the payoff of the opener: a vendor
+    // onboarding form asks for the EIN captured (in story time) back in
+    // scene 0. The Ctrl+Shift+Space chip pops on the focused field, the
+    // picker opens at the caret, typing "EIN" surfaces the named entry,
+    // Enter pastes it into the form.
     final miniOpen = ValueNotifier<bool>(false);
+    final miniChip = ValueNotifier<bool>(false);
     final formValue = ValueNotifier<String>('');
     await record(
       name: 'mini',
-      build: (c) => _FakeBookingPage(
+      build: (c) => _FakeEinFormPage(
         formValue: formValue,
         miniOpen: miniOpen,
+        hotkeyChip: miniChip,
         mini: PopupView(
           repo: repo,
           onClose: () {},
           onSettings: () {},
           miniSignal: miniOpen,
           onPick: () {
-            formValue.value = 'QX7-4NP';
+            formValue.value = '88-1402316';
             miniOpen.value = false;
+            miniChip.value = false; // the chord did its job; clear the field
           },
         ),
       ),
       logical: const Size(1100, 780),
-      length: const Duration(milliseconds: 5800),
+      length: const Duration(milliseconds: 6000),
       acts: [
+        // The chord chip first, then the picker answers it.
+        (const Duration(milliseconds: 700), () async => miniChip.value = true),
         (
-          const Duration(milliseconds: 1000),
+          const Duration(milliseconds: 1400),
           () async => miniOpen.value = true
         ),
-        ...typing('qx', const Duration(milliseconds: 1900),
+        ...typing('ein', const Duration(milliseconds: 2300),
             seed: 13, baseMs: 150),
-        // The pass screenshot outranks the code; arrow to the text relic so
-        // the highlighted row is the one that fills the form.
         (
-          const Duration(milliseconds: 3000),
-          () async => tester.sendKeyEvent(LogicalKeyboardKey.arrowDown)
-        ),
-        (
-          const Duration(milliseconds: 3800),
+          const Duration(milliseconds: 4100),
           () async => tester.sendKeyEvent(LogicalKeyboardKey.enter)
         ),
       ],
@@ -776,17 +786,20 @@ void main() {
 
 /// The capture scene's scenery: browser chrome + an opened accountant email
 /// holding the EIN. [selecting] animates a selection highlight across the EIN
-/// line, [copied] fades in a Ctrl+C key chip, and [editOpen] pops the REAL
-/// EditDialog (passed as [edit]) straight into edit mode over the desktop, as
-/// the capture-and-annotate hotkey would.
+/// line, [copied] fades in a key chip whose text tracks [chipLabel] (Ctrl+C,
+/// then the capture chord), and [editOpen] pops the REAL EditDialog (passed
+/// as [edit]) straight into edit mode over the desktop, as the
+/// capture-and-annotate hotkey would.
 class _FakeEmailPage extends StatelessWidget {
   final ValueListenable<bool> selecting;
   final ValueListenable<bool> copied;
+  final ValueListenable<String> chipLabel;
   final ValueListenable<bool> editOpen;
   final Widget edit;
   const _FakeEmailPage({
     required this.selecting,
     required this.copied,
+    required this.chipLabel,
     required this.editOpen,
     required this.edit,
   });
@@ -932,12 +945,25 @@ class _FakeEmailPage extends StatelessWidget {
                               ),
                             ],
                           ),
-                          child: const Text('Ctrl+C',
-                              style: TextStyle(
-                                  fontFamily: 'IBMPlexMono',
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: Color(0xFFF2F4F7))),
+                          // The label morphs (Ctrl+C -> the capture chord):
+                          // the chip teaches the hotkey inside the scene.
+                          child: ValueListenableBuilder<String>(
+                            valueListenable: chipLabel,
+                            builder: (_, label, _) => AnimatedSize(
+                              duration: const Duration(milliseconds: 240),
+                              curve: Curves.easeOutCubic,
+                              child: AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 240),
+                                child: Text(label,
+                                    key: ValueKey(label),
+                                    style: const TextStyle(
+                                        fontFamily: 'IBMPlexMono',
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFFF2F4F7))),
+                              ),
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -1140,15 +1166,20 @@ class _SnipPainter extends CustomPainter {
 }
 
 /// The simulated "online form" the mini picker pastes into: browser chrome +
-/// a light booking page with a focused confirmation-code field. Everything
-/// here is scenery; the picker overlaid on it is the real component.
-class _FakeBookingPage extends StatelessWidget {
+/// a light vendor-onboarding page with a focused EIN field — the form that
+/// (in story time) asks for the number captured in the opener. [hotkeyChip]
+/// fades in a Ctrl+Shift+Space key chip on the field, teaching the chord
+/// inside the scene. Everything here is scenery; the picker overlaid on it
+/// is the real component.
+class _FakeEinFormPage extends StatelessWidget {
   final ValueNotifier<String> formValue;
   final ValueNotifier<bool> miniOpen;
+  final ValueNotifier<bool> hotkeyChip;
   final Widget mini;
-  const _FakeBookingPage({
+  const _FakeEinFormPage({
     required this.formValue,
     required this.miniOpen,
+    required this.hotkeyChip,
     required this.mini,
   });
 
@@ -1189,7 +1220,7 @@ class _FakeBookingPage extends StatelessWidget {
                   borderRadius: BorderRadius.circular(15),
                 ),
                 child: const Text(
-                  'condorair.example/manage-booking',
+                  'ledgerly.example/vendor-onboarding',
                   style: TextStyle(
                     fontFamily: 'IBMPlexMono',
                     fontSize: 12.5,
@@ -1224,22 +1255,22 @@ class _FakeBookingPage extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Manage your booking',
+                  const Text('Set up payouts',
                       style: TextStyle(
                           fontFamily: 'IBMPlexSans',
                           fontSize: 20,
                           fontWeight: FontWeight.w600,
                           color: _ink)),
                   const SizedBox(height: 4),
-                  const Text('Enter your confirmation code to view your trip.',
+                  const Text('We need your business details for the W-9.',
                       style: TextStyle(
                           fontFamily: 'IBMPlexSans',
                           fontSize: 13,
                           color: _dim)),
                   const SizedBox(height: 20),
-                  _label('EMAIL'),
+                  _label('BUSINESS NAME'),
                   _field(
-                    const Text('jordan@maplewood.studio',
+                    const Text('Maplewood Studio LLC',
                         style: TextStyle(
                             fontFamily: 'IBMPlexSans',
                             fontSize: 14,
@@ -1247,7 +1278,7 @@ class _FakeBookingPage extends StatelessWidget {
                     focused: false,
                   ),
                   const SizedBox(height: 14),
-                  _label('CONFIRMATION CODE'),
+                  _label('EMPLOYER IDENTIFICATION NUMBER (EIN)'),
                   ValueListenableBuilder<String>(
                     valueListenable: formValue,
                     builder: (_, v, _) => _field(
@@ -1270,7 +1301,7 @@ class _FakeBookingPage extends StatelessWidget {
                       color: _blue,
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: const Text('Find my booking',
+                    child: const Text('Continue',
                         style: TextStyle(
                             fontFamily: 'IBMPlexSans',
                             fontSize: 14,
@@ -1283,6 +1314,39 @@ class _FakeBookingPage extends StatelessWidget {
           ),
         ),
       ]),
+      // The chord chip on the focused field: same ink-pill language as the
+      // opener's Ctrl+C chip, so the two hotkeys read as one family.
+      Positioned(
+        left: 588,
+        top: 350,
+        child: ValueListenableBuilder<bool>(
+          valueListenable: hotkeyChip,
+          builder: (_, on, _) => AnimatedOpacity(
+            opacity: on ? 1 : 0,
+            duration: const Duration(milliseconds: 220),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: _ink,
+                borderRadius: BorderRadius.circular(7),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x331C2128),
+                    blurRadius: 12,
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: const Text('Ctrl+Shift+Space',
+                  style: TextStyle(
+                      fontFamily: 'IBMPlexMono',
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFFF2F4F7))),
+            ),
+          ),
+        ),
+      ),
       // The real mini picker, anchored at the focused field's caret.
       ValueListenableBuilder<bool>(
         valueListenable: miniOpen,
