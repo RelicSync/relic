@@ -3,15 +3,20 @@ import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
 
+import 'src/linux/clipboard_linux.dart' as lin;
 import 'src/macos/clipboard_macos.dart' as mac;
 import 'src/windows/clipboard_win.dart' as win;
 
 /// Native clipboard operations the cross-platform plugins don't cover: the
 /// change counter, privacy markers, file copies, raw-bitmap fallbacks and
 /// sensitive writes. Windows dispatches to Win32 (src/windows/clipboard_win),
-/// macOS to NSPasteboard via a MethodChannel (src/macos/clipboard_macos);
+/// macOS to NSPasteboard via a MethodChannel (src/macos/clipboard_macos),
+/// Linux to super_clipboard-based readers for the two capture-critical pieces
+/// (src/linux/clipboard_linux: file lists + the password-manager hint);
 /// everything else gets the benign empty results callers already handle by
-/// falling back to Flutter's framework clipboard.
+/// falling back to Flutter's framework clipboard. Linux has no clipboard
+/// change counter, so [clipboardSequence] stays 0 there — the synth-copy
+/// detection and post-secret scrub simply never arm, by design.
 ///
 /// All functions are async because the macOS side crosses a MethodChannel; the
 /// Windows implementations complete synchronously.
@@ -27,10 +32,12 @@ Future<int> clipboardSequence() async {
 
 /// True when the current clipboard contents explicitly ask history/monitoring
 /// tools to ignore them (password managers set private formats on Windows,
-/// org.nspasteboard.* marker types on macOS).
+/// org.nspasteboard.* marker types on macOS, the x-kde-passwordManagerHint
+/// target on Linux).
 Future<bool> clipboardShouldBeIgnored() async {
   if (Platform.isWindows) return win.clipboardShouldBeIgnored();
   if (Platform.isMacOS) return mac.shouldBeIgnored();
+  if (Platform.isLinux) return lin.shouldBeIgnored();
   return false;
 }
 
@@ -59,11 +66,12 @@ Future<bool> writeSensitiveTextToClipboard(String text) async {
   return false;
 }
 
-/// File paths from a file-manager copy (Explorer CF_HDROP / Finder file URLs),
-/// or empty.
+/// File paths from a file-manager copy (Explorer CF_HDROP / Finder file URLs
+/// / text/uri-list on Linux), or empty.
 Future<List<String>> clipboardFilePaths() async {
   if (Platform.isWindows) return win.clipboardFilePaths();
   if (Platform.isMacOS) return mac.filePaths();
+  if (Platform.isLinux) return lin.filePaths();
   return const [];
 }
 
