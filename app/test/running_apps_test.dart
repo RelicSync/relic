@@ -8,13 +8,14 @@ import 'package:relic_app/platform/running_apps.dart';
 
 /// The blocklist picker's running-apps enumeration, run against the real OS
 /// (flutter test executes on the host). Windows sessions can legitimately be
-/// headless-ish, and the macOS backend answers over a MethodChannel that
-/// flutter_test never registers, so content checks only apply to whatever
-/// comes back — but the shape contract is the same on both desktops.
+/// headless-ish, the macOS backend answers over a MethodChannel that
+/// flutter_test never registers, and Linux answers over X11 (empty under
+/// Wayland or headless), so content checks only apply to whatever comes
+/// back — but the shape contract is the same on every desktop.
 void main() {
   test('runningApps returns well-formed, deduped, noise-free keys', () async {
     final apps = await runningApps();
-    if (!Platform.isWindows && !Platform.isMacOS) {
+    if (!Platform.isWindows && !Platform.isMacOS && !Platform.isLinux) {
       expect(apps, isEmpty);
       return;
     }
