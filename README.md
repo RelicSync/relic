@@ -14,7 +14,7 @@ forever. On your devices, sealed before it leaves them.
 
 </div>
 
-https://github.com/user-attachments/assets/94e1c2f1-62f2-44ec-9939-7e35b497c9d1
+https://github.com/user-attachments/assets/dd760eac-36f3-4a22-94fb-3b88d15181a9
 
 ## What it is
 
