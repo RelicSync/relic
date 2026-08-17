@@ -8,7 +8,9 @@ import 'dart:io';
 ///   2. Windows:  %APPDATA%\relic                     (unchanged, ships today)
 ///      macOS:    ~/Library/Application Support/relic (matches relic-cli's
 ///                dirs::config_dir, so the CLI shim finds the same vault)
-///      elsewhere: $XDG_CONFIG_HOME/relic or ~/.config/relic
+///      Linux:    $XDG_DATA_HOME/relic or ~/.local/share/relic — the vault is
+///                data (a DB + blobs that can run to GBs), not config; matches
+///                relic-cli's dirs::data_dir on Linux (app_paths.rs)
 ///
 /// Before this module, non-Windows fell through to a bare `$HOME/relic`;
 /// [appDataDir] migrates that legacy folder once on macOS (guarded so it can
@@ -27,8 +29,9 @@ String appDataPath() {
   if (Platform.isMacOS) {
     return '$home${sep}Library${sep}Application Support${sep}relic';
   }
-  final xdg = Platform.environment['XDG_CONFIG_HOME'];
-  final base = (xdg != null && xdg.isNotEmpty) ? xdg : '$home$sep.config';
+  final xdg = Platform.environment['XDG_DATA_HOME'];
+  final base =
+      (xdg != null && xdg.isNotEmpty) ? xdg : '$home$sep.local${sep}share';
   return '$base${sep}relic';
 }
 

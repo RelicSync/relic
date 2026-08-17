@@ -6,14 +6,20 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 /// `%APPDATA%\relic` on Windows (`dirs::config_dir()` = Roaming), the app's data
-/// dir on other platforms. `RELIC_APP_DIR` overrides it (used for tests against
-/// a DB copy, and for non-standard installs).
+/// dir on other platforms. On Linux the vault lives under `dirs::data_dir()`
+/// (`~/.local/share/relic`) — it is a DB + blobs that can run to GBs, which
+/// belongs in XDG data, not config; must stay in lockstep with the app's
+/// `paths.dart`. `RELIC_APP_DIR` overrides it (used for tests against a DB
+/// copy, and for non-standard installs).
 pub fn app_data_dir() -> Result<PathBuf> {
     if let Ok(dir) = std::env::var("RELIC_APP_DIR") {
         if !dir.is_empty() {
             return Ok(PathBuf::from(dir));
         }
     }
+    #[cfg(target_os = "linux")]
+    let base = dirs::data_dir().context("could not resolve the app data directory")?;
+    #[cfg(not(target_os = "linux"))]
     let base = dirs::config_dir().context("could not resolve the app data directory")?;
     Ok(base.join("relic"))
 }
