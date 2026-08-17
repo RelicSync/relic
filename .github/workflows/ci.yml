@@ -122,8 +122,9 @@ jobs:
         run: npm run smoke
 
   # --------------------------------------------------------------------------
-  # Flutter client: static analysis + unit/widget tests on Linux, and a real
-  # Windows desktop build (the primary shipping target).
+  # Flutter client: static analysis + unit/widget tests on Linux, plus real
+  # desktop builds — Windows (the primary shipping target) and Linux (the
+  # in-progress port; keeping the build green from the first commit).
   # --------------------------------------------------------------------------
   flutter-analyze:
     name: flutter analyze + test
@@ -166,6 +167,39 @@ jobs:
         with:
           name: relic-windows-unsigned
           path: app/build/windows/x64/runner/Release/
+          retention-days: 7
+          if-no-files-found: error
+
+  flutter-linux:
+    name: flutter build linux
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux desktop build deps
+        # keybinder = hotkey_manager, appindicator = tray_manager, secret =
+        # flutter_secure_storage, webkit2gtk = desktop_webview_window.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libjsoncpp-dev libsecret-1-dev \
+            libkeybinder-3.0-dev libayatana-appindicator3-dev libnotify-dev \
+            libwebkit2gtk-4.1-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter config --enable-linux-desktop
+      - run: flutter pub get
+      - name: Build
+        run: flutter build linux --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relic-linux-x64
+          path: app/build/linux/x64/release/bundle/
           retention-days: 7
           if-no-files-found: error
 
