@@ -43,13 +43,15 @@ abstract class SecureKeyStore {
   static const backupKeySlot = 'relic.backup.bk';
 
   /// The right implementation for the running platform. Windows → DPAPI
-  /// (Credential Manager); iOS/macOS/Android → Keychain/Keystore; everything
-  /// else (Linux, web, tests) → in-memory.
+  /// (Credential Manager); iOS/macOS/Android → Keychain/Keystore; Linux →
+  /// Secret Service (libsecret) with an in-memory fallback; everything else
+  /// (web, tests) → in-memory.
   static SecureKeyStore forPlatform() {
     if (Platform.isWindows) return WindowsKeyStore();
     if (Platform.isIOS || Platform.isMacOS || Platform.isAndroid) {
       return KeychainKeyStore();
     }
+    if (Platform.isLinux) return LinuxKeyStore();
     return MemoryKeyStore();
   }
 }
@@ -153,8 +155,105 @@ class KeychainKeyStore implements SecureKeyStore {
       _s.delete(key: SecureKeyStore.backupKeySlot);
 }
 
-/// Linux / web / tests: RAM only. Nothing is persisted, so the passphrase is
-/// re-entered each session (doc 13 §2 web caveat). Never persists secrets.
+/// Linux: Secret Service (libsecret) via flutter_secure_storage — any
+/// provider works (GNOME Keyring, KWallet's Secret Service bridge). Sessions
+/// with no daemon on the bus (WSL, CI, bare X) make every libsecret call
+/// throw; each call then falls back to a private [MemoryKeyStore], degrading
+/// to passphrase-per-launch instead of breaking sign-in outright.
+class LinuxKeyStore implements SecureKeyStore {
+  static const _s = FlutterSecureStorage();
+  final MemoryKeyStore _fallback = MemoryKeyStore();
+
+  Future<Uint8List?> _readBytes(
+      String key, Future<Uint8List?> Function() fallback) async {
+    String? v;
+    try {
+      v = await _s.read(key: key);
+    } catch (_) {
+      return fallback();
+    }
+    if (v == null) return null;
+    try {
+      return Uint8List.fromList(base64.decode(v));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Future<void> putMasterKey(String scope, Uint8List mk) async {
+    try {
+      await _s.write(
+          key: SecureKeyStore.mkSlot(scope), value: base64.encode(mk));
+    } catch (_) {
+      await _fallback.putMasterKey(scope, mk);
+    }
+  }
+
+  @override
+  Future<Uint8List?> getMasterKey(String scope) => _readBytes(
+      SecureKeyStore.mkSlot(scope), () => _fallback.getMasterKey(scope));
+
+  @override
+  Future<void> deleteMasterKey(String scope) async {
+    try {
+      await _s.delete(key: SecureKeyStore.mkSlot(scope));
+    } catch (_) {}
+    await _fallback.deleteMasterKey(scope);
+  }
+
+  @override
+  Future<void> putRefreshToken(String scope, String token) async {
+    try {
+      await _s.write(key: SecureKeyStore.refreshSlot(scope), value: token);
+    } catch (_) {
+      await _fallback.putRefreshToken(scope, token);
+    }
+  }
+
+  @override
+  Future<String?> getRefreshToken(String scope) async {
+    try {
+      return await _s.read(key: SecureKeyStore.refreshSlot(scope));
+    } catch (_) {
+      return _fallback.getRefreshToken(scope);
+    }
+  }
+
+  @override
+  Future<void> deleteRefreshToken(String scope) async {
+    try {
+      await _s.delete(key: SecureKeyStore.refreshSlot(scope));
+    } catch (_) {}
+    await _fallback.deleteRefreshToken(scope);
+  }
+
+  @override
+  Future<void> putBackupKey(Uint8List bk) async {
+    try {
+      await _s.write(
+          key: SecureKeyStore.backupKeySlot, value: base64.encode(bk));
+    } catch (_) {
+      await _fallback.putBackupKey(bk);
+    }
+  }
+
+  @override
+  Future<Uint8List?> getBackupKey() =>
+      _readBytes(SecureKeyStore.backupKeySlot, () => _fallback.getBackupKey());
+
+  @override
+  Future<void> deleteBackupKey() async {
+    try {
+      await _s.delete(key: SecureKeyStore.backupKeySlot);
+    } catch (_) {}
+    await _fallback.deleteBackupKey();
+  }
+}
+
+/// Web / tests — and [LinuxKeyStore]'s daemonless fallback: RAM only. Nothing
+/// is persisted, so the passphrase is re-entered each session (doc 13 §2 web
+/// caveat). Never persists secrets.
 class MemoryKeyStore implements SecureKeyStore {
   final Map<String, Uint8List> _mk = {};
   final Map<String, String> _refresh = {};
