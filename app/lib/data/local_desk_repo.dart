@@ -4564,8 +4564,11 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         jsonEncode({
           'url': base,
           'credential_scope': scope,
-          'token_store':
-              Platform.isWindows ? 'credential_manager' : 'keychain',
+          'token_store': Platform.isWindows
+              ? 'credential_manager'
+              : Platform.isLinux
+                  ? 'secret_service'
+                  : 'keychain',
           'auth_mode': authMode,
           // 'cloud' (Relic Cloud / managed) vs 'selfhost' (the user's own
           // server). Absent in pre-self-host configs → treated as 'cloud'.

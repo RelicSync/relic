@@ -357,11 +357,15 @@ class _RealAppState extends State<RealApp>
   Future<void> _initTray() async {
     try {
       // .ico is Windows-only; the menu-bar item on macOS wants a template PNG
-      // (monochrome + alpha) so it adapts to light/dark menu bars.
+      // (monochrome + alpha) so it adapts to light/dark menu bars. Linux
+      // appindicators render the PNG as-is — the template art (white on
+      // transparent) all but vanishes on light themes, so use the colored icon.
       await trayManager.setIcon(
         Platform.isWindows
             ? 'assets/tray_icon.ico'
-            : 'assets/tray_icon_template.png',
+            : Platform.isLinux
+                ? 'assets/beautiful-icon.png'
+                : 'assets/tray_icon_template.png',
         isTemplate: true, // ignored off-macOS
       );
     } catch (_) {}
@@ -915,8 +919,13 @@ class _RealAppState extends State<RealApp>
       widget.repo.markTrayHintShown();
       _notify(
         'Relic is still running',
-        'It lives in your ${Platform.isMacOS ? 'menu bar' : 'tray'}. '
-            'Press ${widget.repo.historyHotkey.display} to open it anytime.',
+        // Stock GNOME hides appindicators without an extension, so on Linux
+        // the hotkey is the only promise we can make unconditionally.
+        Platform.isLinux
+            ? 'It lives in your tray, if your desktop shows one. '
+                'Press ${widget.repo.historyHotkey.display} to open it anytime.'
+            : 'It lives in your ${Platform.isMacOS ? 'menu bar' : 'tray'}. '
+                'Press ${widget.repo.historyHotkey.display} to open it anytime.',
       );
     }
   }

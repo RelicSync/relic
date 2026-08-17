@@ -14,6 +14,8 @@ import 'package:flutter/services.dart';
 const _nativeToast = MethodChannel('relic/native_toast');
 
 Future<bool> showNativeGemToast() async {
+  // Deliberate allowlist: Linux stays on the local_notifier fallback for good
+  // (a GTK layer-shell overlay isn't worth a per-compositor fight).
   if (!Platform.isWindows && !Platform.isMacOS) return false;
   try {
     return await _nativeToast.invokeMethod<bool>('showGemToast') ?? true;

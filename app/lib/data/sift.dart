@@ -147,7 +147,9 @@ class SiftSidecar {
     final candidates = <String>[
       // packaged: beside relic_app.exe, or inside Relic.app/Contents/MacOS
       '$exeDir$sep$exe',
-      // dev: app/build/windows/x64/runner/Release/ → repo root/target/release
+      // dev: app/build/windows/x64/runner/Release/ → repo root/target/release.
+      // Linux's bundle (build/linux/x64/<mode>/bundle/) sits at the same
+      // depth, so this one candidate covers both.
       '$exeDir$sep${up(6)}${sep}target${sep}release$sep$exe',
       // dev on macOS: the same output nests three levels deeper, inside the
       // bundle (build/macos/Build/Products/Release/relic_app.app/Contents/MacOS)

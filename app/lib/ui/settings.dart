@@ -2046,7 +2046,11 @@ class _SettingsViewState extends State<SettingsView>
         _aboutRow(
           c,
           'Platform',
-          Platform.isMacOS ? 'macOS desktop' : 'Windows desktop',
+          Platform.isMacOS
+              ? 'macOS desktop'
+              : Platform.isLinux
+                  ? 'Linux desktop'
+                  : 'Windows desktop',
           last: true,
         ),
         const SizedBox(height: 16),
