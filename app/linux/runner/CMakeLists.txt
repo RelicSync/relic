@@ -10,6 +10,7 @@ add_executable(${BINARY_NAME}
   "main.cc"
   "my_application.cc"
   "clipboard_watch.cc"
+  "hotkeys.cc"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
 )
 
@@ -23,5 +24,10 @@ add_definitions(-DAPPLICATION_ID="${APPLICATION_ID}")
 # Add dependency libraries. Add any application-specific dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter)
 target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::GTK)
+
+# keybinder-3.0 backs the global hotkey grabs in hotkeys.cc (X11 only, which
+# matches the port's X11-first stance). Build deps: libkeybinder-3.0-dev.
+pkg_check_modules(KEYBINDER REQUIRED IMPORTED_TARGET keybinder-3.0)
+target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::KEYBINDER)
 
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")

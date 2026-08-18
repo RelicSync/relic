@@ -21,8 +21,10 @@ import 'platform/clipboard_bridge.dart';
 import 'platform/foreground_app.dart';
 import 'platform/gem_toast.dart';
 import 'platform/input_injector.dart';
+import 'platform/global_hotkeys.dart';
 import 'platform/sound.dart';
 import 'platform/src/linux/clipboard_watch_linux.dart';
+import 'platform/src/linux/hotkeys_linux.dart' as lin_hk;
 import 'data/api.dart';
 import 'data/desktop_links.dart';
 import 'data/device_directory.dart';
@@ -520,11 +522,41 @@ class _RealAppState extends State<RealApp>
   /// (another app owns the chord) surface in Settings instead of vanishing
   /// into a debug log.
   Future<void> _initHotkeys() async {
-    await hotKeyManager.unregisterAll();
     final failed = <String>{};
-    Future<void> reg(String key, HotkeyBinding b, HotKeyHandler h) async {
+    // Linux drives keybinder directly (platform/src/linux/hotkeys_linux.dart):
+    // hotkey_manager mis-maps the spacebar there and never reports a refused
+    // grab. Everywhere else the plugin is unchanged.
+    final linux = Platform.isLinux;
+    final linuxHandlers = <String, void Function()>{};
+    if (linux) {
+      await lin_hk.unregisterAll();
+      lin_hk.listen((id) => linuxHandlers[id]?.call());
+    } else {
+      await hotKeyManager.unregisterAll();
+    }
+    Future<void> reg(String key, HotkeyBinding b, void Function() h) async {
+      if (linux) {
+        final accel = linuxAccelerator(
+            ctrl: b.ctrl,
+            alt: b.alt,
+            shift: b.shift,
+            meta: b.win,
+            usbUsage: b.usbUsage);
+        if (accel == null) {
+          failed.add(key);
+          return;
+        }
+        final r = await lin_hk.register(key, accel);
+        if (r == lin_hk.HotkeyFailure.none) {
+          linuxHandlers[key] = h;
+        } else {
+          failed.add(key);
+          debugPrint('hotkey register failed for ${b.display}: $r');
+        }
+        return;
+      }
       try {
-        await hotKeyManager.register(b.toHotKey(), keyDownHandler: h);
+        await hotKeyManager.register(b.toHotKey(), keyDownHandler: (_) => h());
       } catch (e) {
         failed.add(key);
         debugPrint('hotkey register failed for ${b.display}: $e');
@@ -536,10 +568,10 @@ class _RealAppState extends State<RealApp>
     // hotkey as well, which meant that with it on (the default) both hotkeys
     // opened mini and the full popup was unreachable from the keyboard. See
     // miniForSummon.
-    await reg('history', widget.repo.historyHotkey, (_) => _toggle(Summon.historyHotkey));
-    await reg('mini', widget.repo.miniHotkey, (_) => _toggle(Summon.miniHotkey));
-    await reg('capture', widget.repo.captureHotkey, (_) => _saveAndAnnotate());
-    await reg('promote', widget.repo.promoteHotkey, (_) {
+    await reg('history', widget.repo.historyHotkey, () => _toggle(Summon.historyHotkey));
+    await reg('mini', widget.repo.miniHotkey, () => _toggle(Summon.miniHotkey));
+    await reg('capture', widget.repo.captureHotkey, () => _saveAndAnnotate());
+    await reg('promote', widget.repo.promoteHotkey, () {
       if (widget.repo.promoteLast()) {
         _vaultFeedback('Promoted to Vault', sound: true);
       }
@@ -547,7 +579,7 @@ class _RealAppState extends State<RealApp>
     final quick = widget.repo.quickPasteHotkeys;
     for (var i = 0; i < quick.length; i++) {
       final n = i + 1; // slot 0 → paste #1 (newest)
-      await reg('quickPaste$n', quick[i], (_) => _quickPaste(n));
+      await reg('quickPaste$n', quick[i], () => _quickPaste(n));
     }
     widget.repo.setFailedHotkeys(failed);
   }

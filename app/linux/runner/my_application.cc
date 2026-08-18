@@ -7,6 +7,7 @@
 
 #include "clipboard_watch.h"
 #include "flutter/generated_plugin_registrant.h"
+#include "hotkeys.h"
 
 struct _MyApplication {
   GtkApplication parent_instance;
@@ -78,8 +79,12 @@ static void my_application_activate(GApplication* application) {
 
   // Relic's own CLIPBOARD watcher (the clipboard_watcher plugin watches
   // PRIMARY on Linux, which is the wrong selection — see clipboard_watch.cc).
-  relic_clipboard_watch_register(
-      fl_engine_get_binary_messenger(fl_view_get_engine(view)));
+  FlBinaryMessenger* messenger =
+      fl_engine_get_binary_messenger(fl_view_get_engine(view));
+  relic_clipboard_watch_register(messenger);
+  // Global hotkeys: hotkey_manager mis-maps the spacebar and never reports a
+  // refused grab, so Relic drives keybinder itself (see hotkeys.cc).
+  relic_hotkeys_register(messenger);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
