@@ -5,6 +5,7 @@
 #include <gdk/gdkx.h>
 #endif
 
+#include "clipboard_watch.h"
 #include "flutter/generated_plugin_registrant.h"
 
 struct _MyApplication {
@@ -74,6 +75,11 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_realize(GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
+
+  // Relic's own CLIPBOARD watcher (the clipboard_watcher plugin watches
+  // PRIMARY on Linux, which is the wrong selection — see clipboard_watch.cc).
+  relic_clipboard_watch_register(
+      fl_engine_get_binary_messenger(fl_view_get_engine(view)));
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
