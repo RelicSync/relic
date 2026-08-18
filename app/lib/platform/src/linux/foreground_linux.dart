@@ -4,6 +4,8 @@ import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
+import '../../foreground_app.dart' show waylandSessionFrom;
+
 /// X11 window attribution for Linux: the active window's WM_CLASS (feeding
 /// `foregroundAppKey`) and the `_NET_CLIENT_LIST` walk (feeding the blocklist
 /// picker), both over libX11 FFI — the first `DynamicLibrary.open` in the
@@ -54,10 +56,8 @@ DynamicLibrary? _x11() {
 
 int _ignoreXError(Pointer<Void> display, Pointer<Void> event) => 0;
 
-bool get _waylandSession {
-  final w = Platform.environment['WAYLAND_DISPLAY'];
-  return w != null && w.isNotEmpty;
-}
+bool get _waylandSession =>
+    waylandSessionFrom(Platform.environment['WAYLAND_DISPLAY']);
 
 // -- thin bindings ----------------------------------------------------------
 

@@ -74,6 +74,14 @@ String? macAppKey(String bundleId, String name) {
   return id.split('.').last;
 }
 
+/// Whether this is a Wayland session, from `WAYLAND_DISPLAY`. Pure so the
+/// rule is stated once and testable from any host: Relic's X11 features
+/// (source attribution, global hotkeys, paste injection) are all unavailable
+/// under Wayland, and XWayland would answer for X clients only — confidently
+/// wrong about native-Wayland windows. Callers degrade, never guess.
+bool waylandSessionFrom(String? waylandDisplay) =>
+    waylandDisplay != null && waylandDisplay.isNotEmpty;
+
 /// Linux: the app key for an X11 WM_CLASS pair (class preferred, instance as
 /// the fallback). Null for Relic itself — same rule as [macAppKey].
 ///
