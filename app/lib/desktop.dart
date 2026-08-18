@@ -22,6 +22,7 @@ import 'platform/foreground_app.dart';
 import 'platform/gem_toast.dart';
 import 'platform/input_injector.dart';
 import 'platform/sound.dart';
+import 'platform/src/linux/clipboard_watch_linux.dart';
 import 'data/api.dart';
 import 'data/desktop_links.dart';
 import 'data/device_directory.dart';
@@ -203,7 +204,9 @@ class _RealAppState extends State<RealApp>
     WidgetsBinding.instance.addObserver(this);
     windowManager.addListener(this);
     trayManager.addListener(this);
-    clipboardWatcher.addListener(this);
+    // Linux runs our own CLIPBOARD bridge instead (see below); everywhere else
+    // the plugin is the source of change events.
+    if (!Platform.isLinux) clipboardWatcher.addListener(this);
     // settings changes take effect live without the repo touching these layers
     widget.repo.onHotkeysChanged = () => _initHotkeys();
     widget.repo.onTrayVisibilityChanged = () => _applyTrayVisibility();
@@ -261,7 +264,14 @@ class _RealAppState extends State<RealApp>
     };
     _applyTrayVisibility();
     _initHotkeys();
-    clipboardWatcher.start();
+    // Linux: our GTK bridge watches CLIPBOARD. The plugin watches PRIMARY
+    // there, which would both miss every Ctrl+C and capture bare text
+    // selections (linux/runner/clipboard_watch.cc).
+    if (Platform.isLinux) {
+      listenLinuxClipboard(onClipboardChanged);
+    } else {
+      clipboardWatcher.start();
+    }
     _scheduleUpdateChecks();
     // A relic:// link (cold or warm) surfaces the window, like a hotkey summon.
     DesktopLinks.onLink = _handleDeepLink;
@@ -342,8 +352,12 @@ class _RealAppState extends State<RealApp>
     widget.repo.removeListener(_onRepoTick);
     windowManager.removeListener(this);
     trayManager.removeListener(this);
-    clipboardWatcher.removeListener(this);
-    clipboardWatcher.stop();
+    if (Platform.isLinux) {
+      stopListeningLinuxClipboard();
+    } else {
+      clipboardWatcher.removeListener(this);
+      clipboardWatcher.stop();
+    }
     _updateCheckTimer?.cancel();
     _miniResizeTimer?.cancel();
     _pauseTimer?.cancel();
@@ -1162,6 +1176,47 @@ class _RealAppState extends State<RealApp>
     }
   }
 
+  // Fingerprint of the last privacy-marked clipboard text, and when we saw it.
+  // Only a hash is kept, never the secret itself, and only for as long as a
+  // manager hand-off could plausibly take.
+  int? _hintedHash;
+  DateTime? _hintedAt;
+  static const _hintedTtl = Duration(minutes: 2);
+
+  /// Remember privacy-marked text so the clipboard manager's unmarked re-offer
+  /// can be recognised. Linux-only: no other platform hands ownership over on
+  /// app exit. Reading here is deliberate — the bytes stay in memory and are
+  /// never captured.
+  Future<void> _rememberHintedSecret() async {
+    if (!Platform.isLinux) return;
+    try {
+      final clip = SystemClipboard.instance;
+      if (clip == null) return;
+      final reader = await clip.read();
+      final t = await reader.readValue(Formats.plainText);
+      if (t == null || t.isEmpty) return;
+      _hintedHash = t.hashCode;
+      _hintedAt = DateTime.now();
+    } catch (_) {
+      // best effort: a failed read just means no suppression window
+    }
+  }
+
+  /// True when [t] is the same text we just skipped for carrying a privacy
+  /// marker. Content-matched, not a blanket time window: an unrelated copy a
+  /// second after a password must still be captured normally.
+  bool _isRecentlyHintedSecret(String t) {
+    if (!Platform.isLinux) return false;
+    final at = _hintedAt, h = _hintedHash;
+    if (at == null || h == null) return false;
+    if (DateTime.now().difference(at) > _hintedTtl) {
+      _hintedHash = null;
+      _hintedAt = null;
+      return false;
+    }
+    return t.hashCode == h;
+  }
+
   // --- clipboard ---
   @override
   void onClipboardChanged() async {
@@ -1171,7 +1226,10 @@ class _RealAppState extends State<RealApp>
     // when the clipboard event fires (and the macOS bridge awaits don't change
     // the frontmost app, so ordering stays safe).
     final appKey = await foregroundAppKey();
-    if (await clipboardShouldBeIgnored()) return;
+    if (await clipboardShouldBeIgnored()) {
+      await _rememberHintedSecret();
+      return;
+    }
     // User blocklist: copies from these programs never enter history. (The
     // save & annotate hotkey is deliberately NOT gated — explicit action wins.)
     if (appKey != null && repo.captureBlocklist.contains(appKey)) return;
@@ -1237,7 +1295,9 @@ class _RealAppState extends State<RealApp>
       if (reader.canProvide(Formats.plainText)) {
         if (repo.captureTextEnabled) {
           final text = await reader.readValue(Formats.plainText);
-          if (text != null) repo.captureText(text, sourceApp: srcApp);
+          if (text != null && !_isRecentlyHintedSecret(text)) {
+            repo.captureText(text, sourceApp: srcApp);
+          }
         }
         return;
       }
@@ -1254,8 +1314,8 @@ class _RealAppState extends State<RealApp>
     // fallback: plain text via the framework clipboard
     if (repo.captureTextEnabled) {
       final data = await Clipboard.getData(Clipboard.kTextPlain);
-      if (data?.text != null) {
-        repo.captureText(data!.text!, sourceApp: srcApp);
+      if (data?.text != null && !_isRecentlyHintedSecret(data!.text!)) {
+        repo.captureText(data.text!, sourceApp: srcApp);
       }
     }
   }
