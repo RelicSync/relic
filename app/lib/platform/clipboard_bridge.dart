@@ -14,9 +14,10 @@ import 'src/windows/clipboard_win.dart' as win;
 /// Linux to super_clipboard-based readers for the two capture-critical pieces
 /// (src/linux/clipboard_linux: file lists + the password-manager hint);
 /// everything else gets the benign empty results callers already handle by
-/// falling back to Flutter's framework clipboard. Linux has no clipboard
-/// change counter, so [clipboardSequence] stays 0 there — the synth-copy
-/// detection and post-secret scrub simply never arm, by design.
+/// falling back to Flutter's framework clipboard. X11 has no clipboard change
+/// counter, so [clipboardSequence] is derived from the content there (see
+/// src/linux/clipboard_linux); the post-secret scrub still never arms, because
+/// [clearClipboard] has no Linux arm.
 ///
 /// All functions are async because the macOS side crosses a MethodChannel; the
 /// Windows implementations complete synchronously.
@@ -24,9 +25,14 @@ import 'src/windows/clipboard_win.dart' as win;
 /// The system clipboard's change counter — bumps on EVERY clipboard write,
 /// regardless of format. Used to detect whether a synthesized copy actually
 /// produced one, and to guard the post-secret scrub. 0 when unavailable.
+///
+/// Windows and macOS expose a real counter. X11 does not, so Linux returns a
+/// value derived from the clipboard's content: callers only ever compare two
+/// readings for equality, which is all the derived value promises.
 Future<int> clipboardSequence() async {
   if (Platform.isWindows) return win.clipboardSequence();
   if (Platform.isMacOS) return mac.changeCount();
+  if (Platform.isLinux) return lin.sequence();
   return 0;
 }
 
