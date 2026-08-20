@@ -627,6 +627,15 @@ class _RealAppState extends State<RealApp>
         'Relic needs Accessibility access to paste for you. Grant it in '
             'System Settings → Privacy & Security → Accessibility.',
       );
+    } else if (Platform.isLinux && !_pasteGrantHintShown) {
+      // Wayland refuses synthetic input to unprivileged apps outright; there
+      // is no grant to ask for, so say so once and stop.
+      _pasteGrantHintShown = true;
+      _notify(
+        'Copied — press Ctrl+V to paste',
+        'Wayland does not let apps paste for you. Log in with the "Ubuntu on '
+            'Xorg" session (or your desktop\'s X11 option) for one-click paste.',
+      );
     }
     return false;
   }
@@ -658,7 +667,13 @@ class _RealAppState extends State<RealApp>
       await widget.repo.putOnClipboard(r);
       // The chord's modifiers are still physically held; wait for them to clear
       // before synthesizing Ctrl+V, or it lands as a modified chord.
-      if (await _canSynthesizePaste()) await sendPasteChordSafe();
+      if (await _canSynthesizePaste()) {
+        // Read the destination now: this path fires from a bare hotkey, so
+        // there is no summon context to inherit. Linux terminals need
+        // Ctrl+Shift+V; elsewhere the flag is ignored.
+        final dest = Platform.isLinux ? await foregroundAppKey() : null;
+        await sendPasteChordSafe(intoTerminal: dest == 'terminal');
+      }
     } catch (_) {
       // Most likely the blob isn't downloaded yet (offline, or the peer hasn't
       // finished uploading). It's on the clipboard only if putOnClipboard got
@@ -1771,7 +1786,11 @@ class _RealAppState extends State<RealApp>
         await _hide();
         if (widget.repo.pasteOnSelect) {
           await Future.delayed(const Duration(milliseconds: 120));
-          if (await _canSynthesizePaste()) await sendPaste();
+          if (await _canSynthesizePaste()) {
+            // Linux terminals paste on Ctrl+Shift+V, not Ctrl+V.
+            await sendPaste(
+                intoTerminal: widget.repo.summonApp == 'terminal');
+          }
         }
       },
       onSettings: () {

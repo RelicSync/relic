@@ -1217,6 +1217,12 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
 
   void setSummonApp(String? app) => _summonApp = app;
 
+  /// The app key the picker was summoned over — i.e. where a paste will land.
+  /// Linux needs it to pick the right paste chord (terminals take
+  /// Ctrl+Shift+V), which is also why linuxAppKey folds every terminal onto
+  /// the one 'terminal' key.
+  String? get summonApp => _summonApp;
+
   // --- Clip reminders plumbing ---
   static int get _nowMs => DateTime.now().millisecondsSinceEpoch;
 

@@ -1,22 +1,30 @@
 import 'dart:io' show Platform;
 
+import 'src/linux/input_linux.dart' as lin;
 import 'src/macos/input_macos.dart' as mac;
 import 'src/windows/input_win.dart' as win;
 
 /// Synthetic keystrokes into the frontmost application: paste-on-select and
 /// the chord-safe copy behind the save & annotate hotkey. Windows uses
 /// SendInput; macOS posts CGEvents via the `relic/input` channel (which needs
-/// the Accessibility grant — see [accessibilityTrusted]). Elsewhere these are
-/// silent no-ops, matching the old Windows-only behavior.
+/// the Accessibility grant — see [accessibilityTrusted]); Linux synthesizes
+/// through XTEST on X11 only. Elsewhere these are silent no-ops, matching the
+/// old Windows-only behavior.
+///
+/// Wayland cannot be served without a privileged uinput daemon, so
+/// [inputInjectionAvailable] is false there and callers take the copy-only
+/// path they already use for a macOS Accessibility denial.
 
 /// Synthesize the platform paste chord (Ctrl+V / ⌘V) into the frontmost app.
 /// Our window has already hidden, so the keystroke lands in whatever app the
 /// user was in. Best-effort; failures are silent.
-Future<void> sendPaste() async {
+Future<void> sendPaste({bool intoTerminal = false}) async {
   if (Platform.isWindows) {
     win.sendPaste();
   } else if (Platform.isMacOS) {
     await mac.sendPaste();
+  } else if (Platform.isLinux) {
+    lin.sendPaste(terminal: intoTerminal);
   }
 }
 
@@ -25,11 +33,13 @@ Future<void> sendPaste() async {
 /// modifiers are still physically held, so this waits for (or force-releases)
 /// them before injecting, or the paste would land as a modified chord.
 /// Best-effort; failures are silent.
-Future<void> sendPasteChordSafe() async {
+Future<void> sendPasteChordSafe({bool intoTerminal = false}) async {
   if (Platform.isWindows) {
     await win.sendPasteChordSafe();
   } else if (Platform.isMacOS) {
     await mac.sendPasteChordSafe();
+  } else if (Platform.isLinux) {
+    await lin.sendPasteChordSafe(terminal: intoTerminal);
   }
 }
 
@@ -37,11 +47,15 @@ Future<void> sendPasteChordSafe() async {
 /// global-hotkey handler: the user is still physically holding the chord's
 /// modifiers, so the implementation waits for (or force-releases) them before
 /// injecting, or the copy would land as a dead chord. Best-effort.
+/// Callers must skip this when the frontmost app is a terminal — Ctrl+C with
+/// no selection is SIGINT — which is what desktop.dart's srcApp guard does.
 Future<void> sendCopyChordSafe() async {
   if (Platform.isWindows) {
     await win.sendCopyChordSafe();
   } else if (Platform.isMacOS) {
     await mac.sendCopyChordSafe();
+  } else if (Platform.isLinux) {
+    await lin.sendCopyChordSafe();
   }
 }
 
@@ -51,6 +65,7 @@ Future<void> sendCopyChordSafe() async {
 Future<bool> inputInjectionAvailable({bool prompt = false}) async {
   if (Platform.isWindows) return true;
   if (Platform.isMacOS) return mac.accessibilityTrusted(prompt: prompt);
+  if (Platform.isLinux) return lin.injectionAvailable();
   return false;
 }
 
