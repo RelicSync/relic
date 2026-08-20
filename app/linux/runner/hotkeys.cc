@@ -50,6 +50,11 @@ struct Binding {
 // unregisterAll has something to walk.
 static std::map<std::string, Binding>* g_bindings = nullptr;
 static bool g_filter_installed = false;
+static guint32 g_last_event_time = 0;
+
+guint32 relic_hotkeys_last_event_time() {
+  return g_last_event_time;
+}
 
 // The modifiers that take part in matching. GDK_LOCK_MASK (CapsLock) and
 // GDK_MOD2_MASK (NumLock) are deliberately absent: they are latched state the
@@ -104,6 +109,9 @@ static GdkFilterReturn filter_func(GdkXEvent* gdk_xevent,
     if (g_getenv("RELIC_HOTKEY_DEBUG") != nullptr) {
       g_print("[relic-hotkeys] fired: %s\n", entry.first.c_str());
     }
+    // The one moment Relic can prove a human asked for the window. Keep it for
+    // window_focus.cc, which has to hand the timestamp to the window manager.
+    g_last_event_time = xevent->xkey.time;
     g_autoptr(FlValue) args = fl_value_new_map();
     fl_value_set_string_take(args, "id",
                              fl_value_new_string(binding.id.c_str()));

@@ -8,6 +8,7 @@
 #include "clipboard_watch.h"
 #include "flutter/generated_plugin_registrant.h"
 #include "hotkeys.h"
+#include "window_focus.h"
 
 struct _MyApplication {
   GtkApplication parent_instance;
@@ -86,6 +87,9 @@ static void my_application_activate(GApplication* application) {
   // refused grab, and keybinder cannot dispatch Shift+printable chords, so
   // Relic owns the X11 grab itself (see hotkeys.cc).
   relic_hotkeys_register(messenger);
+  // Claiming the keyboard on summon needs the hotkey's timestamp, so it is
+  // registered after hotkeys and reads from it (see window_focus.cc).
+  relic_window_focus_register(messenger, window);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }

@@ -523,7 +523,7 @@ class _RealAppState extends State<RealApp>
   /// into a debug log.
   Future<void> _initHotkeys() async {
     final failed = <String>{};
-    // Linux drives keybinder directly (platform/src/linux/hotkeys_linux.dart):
+    // Linux goes through our own X11 grab (platform/src/linux/hotkeys_linux.dart):
     // hotkey_manager mis-maps the spacebar there and never reports a refused
     // grab. Everywhere else the plugin is unchanged.
     final linux = Platform.isLinux;
@@ -750,6 +750,9 @@ class _RealAppState extends State<RealApp>
     if (foreground) await activateApp();
     await windowManager.show();
     await windowManager.focus();
+    // X11 only, and it has to come after focus(): the window manager will not
+    // hand over the keyboard for a request it cannot attribute to the user.
+    await claimKeyboardFocus();
   }
 
   /// Take the window off screen. On macOS this also hands the foreground back
