@@ -25,9 +25,9 @@ add_definitions(-DAPPLICATION_ID="${APPLICATION_ID}")
 target_link_libraries(${BINARY_NAME} PRIVATE flutter)
 target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::GTK)
 
-# keybinder-3.0 backs the global hotkey grabs in hotkeys.cc (X11 only, which
-# matches the port's X11-first stance). Build deps: libkeybinder-3.0-dev.
-pkg_check_modules(KEYBINDER REQUIRED IMPORTED_TARGET keybinder-3.0)
-target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::KEYBINDER)
+# hotkeys.cc calls XGrabKey directly (X11 only, which matches the port's
+# X11-first stance); GTK pulls Xlib in but the symbols need an explicit link.
+pkg_check_modules(X11 REQUIRED IMPORTED_TARGET x11)
+target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::X11)
 
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")

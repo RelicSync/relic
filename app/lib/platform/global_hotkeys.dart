@@ -1,5 +1,5 @@
 /// Turning Relic's platform-neutral hotkey bindings into the GTK accelerator
-/// strings keybinder wants on Linux.
+/// strings the Linux bridge grabs (linux/runner/hotkeys.cc).
 ///
 /// Kept pure and separate from the channel code so the whole mapping tests
 /// from any host (prior art: macAppKey, linuxAppKey). Relic stores chords as
@@ -40,9 +40,10 @@ const Map<int, String> _keysymNames = {
 /// willing to name (the caller then reports it as unregisterable rather than
 /// binding something surprising).
 ///
-/// Modifier order is fixed so the string is stable across runs, and uses
-/// `<Control>`/`<Super>` — `<Primary>` is a GTK-app-level alias that keybinder
-/// does not accept the way `gtk_accelerator_parse` does.
+/// Modifier order is fixed so the string is stable across runs (it is the map
+/// key on the C++ side), and it names real modifiers — `<Control>`/`<Super>`
+/// rather than the `<Primary>` alias, which reads as Command to anyone coming
+/// from the macOS binding and is one indirection away from what X reports.
 String? linuxAccelerator({
   required bool ctrl,
   required bool alt,

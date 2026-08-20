@@ -1,14 +1,16 @@
 import 'package:flutter/services.dart';
 
-/// Global hotkey registration on Linux, over our own GTK/keybinder bridge
+/// Global hotkey registration on Linux, over our own X11 bridge
 /// (linux/runner/hotkeys.cc — change the two together).
 ///
-/// Relic does NOT use hotkey_manager on Linux. Its plugin passes Flutter's
-/// physical keyCode to gtk_accelerator_name() as if it were a GDK keyval, so
-/// Ctrl+Shift+Space registers as `<Primary><Shift>KP_Space` (the keypad key)
-/// and never fires; and it ignores keybinder_bind()'s return value, reporting
-/// success even when the grab was refused — which left Relic's "these hotkeys
-/// failed" surface permanently empty. Both verified on Ubuntu 24.04/Xorg.
+/// Relic uses neither hotkey_manager nor keybinder here. hotkey_manager_linux
+/// passes Flutter's physical keyCode to gtk_accelerator_name() as if it were a
+/// GDK keyval, so Ctrl+Shift+Space registers as `<Primary><Shift>KP_Space` (the
+/// keypad key) and never fires; it also reports success even when the grab was
+/// refused, which left Relic's "these hotkeys failed" surface permanently
+/// empty. keybinder-3.0 grabs correctly but cannot dispatch a Shift+printable
+/// chord at all, which is every Relic default except the summon chord. Both
+/// verified on Ubuntu 24.04/Xorg; see hotkeys.cc for the mechanism.
 ///
 /// Here Dart builds the accelerator itself ([linuxAccelerator]) and the bridge
 /// reports the real outcome.

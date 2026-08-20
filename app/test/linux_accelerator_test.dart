@@ -7,6 +7,13 @@ import 'package:relic_app/platform/global_hotkeys.dart';
 /// The Linux accelerator mapping is pure, so the bug that shipped in
 /// hotkey_manager_linux — the spacebar registering as the KEYPAD space, which
 /// silently broke Relic's main summon chord — is pinned from any host.
+///
+/// Note what these tests cannot reach: whether the grabbed chord is actually
+/// *delivered*. keybinder-3.0 passed every assertion here and still dispatched
+/// only the summon chord, because it dropped GDK's consumed modifiers before
+/// matching and so lost the Shift out of every Shift+printable chord. That is
+/// why hotkeys.cc grabs and matches on raw keycode+state itself, and why the
+/// Linux hotkey QA step in docs/linux-port.md presses all nine on hardware.
 void main() {
   group('linuxAccelerator', () {
     test('the spacebar is space, never KP_Space', () {
@@ -35,13 +42,14 @@ void main() {
       }
     });
 
-    test('modifier order is fixed and uses names keybinder accepts', () {
+    test('modifier order is fixed and names real modifiers', () {
       expect(
         linuxAccelerator(
             ctrl: true, alt: true, shift: true, meta: true, usbUsage: 0x00070004),
         '<Control><Alt><Shift><Super>a',
       );
-      // <Primary> is a GTK app-level alias; keybinder wants <Control>.
+      // The accelerator is the map key in hotkeys.cc, so <Primary> and
+      // <Control> must never both be spellable for the same chord.
       expect(
         linuxAccelerator(
             ctrl: true, alt: false, shift: false, meta: false, usbUsage: 0x00070014),

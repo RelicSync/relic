@@ -83,7 +83,8 @@ static void my_application_activate(GApplication* application) {
       fl_engine_get_binary_messenger(fl_view_get_engine(view));
   relic_clipboard_watch_register(messenger);
   // Global hotkeys: hotkey_manager mis-maps the spacebar and never reports a
-  // refused grab, so Relic drives keybinder itself (see hotkeys.cc).
+  // refused grab, and keybinder cannot dispatch Shift+printable chords, so
+  // Relic owns the X11 grab itself (see hotkeys.cc).
   relic_hotkeys_register(messenger);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
