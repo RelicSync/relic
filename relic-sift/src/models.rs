@@ -373,9 +373,11 @@ pub fn runtime_available(dir: &std::path::Path) -> bool {
 }
 
 /// Download the onnxruntime shared library from the R2 mirror. Windows x64
-/// gets the CPU dll + its providers-shared companion; macOS arm64 gets a
-/// single arm64 dylib staged under `macos-arm64/` on the same mirror (uploaded
-/// by app/scripts/build_release_macos.sh --stage-ort). Elsewhere, point
+/// gets the CPU dll + its providers-shared companion; macOS arm64 and Linux
+/// x64 each get a single library staged under their own prefix on the same
+/// mirror (`macos-arm64/`, `linux-x64/`; uploaded by
+/// app/scripts/build_release_macos.sh --stage-ort and
+/// app/scripts/build_release_linux.sh --stage-ort). On any other target, point
 /// `ORT_DYLIB_PATH` at a system onnxruntime instead.
 pub fn download_runtime(dir: &std::path::Path, quiet: bool) -> Result<(), String> {
     if runtime_available(dir) {
@@ -383,9 +385,10 @@ pub fn download_runtime(dir: &std::path::Path, quiet: bool) -> Result<(), String
     }
     let win_x64 = cfg!(all(target_os = "windows", target_arch = "x86_64"));
     let mac_arm64 = cfg!(all(target_os = "macos", target_arch = "aarch64"));
-    if !win_x64 && !mac_arm64 {
+    let linux_x64 = cfg!(all(target_os = "linux", target_arch = "x86_64"));
+    if !win_x64 && !mac_arm64 && !linux_x64 {
         return Err(format!(
-            "automatic onnxruntime download supports win-x64 and macos-arm64; put the library at {} or set ORT_DYLIB_PATH",
+            "automatic onnxruntime download supports win-x64, macos-arm64 and linux-x64; put the library at {} or set ORT_DYLIB_PATH",
             ort_dll_path(dir).display()
         ));
     }
@@ -399,7 +402,8 @@ pub fn download_runtime(dir: &std::path::Path, quiet: bool) -> Result<(), String
             fetch(&url, &dir.join(dll), min, quiet).map_err(|e| format!("download {url}: {e}"))?;
         }
     } else {
-        let url = format!("{MIRROR_BASE}/macos-arm64/{ORT_DLL}");
+        let prefix = if mac_arm64 { "macos-arm64" } else { "linux-x64" };
+        let url = format!("{MIRROR_BASE}/{prefix}/{ORT_DLL}");
         fetch(&url, &dir.join(ORT_DLL), 1_000_000, quiet)
             .map_err(|e| format!("download {url}: {e}"))?;
     }
