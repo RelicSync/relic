@@ -23,6 +23,7 @@ import 'platform/gem_toast.dart';
 import 'platform/input_injector.dart';
 import 'platform/global_hotkeys.dart';
 import 'platform/sound.dart';
+import 'platform/tray_support.dart';
 import 'platform/src/linux/clipboard_watch_linux.dart';
 import 'platform/src/linux/hotkeys_linux.dart' as lin_hk;
 import 'data/api.dart';
@@ -981,15 +982,16 @@ class _RealAppState extends State<RealApp>
     // a new user who clicks away has no idea how to get Relic back.
     if (!widget.repo.trayHintShown) {
       widget.repo.markTrayHintShown();
+      // Stock GNOME shows no tray at all, and tray_manager reports success
+      // either way — so ask the desktop before promising the user an icon.
       _notify(
         'Relic is still running',
-        // Stock GNOME hides appindicators without an extension, so on Linux
-        // the hotkey is the only promise we can make unconditionally.
-        Platform.isLinux
-            ? 'It lives in your tray, if your desktop shows one. '
-                'Press ${widget.repo.historyHotkey.display} to open it anytime.'
-            : 'It lives in your ${Platform.isMacOS ? 'menu bar' : 'tray'}. '
-                'Press ${widget.repo.historyHotkey.display} to open it anytime.',
+        trayHintBody(
+          hotkey: widget.repo.historyHotkey.display,
+          isMacOS: Platform.isMacOS,
+          isLinux: Platform.isLinux,
+          trayPresent: await systemTrayAvailable(),
+        ),
       );
     }
   }

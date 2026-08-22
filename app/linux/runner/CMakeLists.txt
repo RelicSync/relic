@@ -10,6 +10,7 @@ add_executable(${BINARY_NAME}
   "main.cc"
   "my_application.cc"
   "clipboard_watch.cc"
+  "desktop_env.cc"
   "hotkeys.cc"
   "single_instance.cc"
   "window_focus.cc"

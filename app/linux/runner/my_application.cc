@@ -6,6 +6,7 @@
 #endif
 
 #include "clipboard_watch.h"
+#include "desktop_env.h"
 #include "flutter/generated_plugin_registrant.h"
 #include "hotkeys.h"
 #include "single_instance.h"
@@ -84,6 +85,9 @@ static void my_application_activate(GApplication* application) {
   FlBinaryMessenger* messenger =
       fl_engine_get_binary_messenger(fl_view_get_engine(view));
   relic_clipboard_watch_register(messenger);
+  // Whether this desktop shows tray icons at all — stock GNOME does not, and
+  // tray_manager reports success regardless (see desktop_env.cc).
+  relic_desktop_env_register(messenger);
   // Global hotkeys: hotkey_manager mis-maps the spacebar and never reports a
   // refused grab, and keybinder cannot dispatch Shift+printable chords, so
   // Relic owns the X11 grab itself (see hotkeys.cc).

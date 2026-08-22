@@ -28,6 +28,7 @@ import '../data/hotkeys.dart';
 import '../platform/input_injector.dart';
 import '../platform/running_apps.dart';
 import '../platform/shell.dart';
+import '../platform/tray_support.dart';
 import '../data/self_update.dart';
 import '../data/sift.dart' show SiftSidecar;
 import '../data/update_check.dart';
@@ -233,6 +234,19 @@ class _SettingsViewState extends State<SettingsView>
       WidgetsBinding.instance.addObserver(this);
       _refreshAccessibility();
     }
+    if (Platform.isLinux) _refreshTrayHost();
+  }
+
+  /// Linux: whether the desktop shows tray icons at all. Stock GNOME does not,
+  /// and tray_manager reports success regardless, so the toggle below would
+  /// otherwise offer to show an icon that can never appear. Optimistic until
+  /// the answer arrives — a momentary "there is a tray" is the harmless way to
+  /// be wrong.
+  bool _trayHost = true;
+
+  Future<void> _refreshTrayHost() async {
+    final ok = await systemTrayAvailable();
+    if (mounted) setState(() => _trayHost = ok);
   }
 
   /// macOS: re-read the Accessibility grant. Cheap channel call, so it also
@@ -452,7 +466,10 @@ class _SettingsViewState extends State<SettingsView>
               'Show icon in menu bar',
               repo.showTrayIcon,
               repo.setShowTrayIcon,
-              sub: 'Hide it to run purely from the hotkey.',
+              sub: _trayHost
+                  ? 'Hide it to run purely from the hotkey.'
+                  : 'This desktop shows no tray, so Relic already runs purely '
+                      'from the hotkey.',
             ),
             _appearanceRow(c),
             _popupSizeRow(c),
