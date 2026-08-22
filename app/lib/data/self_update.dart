@@ -20,6 +20,11 @@ import 'update_check.dart';
 ///     place (platform/app_install.dart, the same ditto-swap as the first-run
 ///     install offer), then exits so the detached relauncher can open the new
 ///     build. Safe while running — the process keeps its binary by inode.
+///   - Linux: only from an AppImage, which is one file — so the install is one
+///     atomic rename, the sibling of the mac swap. An unpacked tarball has no
+///     such story (a folder replaced under a running process, with no package
+///     manager to sequence it) and takes the browser fallback, as does a
+///     system-wide AppImage the user cannot write.
 ///
 /// On success this never returns. Callers catch [SelfUpdateUnsupported]
 /// (unsupported platform, or a manifest without sha256) and any other
@@ -31,8 +36,31 @@ Future<void> installUpdate(
   void Function(String status)? onStatus,
 }) async {
   final sha = info.sha256;
-  if (sha == null || !(Platform.isWindows || Platform.isMacOS)) {
+  if (sha == null ||
+      !(Platform.isWindows || Platform.isMacOS || Platform.isLinux)) {
     throw SelfUpdateUnsupported();
+  }
+  if (Platform.isLinux) {
+    final appImage = runningAppImagePath();
+    if (appImage == null) throw SelfUpdateUnsupported();
+    final staged = appImageStagingFile(appImage);
+    if (staged == null) throw SelfUpdateUnsupported();
+    await _download(info.url, staged, onStatus);
+    onStatus?.call('Verifying…');
+    await verifyInstaller(staged, sha);
+    onStatus?.call('Installing. Relic will restart…');
+    if (!installUpdatedAppImage(staged, appImage)) {
+      try {
+        staged.deleteSync();
+      } catch (_) {}
+      throw StateError('could not install the update');
+    }
+    // Arm the relauncher BEFORE dying: the single-instance lock means a launch
+    // while we still hold it would only surface this window, and then this
+    // process would exit leaving nothing running.
+    await relaunchInstalledCopyAfterExit();
+    await trayManager.destroy();
+    exit(0);
   }
   final dir = Directory(
       '${Directory.systemTemp.path}${Platform.pathSeparator}relic-update')

@@ -3,6 +3,7 @@ import 'dart:io' show File, Platform;
 import 'package:flutter/foundation.dart' show kDebugMode;
 
 import 'shell.dart';
+import 'src/linux/app_install_linux.dart' as lin;
 import 'src/macos/app_install_macos.dart' as mac;
 
 /// Where the running bundle lives, as far as first-run rescue cares. macOS
@@ -149,8 +150,38 @@ Future<bool> installUpdateFromDiskImage(String dmgPath) async {
 }
 
 /// Arm the detached relauncher: once this process exits, the installed copy
-/// is opened fresh (an `open` while we still run would only reactivate us).
+/// is opened fresh (an `open` while we still run would only reactivate us; on
+/// Linux the single-instance lock would turn it into "surface the old window").
 Future<void> relaunchInstalledCopyAfterExit() async {
+  if (Platform.isLinux) return lin.relaunchAfterExit();
   if (!Platform.isMacOS) return;
   await mac.reopenInstalledAfterExit();
+}
+
+/// The .AppImage this process runs from, or null. Linux self-update exists
+/// only for the AppImage: one file, so the swap is one atomic rename. An
+/// unpacked tarball has no such story and defers to the download page.
+String? runningAppImagePath() {
+  if (!Platform.isLinux) return null;
+  return lin.runningAppImage();
+}
+
+/// Replace the running AppImage with [staged] bytes already verified by the
+/// caller. Returns false when the install directory is not writable, which is
+/// how a system-wide copy declines instead of half-updating.
+bool installUpdatedAppImage(File staged, String appImagePath) {
+  if (!Platform.isLinux) return false;
+  try {
+    lin.swapAppImage(staged, appImagePath);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Where to stage an AppImage download so the swap is a rename inside one
+/// filesystem. Null when that directory is not writable.
+File? appImageStagingFile(String appImagePath) {
+  if (!Platform.isLinux) return null;
+  return lin.stagingFileFor(appImagePath);
 }
