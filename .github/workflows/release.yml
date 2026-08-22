@@ -48,3 +48,36 @@ jobs:
           draft: true
           generate_release_notes: true
           files: app/relic-${{ github.ref_name }}-windows-x64-unsigned.zip
+
+  # Linux has no signing wall, so unlike Windows and macOS what CI builds here
+  # IS the shippable artifact — the tarball and AppImage on relic.space come
+  # from this same script, run against this same tag.
+  linux:
+    name: linux build (tarball + AppImage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux desktop build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libjsoncpp-dev libsecret-1-dev \
+            libkeybinder-3.0-dev libayatana-appindicator3-dev libnotify-dev \
+            libwebkit2gtk-4.1-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Build tarball + AppImage
+        # Fetches the onnxruntime library and appimagetool itself; the sift
+        # sidecar and the relic CLI are built from this checkout.
+        run: bash app/scripts/build_release_linux.sh --appimage
+      - name: Draft release with artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.AppImage
