@@ -43,6 +43,7 @@ import 'services/onboarding_service.dart';
 import 'theme/relic_theme.dart';
 import 'theme/tokens.dart';
 import 'onboarding/desktop_onboarding.dart';
+import 'ui/actionable_notification.dart';
 import 'ui/popup.dart';
 import 'ui/settings.dart';
 import 'platform/popup_placement.dart';
@@ -244,11 +245,13 @@ class _RealAppState extends State<RealApp>
     widget.repo.onRemindersDue = (due) {
       if (due.isEmpty) return;
       if (due.length > 3) {
-        final n = LocalNotification(
+        final n = actionableNotification(
           title: 'Relic reminders',
           body: 'You have ${due.length} reminders due.',
+          actionLabel: 'Open Relic',
+          onActivate: () => _show(Summon.notification),
+          isLinux: Platform.isLinux,
         );
-        n.onClick = () => _show(Summon.notification);
         try {
           n.show();
         } catch (_) {}
@@ -258,14 +261,16 @@ class _RealAppState extends State<RealApp>
         final r = widget.repo.relicByUid(rem.relicUid);
         if (r == null) continue; // the item was deleted; skip quietly
         final note = rem.note?.trim();
-        final n = LocalNotification(
+        final n = actionableNotification(
           title: (note != null && note.isNotEmpty) ? note : 'Reminder',
           body: r.displayTitle,
+          actionLabel: 'Copy it',
+          onActivate: () async {
+            await widget.repo.putOnClipboard(r);
+            await _show(Summon.notification);
+          },
+          isLinux: Platform.isLinux,
         );
-        n.onClick = () async {
-          await widget.repo.putOnClipboard(r);
-          await _show(Summon.notification);
-        };
         try {
           n.show();
         } catch (_) {}
@@ -1546,11 +1551,13 @@ class _RealAppState extends State<RealApp>
       final info = res.info;
       if (info == null || !_notifiedUpdates.add(info.version)) return;
       try {
-        final n = LocalNotification(
+        final n = actionableNotification(
           title: 'Relic ${info.version} is available',
           body: _updateBody(info),
+          actionLabel: 'Update',
+          onActivate: () => _runSelfUpdate(info),
+          isLinux: Platform.isLinux,
         );
-        n.onClick = () => _runSelfUpdate(info);
         await n.show();
       } catch (_) {}
     }
