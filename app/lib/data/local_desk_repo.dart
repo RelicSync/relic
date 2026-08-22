@@ -1506,6 +1506,19 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           await setLaunchAtStartup(true);
         }
       }
+    } else if (Platform.isLinux && _launchAtLogin) {
+      // Linux has no slot to contend over: the autostart entry is a file we
+      // own by name, so there is no "did another copy claim it" question. It
+      // can still go stale — the bundle gets moved or replaced, or it predates
+      // the --autostart flag — and a stale Exec means login silently stops
+      // launching Relic. Rewrite it to point at the copy that is running.
+      final target = await launchAtStartupTarget();
+      final hasFlag = await launchAtStartupHasAutostartFlag();
+      if (target != Platform.resolvedExecutable ||
+          !hasFlag ||
+          !await isLaunchAtStartupEnabled()) {
+        await setLaunchAtStartup(true);
+      }
     } else if (_launchAtLogin != await isLaunchAtStartupEnabled()) {
       await setLaunchAtStartup(_launchAtLogin);
     }
