@@ -797,30 +797,24 @@ class _RealAppState extends State<RealApp>
   /// a sane fallback. Shared by the popup and the toast positioning.
   Future<(Offset, Size)> _cursorWorkArea() async {
     final cursor = await screenRetriever.getCursorScreenPoint();
-    final displays = await screenRetriever.getAllDisplays();
-    for (final d in displays) {
-      final o = d.visiblePosition ?? Offset.zero;
-      final s = d.visibleSize ?? d.size;
-      if (Rect.fromLTWH(o.dx, o.dy, s.width, s.height).contains(cursor)) {
-        return (o, s);
-      }
-    }
+    final hit = workAreaContaining(cursor, await _workAreas());
+    if (hit != null) return hit;
     final p = await screenRetriever.getPrimaryDisplay();
     return (p.visiblePosition ?? Offset.zero, p.visibleSize ?? p.size);
   }
+
+  /// Every display's work area, in the same logical screen space as the cursor.
+  Future<List<(Offset, Size)>> _workAreas() async => [
+        for (final d in await screenRetriever.getAllDisplays())
+          (d.visiblePosition ?? Offset.zero, d.visibleSize ?? d.size)
+      ];
 
   /// Work area of whichever monitor contains screen-space point [p], falling
   /// back to the cursor monitor. Same coordinate space as [_cursorWorkArea].
   Future<(Offset, Size)> _workAreaContaining(Offset p) async {
     try {
-      final displays = await screenRetriever.getAllDisplays();
-      for (final d in displays) {
-        final o = d.visiblePosition ?? Offset.zero;
-        final s = d.visibleSize ?? d.size;
-        if (Rect.fromLTWH(o.dx, o.dy, s.width, s.height).contains(p)) {
-          return (o, s);
-        }
-      }
+      final hit = workAreaContaining(p, await _workAreas());
+      if (hit != null) return hit;
     } catch (_) {}
     return _cursorWorkArea();
   }

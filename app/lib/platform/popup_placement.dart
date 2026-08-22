@@ -23,3 +23,26 @@ import 'dart:ui';
   y = y.clamp(origin.dy, maxY < origin.dy ? origin.dy : maxY);
   return (Rect.fromLTWH(x, y, size.width, size.height), down);
 }
+
+/// The work area (origin, size) of whichever display contains [point], or null
+/// when none does — callers fall back to the primary display.
+///
+/// [displays] is the platform's display list already reduced to work areas, so
+/// this stays free of any windowing dependency and the multi-monitor decision
+/// — the part with real edge cases — is testable without a second screen.
+/// Displays left of or above the primary have negative origins, which is why
+/// nothing here assumes the desktop starts at 0,0.
+///
+/// A point on the seam between two displays belongs to the one on the right or
+/// below, because [Rect.contains] is inclusive of left/top and exclusive of
+/// right/bottom. That matches where the OS puts the cursor at the same spot.
+(Offset, Size)? workAreaContaining(
+    Offset point, List<(Offset, Size)> displays) {
+  for (final (origin, size) in displays) {
+    if (Rect.fromLTWH(origin.dx, origin.dy, size.width, size.height)
+        .contains(point)) {
+      return (origin, size);
+    }
+  }
+  return null;
+}
