@@ -8,6 +8,7 @@
 #include "clipboard_watch.h"
 #include "flutter/generated_plugin_registrant.h"
 #include "hotkeys.h"
+#include "single_instance.h"
 #include "window_focus.h"
 
 struct _MyApplication {
@@ -90,6 +91,9 @@ static void my_application_activate(GApplication* application) {
   // Claiming the keyboard on summon needs the hotkey's timestamp, so it is
   // registered after hotkeys and reads from it (see window_focus.cc).
   relic_window_focus_register(messenger, window);
+  // Publish this window so the NEXT launch can surface it instead of starting
+  // a second copy on the same vault (see single_instance.cc).
+  relic_single_instance_publish(window);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
