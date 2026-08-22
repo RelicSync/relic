@@ -4,6 +4,8 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:image/image.dart' as img;
 
+import 'self_exec_linux.dart';
+
 /// Registering Relic with the Linux desktop: the launcher entry in
 /// `~/.local/share/applications`, its icon in the user's hicolor theme.
 ///
@@ -101,7 +103,7 @@ Future<bool> ensureRegistered() async {
   try {
     final base = _dataHome();
     if (base == null) return false;
-    final exec = Platform.resolvedExecutable;
+    final exec = linuxSelfExecPath();
     final entry = File('$base/applications/$_fileName');
 
     if (entry.existsSync() &&

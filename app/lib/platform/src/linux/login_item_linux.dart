@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'self_exec_linux.dart';
+
 /// Run-at-login on Linux: the XDG autostart spec's
 /// `~/.config/autostart/space.relic.app.desktop`. Every mainstream desktop
 /// (GNOME, KDE, XFCE, Cinnamon, MATE) launches what it finds there, so this is
@@ -126,7 +128,7 @@ bool setEnabled(bool enable) {
       return !f.existsSync();
     }
     f.parent.createSync(recursive: true);
-    f.writeAsStringSync(autostartDesktopEntry(Platform.resolvedExecutable));
+    f.writeAsStringSync(autostartDesktopEntry(linuxSelfExecPath()));
     return f.existsSync();
   } catch (_) {
     return false;
@@ -150,4 +152,19 @@ String? target() {
 bool hasAutostartFlag() {
   final body = _readEntry();
   return body == null || autostartEntryHasFlag(body);
+}
+
+/// Whether the entry on disk still describes the copy that is running:
+/// present, switched on, pointing at this executable, and carrying the flag.
+/// False means startup should rewrite it.
+///
+/// The comparison lives here rather than in the caller because "this
+/// executable" is not [Platform.resolvedExecutable] under an AppImage — see
+/// [linuxSelfExecPath].
+bool isCurrent() {
+  final body = _readEntry();
+  if (body == null) return false;
+  return autostartEntryEnabled(body) &&
+      autostartEntryHasFlag(body) &&
+      autostartExecPath(body) == linuxSelfExecPath();
 }

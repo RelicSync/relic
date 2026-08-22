@@ -44,3 +44,16 @@ Future<bool> launchAtStartupHasAutostartFlag() async {
   if (Platform.isLinux) return lin.hasAutostartFlag();
   return true;
 }
+
+/// Linux: whether the autostart entry still describes the running copy —
+/// present, switched on, pointing here, and carrying `--autostart`. False means
+/// startup should rewrite it. True elsewhere: Windows has its own ownership
+/// rules for the shared Run key, and macOS registers by bundle id.
+///
+/// "Pointing here" is not [Platform.resolvedExecutable] under an AppImage,
+/// which mounts itself at a fresh path every run — hence the check living in
+/// the backend rather than at the call site.
+Future<bool> launchAtStartupIsCurrent() async {
+  if (Platform.isLinux) return lin.isCurrent();
+  return true;
+}

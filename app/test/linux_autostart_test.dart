@@ -1,6 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'dart:io';
+
 import 'package:relic_app/platform/src/linux/login_item_linux.dart';
+import 'package:relic_app/platform/src/linux/self_exec_linux.dart';
 
 /// The XDG autostart entry Relic writes on Linux is parsed back by the same
 /// code that writes it (startup rewrites a stale or flag-less entry, see
@@ -68,6 +71,22 @@ void main() {
     test('no Exec line at all is null, not an empty path', () {
       expect(autostartExecPath('[Desktop Entry]\nType=Application\n'), isNull);
       expect(autostartExecPath('[Desktop Entry]\nExec=\n'), isNull);
+    });
+  });
+
+  group('linuxSelfExecPath', () {
+    // An AppImage mounts its payload at a fresh /tmp/.mount_XXXXXX per run, so
+    // an entry written from resolvedExecutable points at a path that is gone by
+    // the next login. $APPIMAGE is the stable file, and every entry must name
+    // it instead.
+    test('is the running binary when APPIMAGE is unset', () {
+      expect(Platform.environment.containsKey('APPIMAGE'), isFalse,
+          reason: 'tests do not run from an AppImage');
+      expect(linuxSelfExecPath(), Platform.resolvedExecutable);
+    });
+
+    test('never points into a mount path when it can help it', () {
+      expect(linuxSelfExecPath(), isNot(contains('/.mount_')));
     });
   });
 
