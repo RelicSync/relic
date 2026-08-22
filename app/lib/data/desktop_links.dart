@@ -16,6 +16,12 @@ import 'package:app_links/app_links.dart';
 ///     natively. So on Windows we only read argv here (cold start); warm start
 ///     needs no Dart involvement.
 ///
+///   * Linux — the same shape as Windows. The desktop entry Relic writes for
+///     itself declares `x-scheme-handler/relic` and `Exec=… %u`, so the URL is
+///     argv; a second launch while Relic is resident hits the flock guard in
+///     linux/runner/single_instance.cc, which surfaces the running window the
+///     way the Windows mutex does.
+///
 ///   * macOS — Launch Services never passes the URL as argv; it fires a system
 ///     URL event that the app_links plugin catches. app_links owns BOTH cold
 ///     start (`getInitialLink`) and warm start (`uriLinkStream`), because macOS
@@ -43,9 +49,9 @@ class DesktopLinks {
   }
 
   /// The `relic://` URL this process was cold-started with, if any. Windows
-  /// only: on macOS the launch URL comes through [init], not argv.
+  /// and Linux: on macOS the launch URL comes through [init], not argv.
   static Uri? launchLinkFromArgs(List<String> args) {
-    if (!Platform.isWindows) return null;
+    if (!Platform.isWindows && !Platform.isLinux) return null;
     for (final a in args) {
       if (a.startsWith('relic://')) return Uri.tryParse(a);
     }

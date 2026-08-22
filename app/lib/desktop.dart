@@ -18,6 +18,7 @@ import 'app_globals.dart';
 import 'platform/app_activation.dart';
 import 'platform/app_install.dart';
 import 'platform/clipboard_bridge.dart';
+import 'platform/desktop_entry.dart';
 import 'platform/foreground_app.dart';
 import 'platform/gem_toast.dart';
 import 'platform/input_injector.dart';
@@ -89,12 +90,17 @@ Future<void> runRealApp(List<String> args) async {
     await windowManager.hide(); // start in the tray, summon with the hotkey
   });
 
+  // Linux ships as a tarball with no install step, so Relic puts its own
+  // launcher entry, icon and relic:// scheme handler in place (no-op
+  // elsewhere, where the installer or the .app bundle already did it).
+  unawaited(ensureDesktopEntry());
+
   final repo = LocalDeskRepo();
   await repo.load();
   await repo
       .tryAutoConnect(); // silently resume cross-device sync if configured
-  // Windows delivers a relic:// launch link as an argv entry; macOS delivers it
-  // through app_links once the app is up (DesktopLinks.init, below).
+  // Windows and Linux deliver a relic:// launch link as an argv entry; macOS
+  // delivers it through app_links once the app is up (DesktopLinks.init, below).
   final launchLink = DesktopLinks.launchLinkFromArgs(args);
   // The run-at-login entry passes --autostart (input_win.dart): settle straight
   // into the tray, never surface a window or the first-run onboarding.
