@@ -52,6 +52,43 @@ flutter build windows --release
 Output lands under `app/build/windows/`. The build produces an unsigned binary;
 official releases are signed separately by the maintainer.
 
+### Linux
+
+x86_64 only. Install the GTK toolchain and the libraries Relic links against:
+
+```sh
+sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev \
+  liblzma-dev libjsoncpp-dev libsecret-1-dev libkeybinder-3.0-dev \
+  libayatana-appindicator3-dev libnotify-dev libwebkit2gtk-4.1-dev
+cd app
+flutter pub get
+flutter build linux --release
+```
+
+Output lands under `app/build/linux/x64/release/bundle/`. That is the same list
+`ci.yml` installs, so it is the one that is actually proven on every commit.
+The runner links `x11` through pkg-config for its own `XGrabKey` (the Flutter
+hotkey plugins either mis-map the spacebar or drop modifiers before matching,
+so `app/linux/runner/hotkeys.cc` owns the grab); `libx11-dev` arrives with
+`libgtk-3-dev`, so it needs no separate line.
+
+Paste-back is different: it loads `libXtst.so.6` at runtime over FFI rather
+than linking it, so it is not a build dependency at all. If that library is
+missing on the machine running Relic, paste-back reports itself unavailable
+and everything else still works.
+
+To produce the release artifacts (a tarball, and an AppImage with
+`--appimage`), which also bundles `sift`, `libonnxruntime.so` and the `relic`
+CLI beside the app:
+
+```sh
+bash app/scripts/build_release_linux.sh --appimage
+```
+
+`.github/workflows/release.yml` runs exactly that on a tag, so CI's Linux
+artifact is the shipped one: nothing is signed on Linux, so there is no
+maintainer-only step between the build and the download.
+
 ### Android
 
 ```sh

@@ -36,8 +36,10 @@ https://github.com/user-attachments/assets/dd760eac-36f3-4a22-94fb-3b88d15181a9
 | Platform | How |
 |---|---|
 | **Windows** | `winget install --id Relic.Relic` — or the [signed installer](https://github.com/RelicSync/relic/releases/latest), or Scoop (below) |
+| **macOS** | [signed download](https://relic.space/download/macos) (Apple Silicon) |
+| **Linux** | [tarball](https://relic.space/download/linux) or [AppImage](https://relic.space/download/linux/appimage) (x86_64) — built for X11, see [`docs/linux.md`](./docs/linux.md) |
 | **Android** | [Google Play](https://play.google.com/store/apps/details?id=relic.space.app) |
-| **macOS, iPhone, Linux** | Coming soon |
+| **iPhone** | Coming soon |
 | **From source** | [`BUILD.md`](./BUILD.md) — every component builds from a clean checkout with no secret of ours |
 
 This repo is also a Scoop bucket:
