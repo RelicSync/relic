@@ -12,10 +12,17 @@ Two downloads, same build:
 | **Tarball** | <https://relic.space/download/linux> — extract anywhere, run `./relic_app` |
 | **AppImage** | <https://relic.space/download/linux/appimage> — `chmod +x`, run |
 
-The tarball is the default because an AppImage needs `libfuse2`, which Ubuntu
-has not installed by default since 22.04. If the AppImage exits complaining
-about FUSE, either `sudo apt install libfuse2t64` or run it with
-`--appimage-extract-and-run`.
+Take the AppImage if you want updates handled for you: it is one file, so Relic
+can install a new version by swapping it in place. The tarball never
+self-updates, because replacing a folder under a running process is not
+something to do without a package manager sequencing it, so it points you at
+this page instead.
+
+The tarball is the default download only because it depends on nothing at all.
+The AppImage mounts itself with FUSE, and current distributions ship what it
+needs: it runs on a stock Ubuntu 24.04, which has `fuse3` and no `libfuse2`
+whatsoever. On an older machine with no usable FUSE, run it with
+`--appimage-extract-and-run`, or just take the tarball.
 
 Nothing installs system-wide and there is no package manager step. On first run
 Relic writes its own launcher entry and icon to `~/.local/share/applications/`
