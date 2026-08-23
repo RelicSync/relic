@@ -85,9 +85,12 @@ CLI beside the app:
 bash app/scripts/build_release_linux.sh --appimage
 ```
 
-`.github/workflows/release.yml` runs exactly that on a tag, so CI's Linux
-artifact is the shipped one: nothing is signed on Linux, so there is no
-maintainer-only step between the build and the download.
+`.github/workflows/release.yml` runs exactly that on a tag and attaches both
+files to the release, so the tagged source is proven to build the artifact in a
+clean checkout. Nothing on Linux is signed, so unlike Windows there is no
+maintainer-only step in the middle: the download on relic.space is the output
+of this same script on this same tag. It is not byte-identical to CI's copy
+(build paths and timestamps differ), so compare behaviour, not hashes.
 
 ### Android
 
