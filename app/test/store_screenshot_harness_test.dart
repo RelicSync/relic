@@ -56,9 +56,15 @@ void main() {
     addTearDown(tester.view.reset);
 
     final repo = StoreShotRepo();
+    // Separate repo for the App Store secret shot: the extra secret item
+    // must never leak into the other shots' seed (same rule as the website
+    // pass below).
+    final secretRepo = StoreShotRepo(includeSecret: true);
     await tester.runAsync(() async {
       await repo.preparePhoto();
       await repo.load();
+      await secretRepo.preparePhoto();
+      await secretRepo.load();
     });
 
     Relic pick(bool Function(Relic) test) => repo.all.firstWhere(test);
@@ -149,6 +155,8 @@ void main() {
 
     Widget popup(RelicColors c) =>
         PopupView(repo: repo, onClose: () {}, onSettings: () {});
+    Widget secretPopup(RelicColors c) =>
+        PopupView(repo: secretRepo, onClose: () {}, onSettings: () {});
 
     // Warm-up render (discarded): primes the image cache so the photo row's
     // thumbnail is decoded by the time the first kept shot paints.
@@ -275,8 +283,18 @@ void main() {
       physical: iphone69,
     );
 
-    // 7. App Store set, 13" iPad: the two-pane layout with the first relic
-    // open in the detail pane (a tap opens it there at wide widths).
+    // 6b. Masked secret row (separate seed): the E2EE story shot for the
+    // App Store set — dotted mask + Secret badge in the timeline.
+    await renderShot(
+      name: 'appstore-secret-dark',
+      c: RelicColors.dark,
+      build: secretPopup,
+      physical: iphone69,
+    );
+
+    // 7. App Store set, 13" iPad: search active AND a relic open in the
+    // detail pane, so both panes carry content (a bare two-pane timeline
+    // read empty at 13").
     await renderShot(
       name: 'appstore-popup-dark-ipad13',
       c: RelicColors.dark,
@@ -284,6 +302,8 @@ void main() {
       physical: ipad13,
       dpr: 2.0,
       interact: () async {
+        await tester.enterText(find.byType(TextField).first, 'business');
+        await tester.pump(const Duration(milliseconds: 200));
         await tester.tap(find.text('EIN').first);
         await tester.pump(const Duration(milliseconds: 200));
       },
