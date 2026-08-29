@@ -766,13 +766,30 @@ class StoreShotRepo extends MemoryRepo {
         );
 
     final items = <Relic>[
-      if (!extended || agedEin)
+      // Store stills lead with a consumer-relatable keeper; the video's
+      // recall scene keeps the aged EIN below because its script types
+      // "EIN" into search.
+      if (!extended)
+        mk(
+          'ktn',
+          Kind.string,
+          150,
+          // '#' instead of 'number': the selected row's action cluster
+          // fades the full word at phone size.
+          title: 'Known traveler #',
+          content: '982457313',
+          note: 'TSA PreCheck. Paste it into every flight booking.',
+          promoted: true,
+          userTags: ['travel', 'business'],
+          device: 'Windows PC',
+        ),
+      if (extended && agedEin)
         mk(
           'ein',
           Kind.string,
-          // Extended (video recall scene): ~8 months old, so the search-it-up
-          // beat shows a genuinely aged row. Store stills: recent, top row.
-          extended ? 20800000 : 150,
+          // Video recall scene: ~8 months old, so the search-it-up beat
+          // shows a genuinely aged row.
+          20800000,
           // Short on purpose: the selected row's action cluster leaves little
           // title width at phone size, and a mid-word fade reads like a bug.
           title: 'EIN',

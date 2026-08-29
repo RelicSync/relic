@@ -68,7 +68,7 @@ void main() {
     });
 
     Relic pick(bool Function(Relic) test) => repo.all.firstWhere(test);
-    final textRelic = pick((r) => r.uid == 'ein');
+    final textRelic = pick((r) => r.uid == 'ktn');
     final photoRelic = pick((r) => r.kind == Kind.photo);
 
     const key = ValueKey('store-shot-root');
@@ -300,9 +300,9 @@ void main() {
       physical: iphone69,
     );
 
-    // 7. App Store set, 13" iPad: search active AND a relic open in the
-    // detail pane, so both panes carry content (a bare two-pane timeline
-    // read empty at 13").
+    // 7. App Store set, 13" iPad: the full timeline in the sidebar (no
+    // search filter — it emptied the list to three rows) with the first
+    // relic open in the detail pane.
     await renderShot(
       name: 'appstore-popup-dark-ipad13',
       c: RelicColors.dark,
@@ -310,9 +310,7 @@ void main() {
       physical: ipad13,
       dpr: 2.0,
       interact: () async {
-        await tester.enterText(find.byType(TextField).first, 'business');
-        await tester.pump(const Duration(milliseconds: 200));
-        await tester.tap(find.text('EIN').first);
+        await tester.tap(find.text('Known traveler #').first);
         await tester.pump(const Duration(milliseconds: 200));
       },
     );
