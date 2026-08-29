@@ -56,15 +56,9 @@ void main() {
     addTearDown(tester.view.reset);
 
     final repo = StoreShotRepo();
-    // Separate repo for the App Store secret shot: the extra secret item
-    // must never leak into the other shots' seed (same rule as the website
-    // pass below).
-    final secretRepo = StoreShotRepo(includeSecret: true);
     await tester.runAsync(() async {
       await repo.preparePhoto();
       await repo.load();
-      await secretRepo.preparePhoto();
-      await secretRepo.load();
     });
 
     Relic pick(bool Function(Relic) test) => repo.all.firstWhere(test);
@@ -155,12 +149,9 @@ void main() {
 
     Widget popup(RelicColors c) =>
         PopupView(repo: repo, onClose: () {}, onSettings: () {});
-    Widget secretPopup(RelicColors c) =>
-        PopupView(repo: secretRepo, onClose: () {}, onSettings: () {});
 
-    // Warm-up renders (discarded): prime each repo's image cache so the
-    // photo row's thumbnail is decoded by the time the kept shots paint
-    // (each repo decodes its own copy of the photo, so both need a pass).
+    // Warm-up render (discarded): primes the image cache so the photo row's
+    // thumbnail is decoded by the time the first kept shot paints.
     await renderShot(
       name: 'warmup-discard',
       c: RelicColors.dark,
@@ -168,13 +159,6 @@ void main() {
       physical: phone,
     );
     File('$outDir/warmup-discard.png').deleteSync();
-    await renderShot(
-      name: 'warmup-discard-secret',
-      c: RelicColors.dark,
-      build: secretPopup,
-      physical: phone,
-    );
-    File('$outDir/warmup-discard-secret.png').deleteSync();
 
     // 1. Main timeline, dark (hero) + light.
     await renderShot(
@@ -263,13 +247,15 @@ void main() {
       build: popup,
       physical: iphone69,
     );
+    // Search by what you remember, not what it's called: 'tsa precheck'
+    // matches the Known traveler # item through its NOTE.
     await renderShot(
       name: 'appstore-search-dark',
       c: RelicColors.dark,
       build: popup,
       physical: iphone69,
       interact: () async {
-        await tester.enterText(find.byType(TextField).first, 'business');
+        await tester.enterText(find.byType(TextField).first, 'tsa precheck');
         await tester.pump(const Duration(milliseconds: 200));
       },
     );
@@ -291,13 +277,17 @@ void main() {
       physical: iphone69,
     );
 
-    // 6b. Masked secret row (separate seed): the E2EE story shot for the
-    // App Store set — dotted mask + Secret badge in the timeline.
+    // 6b. Vault scope: the E2EE story shot for the App Store set — the
+    // kept items under the active Vault chip.
     await renderShot(
-      name: 'appstore-secret-dark',
+      name: 'appstore-vault-dark',
       c: RelicColors.dark,
-      build: secretPopup,
+      build: popup,
       physical: iphone69,
+      interact: () async {
+        await tester.tap(find.text('Vault'));
+        await tester.pump(const Duration(milliseconds: 200));
+      },
     );
 
     // 7. App Store set, 13" iPad: the full timeline in the sidebar (no
