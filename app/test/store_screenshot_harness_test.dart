@@ -158,8 +158,9 @@ void main() {
     Widget secretPopup(RelicColors c) =>
         PopupView(repo: secretRepo, onClose: () {}, onSettings: () {});
 
-    // Warm-up render (discarded): primes the image cache so the photo row's
-    // thumbnail is decoded by the time the first kept shot paints.
+    // Warm-up renders (discarded): prime each repo's image cache so the
+    // photo row's thumbnail is decoded by the time the kept shots paint
+    // (each repo decodes its own copy of the photo, so both need a pass).
     await renderShot(
       name: 'warmup-discard',
       c: RelicColors.dark,
@@ -167,6 +168,13 @@ void main() {
       physical: phone,
     );
     File('$outDir/warmup-discard.png').deleteSync();
+    await renderShot(
+      name: 'warmup-discard-secret',
+      c: RelicColors.dark,
+      build: secretPopup,
+      physical: phone,
+    );
+    File('$outDir/warmup-discard-secret.png').deleteSync();
 
     // 1. Main timeline, dark (hero) + light.
     await renderShot(
