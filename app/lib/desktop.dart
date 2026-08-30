@@ -112,12 +112,20 @@ Future<void> runRealApp(List<String> args) async {
   );
   await windowManager.waitUntilReadyToShow(options, () async {
     await windowManager.setAsFrameless();
-    // macOS only: setAsFrameless ends with `backgroundColor = NSColor.clear`
-    // (window_manager's WindowManager.swift), throwing away the base colour
-    // WindowOptions set one call earlier - so a Mac would ignore the stored
-    // appearance entirely and every summon could flash before the first
-    // Flutter frame. The Windows and Linux implementations leave the window
-    // background alone, which is why only macOS has to re-assert it here.
+    // macOS only. This callback runs after waitUntilReadyToShow has already
+    // applied `options.backgroundColor`, and setAsFrameless — the line above —
+    // ends its macOS implementation with `backgroundColor = NSColor.clear`,
+    // wiping it. Left there, the Mac window has no colour of its own: every
+    // summon before Flutter's first frame shows through to whatever is behind
+    // it, and `isOpaque = true`, which that same call sets, tells the window
+    // server not to composite that through, so the gap can come out black
+    // instead. The panel is square by design (Radii.popup), so an opaque
+    // window is what the surface wants underneath it.
+    //
+    // Guarded rather than called unconditionally: on Windows setAsFrameless
+    // only touches the frame and leaves the background alone, so the call
+    // would be the same colour twice — harmless, but it is a line on the boot
+    // path of the platform this release ships, and nothing exercises it.
     if (Platform.isMacOS) await windowManager.setBackgroundColor(bootBg);
     await windowManager.hide(); // start in the tray, summon with the hotkey
   });
@@ -417,8 +425,8 @@ class _RealAppState extends State<RealApp>
     try {
       // .ico is Windows-only; the menu-bar item on macOS wants a template PNG
       // (monochrome + alpha) so it adapts to light/dark menu bars. Linux
-      // appindicators render the PNG as-is — the template art (white on
-      // transparent) all but vanishes on light themes, so use the colored icon.
+      // appindicators render the PNG as-is — the template art (black on
+      // transparent) all but vanishes on dark themes, so use the colored icon.
       await trayManager.setIcon(
         Platform.isWindows
             ? 'assets/tray_icon.ico'

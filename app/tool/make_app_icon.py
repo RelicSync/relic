@@ -13,7 +13,7 @@ Outputs, relative to `app/`:
 
   shared
     assets/app_icon.png                       1024, in-app brand raster
-    assets/tray_icon.ico                      tray (16/20/24/32/48/64)
+    assets/tray_icon.ico                      tray, BARE shard (16..64)
 
   windows
     windows/runner/resources/app_icon.ico     Windows app icon (16..256)
@@ -33,6 +33,7 @@ Requires Pillow. Re-run this rather than hand-editing the outputs.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from PIL import Image, ImageDraw
@@ -99,6 +100,18 @@ def flatten(steps: int = 48) -> list[tuple[float, float]]:
                 pts.append((x, y))
             cur = p3
     return pts
+
+
+def bounds() -> tuple[float, float, float, float]:
+    """The mark's own ink box in viewBox units, which is not the viewBox.
+
+    The shard leaves a little slack on every side of its 148x150 box, so
+    fitting it to a target square means fitting this, not the canvas.
+    """
+    pts = flatten()
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    return min(xs), min(ys), max(xs), max(ys)
 
 
 def sample(t: float) -> tuple[int, int, int]:
@@ -201,6 +214,23 @@ def render_icon(size: int,
     return tile
 
 
+# --- Apple ------------------------------------------------------------------
+
+# The iOS splash mark: no tile behind it, it sits straight on the
+# LaunchBackground colour, which is RelicColors.base for the active theme.
+LAUNCH_POINTS = 116  # the size LaunchScreen.storyboard declares
+LAUNCH_MARK_HEIGHT = 0.70  # fraction of the launch canvas
+
+# The macOS Dock icon: the bare shard, no tile behind it at all. macOS never
+# masks an app icon, so nothing here is full-bleed either: Apple's own icons
+# sit inside a transparent margin, and art that ignores that grid renders
+# oversized next to every native app in the Dock. This canvas -> content square
+# table was measured off a stock Apple icon (the plain squircle on Automator's
+# application stub) rather than guessed: Apple does NOT scale the margin
+# proportionally, small sizes get relatively more padding.
+MACOS_GRID = {16: 10, 32: 24, 64: 50, 128: 102, 256: 204, 512: 410, 1024: 824}
+
+
 # --- Android ----------------------------------------------------------------
 
 # Density buckets, keyed by the launcher icon's edge in px.
@@ -281,10 +311,94 @@ def emit_android(out) -> None:
         print(f"android mipmap-{bucket}", size, "fg", fg)
 
 
+def render_ios_icon(size: int) -> Image.Image:
+    """The icon as iOS wants it: full-bleed cream, square corners, no alpha.
+
+    iOS masks the corners itself, so a tile rounded here would show a second
+    corner inside that mask; and App Store submission rejects any icon that
+    carries an alpha channel, so the (fully opaque) tile is flattened to RGB.
+    """
+    return render_icon(size, radius=0.0).convert("RGB")
+
+
+def render_macos_icon(size: int) -> Image.Image:
+    """The icon as macOS wants it: the bare shard on full transparency.
+
+    The opposite of `render_ios_icon` on both counts. There is no tile: the
+    Dock icon is the mark itself, so everything outside the shard stays
+    transparent and the alpha channel is the point rather than a rejection
+    risk. And nothing is full-bleed: the shard is fitted to the content square
+    `MACOS_GRID` gives for this canvas, centred on its own ink rather than on
+    the viewBox, so it carries the same optical margin as its Dock neighbours.
+    """
+    box = MACOS_GRID[size]
+    x0, y0, x1, y1 = bounds()
+    scale = box / max(x1 - x0, y1 - y0)
+
+    mark = render_mark(max(1, round(VH * scale)))
+    ink = mark.getchannel("A").getbbox()  # the ink box again, after rounding
+
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    canvas.alpha_composite(mark, (round((size - ink[0] - ink[2]) / 2),
+                                  round((size - ink[1] - ink[3]) / 2)))
+    return canvas
+
+
+def _declared(catalog_json: str) -> list[dict]:
+    """The `images` an asset catalogue declares, in catalogue order.
+
+    Generating from Contents.json rather than a list kept here is what stops
+    the PNGs and the catalogue drifting apart.
+    """
+    with open(catalog_json, encoding="utf-8") as f:
+        return json.load(f)["images"]
+
+
+def _catalog_sizes(catalog_json: str) -> dict[str, int]:
+    """filename -> pixel size, from a catalogue's points x scale."""
+    sizes: dict[str, int] = {}
+    for image in _declared(catalog_json):
+        points = float(image["size"].split("x", 1)[0])
+        sizes[image["filename"]] = round(points * float(image["scale"].rstrip("x")))
+    return sizes
+
+
+def emit_ios(out) -> None:
+    xc = ("ios", "Runner", "Assets.xcassets")
+
+    icons = xc + ("AppIcon.appiconset",)
+    for name, px in sorted(_catalog_sizes(out(*icons, "Contents.json")).items(),
+                           key=lambda item: item[1]):
+        render_ios_icon(px).save(out(*icons, name))
+        print(f"ios AppIcon.appiconset/{name}", f"{px}x{px}")
+
+    launch = xc + ("LaunchImage.imageset",)
+    for image in _declared(out(*launch, "Contents.json")):
+        px = LAUNCH_POINTS * int(image["scale"].rstrip("x"))
+        render_bare(px, LAUNCH_MARK_HEIGHT).save(out(*launch, image["filename"]))
+        print(f"ios LaunchImage.imageset/{image['filename']}", f"{px}x{px}")
+
+
+def emit_macos(out) -> None:
+    """Every AppIcon size the macOS catalogue asks for, on Apple's grid.
+
+    The catalogue names seven files across ten entries (each size is declared
+    at 1x and at the 2x that reuses the next file up), so rendering per unique
+    pixel size is what keeps the set to seven PNGs.
+    """
+    icons = ("macos", "Runner", "Assets.xcassets", "AppIcon.appiconset")
+    for name, px in sorted(_catalog_sizes(out(*icons, "Contents.json")).items(),
+                           key=lambda item: item[1]):
+        render_macos_icon(px).save(out(*icons, name))
+        print(f"macos AppIcon.appiconset/{name}", f"{px}x{px}")
+
+
 PLATFORMS = {
     "shared": emit_shared,
     "windows": emit_windows,
     "android": emit_android,
+    "ios": emit_ios,
+    "macos": emit_macos,
 }
 
 

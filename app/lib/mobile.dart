@@ -1729,6 +1729,9 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
 
   Widget _settingLabel(RelicColors c, String t) => Padding(
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+        // kicker, not label: this is a settings GROUP HEADING, which is the
+        // same role desktop settings.dart gives kicker to. label() is for a
+        // field's own caption. Keeping them aligned is the point of the system.
         child: Text(t, style: RelicTheme.kicker(c.textMuted)),
       );
 

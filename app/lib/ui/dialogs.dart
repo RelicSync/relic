@@ -994,12 +994,16 @@ class _EditDialogState extends State<EditDialog> {
     final r = widget.relic;
     // Phones: the touch clamp widens every icon button to 40px+, so the full
     // row can't fit at 360 logical — tighten gaps and drop the labeled Cancel
-    // (the header X and system back already dismiss).
+    // (the header X and system back already dismiss). The side padding tightens
+    // too: a clamped 42px target already carries ~14px of dead space around its
+    // glyph, so the body's Insets.xl gutter double-counts here and pushed the
+    // Save pill past the edge on a 360dp phone.
     final mobile = RelicTheme.isMobileOf(context);
     final gap = SizedBox(width: mobile ? 4 : Insets.sm);
     final ico = _footerIcon;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: Insets.xl, vertical: Insets.md),
+      padding: EdgeInsets.symmetric(
+          horizontal: mobile ? Insets.md : Insets.xl, vertical: Insets.md),
       decoration: BoxDecoration(border: Border(top: BorderSide(color: c.border, width: 1))),
       child: Row(children: [
         GhostButton(
