@@ -1,4 +1,4 @@
-"""Render the Relic app icon from the brand mark.
+"""Render every Relic app icon from the brand mark.
 
 The mark is the gold shard from the 2026 design system (the same path
 `lib/widgets/relic_mark.dart` paints, and the same gradient baked into
@@ -6,13 +6,27 @@ The mark is the gold shard from the 2026 design system (the same path
 gradient shard on transparency all but vanishes against a light Windows
 taskbar and loses its silhouette at 16px.
 
+Everything here is generated from the path, never hand-exported. That is the
+whole point: a hand-export is how an icon drifts away from its mark.
+
 Outputs, relative to `app/`:
 
-    assets/app_icon.png                     1024, in-app brand raster
-    assets/tray_icon.ico                    tray (16/20/24/32/48/64)
-    windows/runner/resources/app_icon.ico   Windows app icon (16..256)
+  shared
+    assets/app_icon.png                       1024, in-app brand raster
+    assets/tray_icon.ico                      tray (16/20/24/32/48/64)
 
-Usage:  python tool/make_app_icon.py
+  windows
+    windows/runner/resources/app_icon.ico     Windows app icon (16..256)
+
+  android
+    android/.../mipmap-*/ic_launcher.png              48/72/96/144/192
+    android/.../mipmap-*/ic_launcher_round.png        circular tile, same sizes
+    android/.../mipmap-*/ic_launcher_foreground.png   adaptive fg, 2.25x
+    android/.../mipmap-*/ic_launcher_monochrome.png   themed-icon silhouette
+
+Usage:  python tool/make_app_icon.py            # every platform
+        python tool/make_app_icon.py android    # one or more of:
+                                                # shared windows android
 
 Requires Pillow. Re-run this rather than hand-editing the outputs.
 """
@@ -20,6 +34,7 @@ Requires Pillow. Re-run this rather than hand-editing the outputs.
 from __future__ import annotations
 
 import os
+import sys
 from PIL import Image, ImageDraw
 
 # --- the mark, in its 148x150 viewBox ---------------------------------------
@@ -51,6 +66,8 @@ GRAD_FROM, GRAD_TO = (30.0, 20.0), (130.0, 140.0)
 TILE = (0xF7, 0xF2, 0xE7)  # cream, the app's own surface
 TILE_RADIUS = 0.20  # fraction of the tile edge
 MARK_HEIGHT = 0.60  # fraction of the tile edge
+
+SS = 4  # supersample factor, everywhere
 
 
 def flatten(steps: int = 48) -> list[tuple[float, float]]:
@@ -85,15 +102,24 @@ def sample(t: float) -> tuple[int, int, int]:
     return GRADIENT[-1][1]
 
 
-def render_mark(px: int) -> Image.Image:
-    """The gradient-filled shard, `px` tall, on transparency."""
-    ss = 4  # supersample
-    w, h = round(px * VW / VH), px
-    W, H = w * ss, h * ss
-    sx, sy = W / VW, H / VH
+# --- the three ways to draw the mark ----------------------------------------
 
+
+def _mark_mask(px: int) -> tuple[Image.Image, int, int]:
+    """The shard's coverage mask at `SS`x, plus the final (w, h) in real px."""
+    w, h = round(px * VW / VH), px
+    W, H = w * SS, h * SS
+    sx, sy = W / VW, H / VH
     mask = Image.new("L", (W, H), 0)
     ImageDraw.Draw(mask).polygon([(x * sx, y * sy) for x, y in flatten()], fill=255)
+    return mask, w, h
+
+
+def render_mark(px: int) -> Image.Image:
+    """The gradient-filled shard, `px` tall, on transparency."""
+    mask, w, h = _mark_mask(px)
+    W, H = mask.size
+    sx, sy = W / VW, H / VH
 
     # The gradient, projected onto the (30,20) -> (130,140) axis.
     grad = Image.new("RGB", (W, H))
@@ -111,24 +137,148 @@ def render_mark(px: int) -> Image.Image:
     return out.resize((w, h), Image.LANCZOS)
 
 
-def render_icon(size: int) -> Image.Image:
-    """The full icon: the shard centred on a rounded cream tile."""
-    ss = 4
-    S = size * ss
+def render_silhouette(px: int, rgb: tuple[int, int, int] = (0, 0, 0)) -> Image.Image:
+    """The shard as one flat colour, `px` tall, on transparency.
+
+    For places that tint the art themselves (Android themed icons, the macOS
+    menu-bar template) and for small sizes where the gradient just muddies.
+    """
+    mask, w, h = _mark_mask(px)
+    out = Image.new("RGBA", mask.size, rgb + (0,))
+    out.putalpha(mask)
+    return out.resize((w, h), Image.LANCZOS)
+
+
+def _square(size: int, mark: Image.Image) -> Image.Image:
+    """`mark` centred on a transparent `size` square."""
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    canvas.alpha_composite(mark, ((size - mark.width) // 2, (size - mark.height) // 2))
+    return canvas
+
+
+def render_bare(size: int, mark_height: float, flat: bool = False) -> Image.Image:
+    """The shard alone on a transparent `size` square.
+
+    `mark_height` is the shard's height as a fraction of the canvas edge, so
+    callers size against a masked safe zone rather than against the art.
+    """
+    px = max(1, round(size * mark_height))
+    return _square(size, render_silhouette(px) if flat else render_mark(px))
+
+
+def render_icon(size: int,
+                radius: float = TILE_RADIUS,
+                mark_height: float = MARK_HEIGHT,
+                inset: float = 0.0) -> Image.Image:
+    """The full icon: the shard centred on a rounded cream tile.
+
+    `radius` and `mark_height` are fractions of the *tile* edge (`radius=0.5`
+    gives a circle; `radius=0.0` a hard square). `inset` is the fraction of the
+    canvas edge left blank on each side, for platforms that want the art to sit
+    inside a margin grid rather than bleed to the edge.
+    """
+    S = size * SS
+    pad = round(S * inset)
+    edge = S - 2 * pad
 
     tile = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    corner = ImageDraw.Draw(tile)
-    corner.rounded_rectangle([0, 0, S - 1, S - 1],
-                            radius=int(S * TILE_RADIUS),
-                            fill=TILE + (255,))
+    ImageDraw.Draw(tile).rounded_rectangle(
+        [pad, pad, pad + edge - 1, pad + edge - 1],
+        radius=int(edge * radius), fill=TILE + (255,))
     tile = tile.resize((size, size), Image.LANCZOS)
 
-    mark = render_mark(max(1, round(size * MARK_HEIGHT)))
+    mark = render_mark(max(1, round(size * (1 - 2 * inset) * mark_height)))
     tile.alpha_composite(mark, ((size - mark.width) // 2, (size - mark.height) // 2))
     return tile
 
 
-def main() -> None:
+# --- Android ----------------------------------------------------------------
+
+# Density buckets, keyed by the launcher icon's edge in px.
+ANDROID_DENSITIES = {
+    "mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192,
+}
+
+# An adaptive icon is drawn on a 108dp canvas of which only the centre 72dp is
+# guaranteed to survive the launcher's mask, so the foreground is 2.25x the
+# nominal icon and the art has to live inside that inner two thirds.
+ADAPTIVE_SCALE = 108 / 48
+ADAPTIVE_SAFE = 72 / 108
+
+# The shard's height as a fraction of the 108dp canvas. 0.60 of the visible
+# 72dp keeps the adaptive icon reading at the same weight as the legacy tile,
+# and leaves the whole shard well inside the safe circle under any mask.
+ADAPTIVE_MARK = MARK_HEIGHT * ADAPTIVE_SAFE
+
+
+# --- platform emitters ------------------------------------------------------
+#
+# One function per platform, each taking the `out()` path helper from main().
+# Adding a platform means adding an emitter and a line in PLATFORMS; nothing
+# above this comment should need to change.
+#
+# Apple slots in here as `emit_ios()` and `emit_macos()`. Both are `render_icon`
+# calls with different arguments, and the two sets of rules are opposites:
+#
+#   iOS / iPadOS  full-bleed square, corners NOT pre-rounded (iOS masks its
+#                 own, and a baked corner renders as a visible double corner),
+#                 and NO alpha channel at all (the App Store rejects it). So:
+#                 `render_icon(s, radius=0.0).convert("RGB")`.
+#   macOS         the opposite. macOS does not mask, so corners are baked in at
+#                 a 0.225 radius ratio, and the art sits inside Apple's margin
+#                 grid ({16:10, 32:24, 64:50, 128:102, 256:204, 512:410,
+#                 1024:824}) rather than filling the canvas. So:
+#                 `render_icon(s, radius=0.225, inset=(1 - grid[s] / s) / 2)`.
+#
+# Both write into `.xcassets` folders that also need a `Contents.json`; that
+# file is metadata, not art, and belongs next to the emitter that writes it.
+
+
+def emit_shared(out) -> None:
+    render_icon(1024).save(out("assets", "app_icon.png"))
+    print("assets/app_icon.png")
+
+    tray = [16, 20, 24, 32, 48, 64]
+    render_icon(64).save(out("assets", "tray_icon.ico"), sizes=[(s, s) for s in tray])
+    print("assets/tray_icon.ico", tray)
+
+
+def emit_windows(out) -> None:
+    win = [16, 24, 32, 48, 64, 128, 256]
+    render_icon(256).save(out("windows", "runner", "resources", "app_icon.ico"),
+                          sizes=[(s, s) for s in win])
+    print("windows/runner/resources/app_icon.ico", win)
+
+
+def emit_android(out) -> None:
+    res = ("android", "app", "src", "main", "res")
+    for bucket, size in ANDROID_DENSITIES.items():
+        mip = res + (f"mipmap-{bucket}",)
+        fg = round(size * ADAPTIVE_SCALE)
+
+        # Legacy launcher icon: the same rounded cream tile the desktop ships.
+        render_icon(size).save(out(*mip, "ic_launcher.png"))
+        # Round-icon launchers get a real circle, not a rounded square.
+        render_icon(size, radius=0.5).save(out(*mip, "ic_launcher_round.png"))
+        # Adaptive foreground: the bare shard on transparency. The cream comes
+        # from @color/ic_launcher_background, so the tile must NOT be baked in
+        # here or the mask clips it into a smaller square.
+        render_bare(fg, ADAPTIVE_MARK).save(out(*mip, "ic_launcher_foreground.png"))
+        # Themed (Android 13+) icons: the same geometry, flat, system-tinted.
+        render_bare(fg, ADAPTIVE_MARK, flat=True).save(
+            out(*mip, "ic_launcher_monochrome.png"))
+
+        print(f"android mipmap-{bucket}", size, "fg", fg)
+
+
+PLATFORMS = {
+    "shared": emit_shared,
+    "windows": emit_windows,
+    "android": emit_android,
+}
+
+
+def main(argv: list[str]) -> None:
     here = os.path.dirname(os.path.abspath(__file__))
     app = os.path.dirname(here)
 
@@ -137,19 +287,15 @@ def main() -> None:
         os.makedirs(os.path.dirname(p), exist_ok=True)
         return p
 
-    render_icon(1024).save(out("assets", "app_icon.png"))
-    print("assets/app_icon.png")
+    wanted = argv or list(PLATFORMS)
+    unknown = [a for a in wanted if a not in PLATFORMS]
+    if unknown:
+        sys.exit(f"unknown platform(s): {', '.join(unknown)}\n"
+                 f"choose from: {', '.join(PLATFORMS)}")
 
-    tray = [16, 20, 24, 32, 48, 64]
-    render_icon(64).save(out("assets", "tray_icon.ico"),
-                         sizes=[(s, s) for s in tray])
-    print("assets/tray_icon.ico", tray)
-
-    win = [16, 24, 32, 48, 64, 128, 256]
-    render_icon(256).save(out("windows", "runner", "resources", "app_icon.ico"),
-                          sizes=[(s, s) for s in win])
-    print("windows/runner/resources/app_icon.ico", win)
+    for name in wanted:
+        PLATFORMS[name](out)
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

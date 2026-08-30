@@ -3,7 +3,7 @@
     <!-- Theme applied to the Android Window while the process is starting when the OS's Dark Mode setting is on.
          Parent is Theme.Light (not Theme.Black) on purpose: the visible color
          comes from @drawable/launch_background -> @color/launch_bg (night
-         variant = Relic's warm charcoal), never the platform's pitch black.
+         variant = Relic's ink, #111110), never the platform's pitch black.
          Transparent bars keep the window edge-to-edge from the first frame. -->
     <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
         <!-- Show a splash screen on the activity. Automatically removed when

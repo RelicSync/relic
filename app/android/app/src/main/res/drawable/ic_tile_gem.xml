@@ -1,12 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Monochrome gem for the Quick Settings tile (the system tints it). -->
+<!-- Monochrome shard for the Quick Settings tile (the system tints it).
+     The path is the 2026 mark, in its native 148x150 viewBox, so the tile can
+     never drift from lib/widgets/relic_mark.dart; the group centres it in a
+     square viewport and holds it to the 20dp live area of a 24dp icon box.
+     The old faceted gem is retired. The file keeps its name because
+     AndroidManifest.xml points the tile service at @drawable/ic_tile_gem. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24"
+    android:viewportWidth="150"
+    android:viewportHeight="150"
     android:tint="#FFFFFFFF">
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M5,4 H19 L21.5,9 L12,21 L2.5,9 Z" />
+    <group
+        android:pivotX="75"
+        android:pivotY="75"
+        android:scaleX="0.8333"
+        android:scaleY="0.8333"
+        android:translateX="1.2"
+        android:translateY="1.55">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M27.4388,140.916 L132.709,140.969 C140.828,140.973 146.838,133.421 145.013,125.51 L121.339,22.9363 C120.235,18.1532 116.458,14.4442 111.656,13.4276 L80.9218,6.92219 C76.2452,5.93228 71.4106,7.66958 68.4338,11.4098 L52.6439,31.2487 L20.1246,72.1069 L4.33476,91.9458 C1.35791,95.686 0.749738,100.787 2.76379,105.122 L15.9997,133.613 C18.0679,138.064 22.53,140.913 27.4388,140.916 Z" />
+    </group>
 </vector>

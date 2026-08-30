@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Android 12+ night splash: Relic warm charcoal, matching the boot frame. -->
+    <!-- Android 12+ night splash: Relic's ink base, matching the boot frame. -->
     <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
         <item name="android:windowSplashScreenBackground">@color/launch_bg</item>
         <item name="android:windowBackground">@drawable/launch_background</item>
