@@ -89,6 +89,10 @@ enum AnalysisSpeed {
 }
 
 /// Theme preference. `system` follows the OS light/dark setting.
+///
+/// The default is [light], not [system]: Relic's 2026 design is a parchment
+/// design, and the ink palette is its parity theme rather than its home. An
+/// install that already stored a preference keeps it.
 enum Appearance {
   system,
   dark,
@@ -96,7 +100,7 @@ enum Appearance {
 
   static Appearance byName(String? n) => Appearance.values.firstWhere(
     (e) => e.name == n,
-    orElse: () => Appearance.system,
+    orElse: () => Appearance.light,
   );
 }
 
@@ -481,7 +485,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   }
 
   // --- general / capture preferences (persisted in prefs.json) ---
-  Appearance _appearance = Appearance.system;
+  Appearance _appearance = Appearance.light;
   bool _launchAtLogin = true;
   bool _showTrayIcon = true;
   bool _pasteOnSelect = true;

@@ -392,7 +392,7 @@ class _RealAppState extends State<RealApp>
         Platform.isWindows
             ? 'assets/tray_icon.ico'
             : Platform.isLinux
-                ? 'assets/beautiful-icon.png'
+                ? 'assets/app_icon.png'
                 : 'assets/tray_icon_template.png',
         isTemplate: true, // ignored off-macOS
       );

@@ -115,7 +115,7 @@ Future<bool> ensureRegistered() async {
         File('$base/icons/hicolor/256x256/apps/$_iconName.png');
     if (!icon.existsSync()) {
       try {
-        final bytes = await rootBundle.load('assets/beautiful-icon.png');
+        final bytes = await rootBundle.load('assets/app_icon.png');
         icon.parent.createSync(recursive: true);
         icon.writeAsBytesSync(_iconPng(bytes.buffer.asUint8List()));
       } catch (_) {

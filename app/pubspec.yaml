@@ -104,7 +104,7 @@ flutter:
   assets:
     - assets/tray_icon.ico
     - assets/tray_icon_template.png # macOS menu-bar template (tool/make_tray_template.dart)
-    - assets/beautiful-icon.png
+    - assets/app_icon.png
     - assets/sounds/relic-sound.wav
     - assets/brand/
 

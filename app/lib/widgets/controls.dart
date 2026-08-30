@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
@@ -8,6 +10,63 @@ import '../theme/tokens.dart';
 /// (borderless, hover-tinted), the filled primary CTA, and the hover/tap
 /// plumbing they build on. Everything reads [RelicColors] tokens, so all
 /// variants work in both palettes.
+
+/// The system's floating glass: a translucent fill over a blurred, saturated
+/// backdrop, hairlined, with a highlight along the top edge. This is the nav
+/// pill's treatment from the design, reused for the app's own floating chrome.
+/// Use it sparingly — glass reads as "floating over content", so anything that
+/// is really part of a panel should stay opaque, and blur only pays for itself
+/// where something interesting sits behind.
+class GlassPanel extends StatelessWidget {
+  final Widget child;
+  final double radius;
+  final EdgeInsets padding;
+
+  /// Skip the backdrop blur and paint an opaque surface instead.
+  final bool blur;
+
+  const GlassPanel({
+    super.key,
+    required this.child,
+    this.radius = Radii.pill,
+    this.padding = EdgeInsets.zero,
+    this.blur = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = RelicTheme.of(context);
+    final shape = BorderRadius.circular(radius);
+    final panel = DecoratedBox(
+      decoration: BoxDecoration(
+        color: blur ? c.glassFill : c.surfaceRaised,
+        borderRadius: shape,
+        border: Border.all(color: c.glassBorder, width: 1),
+        // The inset highlight along the top edge is what makes glass read as
+        // glass rather than as a flat translucent box.
+        boxShadow: [
+          BoxShadow(
+            color: c.glassHighlight,
+            blurRadius: 0,
+            spreadRadius: -1,
+            offset: const Offset(0, 1),
+            blurStyle: BlurStyle.inner,
+          ),
+        ],
+      ),
+      child: Padding(padding: padding, child: child),
+    );
+    if (!blur) return panel;
+    return ClipRRect(
+      borderRadius: shape,
+      child: BackdropFilter(
+        filter:
+            ui.ImageFilter.blur(sigmaX: Glass.blur / 2, sigmaY: Glass.blur / 2),
+        child: panel,
+      ),
+    );
+  }
+}
 
 /// A tap target that swallows the gesture so an enclosing row's onTap doesn't
 /// also fire. (Moved here from result_row.dart so any in-row control can use it.)
@@ -229,15 +288,7 @@ class GhostButton extends StatelessWidget {
               // circle.
               radius ?? (label == null ? Radii.input : Radii.pill),
             ),
-            boxShadow: gradient == null
-                ? null
-                : [
-                    BoxShadow(
-                      color: const Color(0xFFF2AE38).withValues(alpha: 0.35),
-                      blurRadius: 14,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
+            boxShadow: gradient == null ? null : Shadows.gold,
           ),
           // Container's `alignment` makes it EXPAND under bounded constraints,
           // which would stretch labeled buttons to full width. Icon-only

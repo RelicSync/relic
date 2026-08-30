@@ -29,6 +29,7 @@ import 'ui/dialogs.dart';
 import 'ui/popup.dart';
 import 'ui/quick_capture_tutorial.dart';
 import 'widgets/chrome.dart' show SyncKind;
+import 'widgets/relic_mark.dart';
 
 /// Mobile entry point — the "lens" (SPEC §8): connect to your deployed Worker,
 /// pull + decrypt your real relics, browse/search them on the phone. No
@@ -200,7 +201,7 @@ class _Creds {
       _s.write(key: _kMaskSecrets, value: v ? '1' : '0');
 
   static Future<String> appearance() async =>
-      (await _s.read(key: _kAppearance)) ?? 'system';
+      (await _s.read(key: _kAppearance)) ?? 'light';
   static Future<void> setAppearance(String v) => _s.write(key: _kAppearance, value: v);
 
   static const _kPersonalRank = 'relic.ranking.personalRank';
@@ -217,17 +218,19 @@ class MobileApp extends StatefulWidget {
   /// The persisted appearance ('system' | 'dark' | 'light'), resolved by
   /// [runMobileApp] before the first frame so boot paints the right theme.
   final String initialAppearance;
-  const MobileApp({super.key, this.initialAppearance = 'system'});
+  const MobileApp({super.key, this.initialAppearance = 'light'});
   @override
   State<MobileApp> createState() => _MobileAppState();
 }
 
 /// Parse the persisted appearance string. Shared by the pre-frame boot path
-/// and the prefs reload so both agree.
+/// and the prefs reload so both agree. Unrecognised (and unset) resolves to
+/// light, which is the design's home palette; 'system' is still honoured when
+/// it was explicitly chosen.
 Appearance parseAppearance(String v) => switch (v) {
       'dark' => Appearance.dark,
-      'light' => Appearance.light,
-      _ => Appearance.system,
+      'system' => Appearance.system,
+      _ => Appearance.light,
     };
 
 class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
@@ -1971,8 +1974,9 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
         child: AnimatedOpacity(
           opacity: _showBootLogo ? 1 : 0,
           duration: const Duration(milliseconds: 200),
-          child: Image.asset('assets/beautiful-icon.png',
-              width: 116, height: 116),
+          // The bare mark, not the OS icon raster: the tile behind that one
+          // exists to survive a taskbar, and reads as a cream square here.
+          child: const RelicIcon(size: 116),
         ),
       );
     } else if (_repo == null && _browseOnly) {

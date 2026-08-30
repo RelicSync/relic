@@ -42,10 +42,20 @@ class RelicColors {
   // ghost chrome & floating surfaces
   final Color ghostHover; // ghost-button hover bg
   final Color selectedCard; // selected-row floating card bg
+  final Color selectedBorder; // selected-row hairline (the system's #F0DC94)
   final Color cardShadow; // selected-card shadow
   final Color autotagText; // quiet machine-tag "#tag" text
   final Color tagBg; // tag / meta chip ground
   final Color tagText; // tag / meta chip text (deep gold, reads on tagBg)
+
+  // glass — the system's floating pill: a translucent fill over a blurred,
+  // saturated backdrop, hairlined, with a highlight along its top edge.
+  final Color glassFill;
+  final Color glassBorder;
+  final Color glassHighlight;
+
+  // the selected card's gold cast, and the gold CTA's glow
+  final Color goldShadow;
   final Color surfaceRaised; // floating chrome bg (toasts)
   final Color backdrop; // gallery / behind-window backdrop
   final Color inset; // recessed wells (recovery key, keycaps)
@@ -108,10 +118,15 @@ class RelicColors {
     required this.borderStrong,
     required this.ghostHover,
     required this.selectedCard,
+    required this.selectedBorder,
     required this.cardShadow,
     required this.autotagText,
     required this.tagBg,
     required this.tagText,
+    required this.glassFill,
+    required this.glassBorder,
+    required this.glassHighlight,
+    required this.goldShadow,
     required this.surfaceRaised,
     required this.backdrop,
     required this.inset,
@@ -163,10 +178,15 @@ class RelicColors {
     borderStrong: Color(0x29111110), // rgba(17,17,16,0.16)
     ghostHover: Color(0xFFEFE7D6),
     selectedCard: Color(0xFFFFFFFF),
+    selectedBorder: Color(0xFFF0DC94),
     cardShadow: Color(0x268C6414), // rgba(140,100,20,0.15)
     autotagText: Color(0xFF8C8C86),
     tagBg: Color(0xFFF5EDD6),
     tagText: Color(0xFF7A5E14),
+    glassFill: Color(0x47FFFFFF), // rgba(255,255,255,0.28)
+    glassBorder: Color(0x14111110), // rgba(17,17,16,0.08)
+    glassHighlight: Color(0x80FFFFFF), // rgba(255,255,255,0.50)
+    goldShadow: Color(0x2EC99127), // rgba(201,145,39,0.18)
     surfaceRaised: Color(0xFFFFFFFF),
     backdrop: Color(0xFFEFEADF),
     inset: Color(0xFFF1EDE4),
@@ -216,10 +236,15 @@ class RelicColors {
     borderStrong: Color(0x29F1F1EF), // rgba(241,241,239,0.16)
     ghostHover: Color(0xFF262623),
     selectedCard: Color(0xFF262623),
+    selectedBorder: Color(0x59F5C542),
     cardShadow: Color(0x73000000),
     autotagText: Color(0xFF8A8A84),
     tagBg: Color(0xFF332D1E),
     tagText: Color(0xFFE0C878),
+    glassFill: Color(0x8C24241F),
+    glassBorder: Color(0x1AF1F1EF),
+    glassHighlight: Color(0x14FFFFFF),
+    goldShadow: Color(0x30000000),
     surfaceRaised: Color(0xFF24241F),
     backdrop: Color(0xFF0A0A09),
     inset: Color(0xFF0C0C0B),
@@ -264,6 +289,46 @@ class Gradients {
     colors: [Color(0xFFF0B400), Color(0xFFEE9310)],
     stops: [0.1, 0.9],
   );
+}
+
+/// The system's elevations. Every floating thing in the app picks one of
+/// these rather than inventing a blur radius.
+class Shadows {
+  /// Resting card / panel. `0 10px 30px rgba(140,100,20,0.15)` in light.
+  static List<BoxShadow> card(RelicColors c) => [
+    BoxShadow(
+      color: c.cardShadow,
+      blurRadius: c.isDark ? 24 : 30,
+      offset: const Offset(0, 10),
+    ),
+  ];
+
+  /// The selected row's floating card. `0 6px 18px rgba(201,145,39,0.18)`:
+  /// a gold cast, not a grey one, so selection reads as warm.
+  static List<BoxShadow> selected(RelicColors c) => [
+    BoxShadow(color: c.goldShadow, blurRadius: 18, offset: const Offset(0, 6)),
+  ];
+
+  /// The gold CTA's glow. `0 8px 24px rgba(242,174,56,0.40)`.
+  static const List<BoxShadow> gold = [
+    BoxShadow(color: Color(0x66F2AE38), blurRadius: 24, offset: Offset(0, 8)),
+  ];
+
+  /// A floating window or dialog.
+  static List<BoxShadow> window(RelicColors c) => [
+    BoxShadow(
+      color: c.shadowStrong,
+      blurRadius: c.isDark ? 90 : 60,
+      offset: const Offset(0, 24),
+    ),
+  ];
+}
+
+/// How much the glass blurs, and how much it lifts saturation behind itself.
+/// From the nav pill: `backdrop-filter: blur(22px) saturate(1.3)`.
+class Glass {
+  static const double blur = 22;
+  static const double saturation = 1.3;
 }
 
 /// 4px-base spacing scale. The 2026 system breathes considerably more than the

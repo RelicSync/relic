@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:ui' as ui;
+
 import 'package:flutter/widgets.dart';
 
 import '../theme/relic_theme.dart';
@@ -93,18 +95,36 @@ class _Toast extends StatelessWidget {
     // A uniform border + rounded corners (Flutter forbids borderRadius on a
     // border with non-uniform side colors/widths). The accent bar is drawn as a
     // separate left strip, clipped to the rounded corners.
+    //
+    // Frosted, not flat: a toast floats over the results list, the one place in
+    // the app where a blurred backdrop has something to blur. The fill stays
+    // high-alpha so the label never fights the list underneath; the inset
+    // highlight along the top edge is what actually reads as glass.
+    final shape = BorderRadius.circular(Radii.card);
     return Container(
       margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(borderRadius: shape, boxShadow: Shadows.window(c)),
+      child: ClipRRect(
+        borderRadius: shape,
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: Glass.blur / 2, sigmaY: Glass.blur / 2),
+          child: Container(
       decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(Radii.input),
+        color: bg.withValues(alpha: 0.86),
+        borderRadius: shape,
         border: Border.all(color: border, width: 1),
         boxShadow: [
-          BoxShadow(color: c.shadowModal, blurRadius: 28, spreadRadius: -14, offset: const Offset(0, 12)),
+          BoxShadow(
+            color: c.glassHighlight,
+            blurRadius: 0,
+            spreadRadius: -1,
+            offset: const Offset(0, 1),
+            blurStyle: BlurStyle.inner,
+          ),
         ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(Radii.input),
+        borderRadius: shape,
         // IntrinsicHeight bounds the row's height so the full-height accent bar
         // (CrossAxisAlignment.stretch) lays out — without it, the toast sits in
         // an unbounded-height Positioned and fails to render (invisible).
@@ -142,6 +162,9 @@ class _Toast extends StatelessWidget {
               ),
             ),
             ],
+          ),
+        ),
+      ),
           ),
         ),
       ),
