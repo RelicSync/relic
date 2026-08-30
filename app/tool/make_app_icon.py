@@ -67,6 +67,15 @@ TILE = (0xF7, 0xF2, 0xE7)  # cream, the app's own surface
 TILE_RADIUS = 0.20  # fraction of the tile edge
 MARK_HEIGHT = 0.60  # fraction of the tile edge
 
+# The tray is the one place the mark goes bare. A notification-area icon is
+# drawn at 16-32px against a taskbar the app does not control, and the cream
+# tile costs ~40% of that canvas: rendered side by side, the bare shard is more
+# legible at every tray size on both a light and a dark Windows taskbar, and the
+# bare 16px beats the tiled 24px. Bare marks are also the tray convention. The
+# APP icon keeps its tile — that one has to hold its own in a Start menu and an
+# installer, where a container reads as a product rather than a loose glyph.
+TRAY_MARK = 0.90  # shard height as a fraction of the tray canvas
+
 SS = 4  # supersample factor, everywhere
 
 
@@ -239,8 +248,9 @@ def emit_shared(out) -> None:
     print("assets/app_icon.png")
 
     tray = [16, 20, 24, 32, 48, 64]
-    render_icon(64).save(out("assets", "tray_icon.ico"), sizes=[(s, s) for s in tray])
-    print("assets/tray_icon.ico", tray)
+    render_bare(64, TRAY_MARK).save(
+        out("assets", "tray_icon.ico"), sizes=[(s, s) for s in tray])
+    print("assets/tray_icon.ico", tray, "(bare shard)")
 
 
 def emit_windows(out) -> None:
