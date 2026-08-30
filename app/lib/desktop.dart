@@ -95,17 +95,29 @@ Future<void> runRealApp(List<String> args) async {
       WidgetsBinding.instance.platformDispatcher.platformBrightness ==
           Brightness.dark,
   };
+  final bootBg = bootDark ? RelicColors.dark.base : RelicColors.light.base;
   final options = WindowOptions(
     size: const Size(460, 560),
     center: true,
     skipTaskbar: true,
-    backgroundColor:
-        bootDark ? RelicColors.dark.base : RelicColors.light.base,
+    backgroundColor: bootBg,
     titleBarStyle: TitleBarStyle.hidden,
     alwaysOnTop: true,
   );
   await windowManager.waitUntilReadyToShow(options, () async {
     await windowManager.setAsFrameless();
+    // The boot colour is set twice on purpose. This callback runs after
+    // waitUntilReadyToShow has already applied `options.backgroundColor`, and
+    // setAsFrameless — the line above — ends its macOS implementation with
+    // `backgroundColor = NSColor.clear`, wiping it. Left there, the Mac window
+    // has no colour of its own at all: every summon before Flutter's first
+    // frame lands shows through to whatever is behind it, and `isOpaque = true`
+    // — which that same call sets — tells the window server not to composite
+    // that through, so the gap can come out black instead. The panel is square
+    // by design (Radii.popup), so an opaque window is exactly what the surface
+    // wants underneath it. On Windows setAsFrameless only touches the frame,
+    // making this the same colour twice.
+    await windowManager.setBackgroundColor(bootBg);
     await windowManager.hide(); // start in the tray, summon with the hotkey
   });
 
@@ -404,8 +416,8 @@ class _RealAppState extends State<RealApp>
     try {
       // .ico is Windows-only; the menu-bar item on macOS wants a template PNG
       // (monochrome + alpha) so it adapts to light/dark menu bars. Linux
-      // appindicators render the PNG as-is — the template art (white on
-      // transparent) all but vanishes on light themes, so use the colored icon.
+      // appindicators render the PNG as-is — the template art (black on
+      // transparent) all but vanishes on dark themes, so use the colored icon.
       await trayManager.setIcon(
         Platform.isWindows
             ? 'assets/tray_icon.ico'
