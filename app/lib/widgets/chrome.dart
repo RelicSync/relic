@@ -70,17 +70,35 @@ class PopupHeader extends StatelessWidget {
       child: Row(
         children: [
           // Sized to the settings glyph in the header button opposite it (21 on
-          // mobile), so the two ends of the bar read as the same weight.
-          RelicIcon(size: RelicTheme.isMobileOf(context) ? 21 : 16),
-          const SizedBox(width: 8),
-          Text(
-            'RELIC',
-            style: RelicTheme.mono(
-              size: 11,
-              weight: FontWeight.w600,
-              color: c.textMuted,
-              letterSpacing: 2,
-            ),
+          // mobile), so the two ends of the bar read as the same weight. The
+          // wordmark is the site lockup: set at the mark's own height in
+          // Headline regular, tracked -2%, a third of a mark away.
+          Flexible(
+            child: Builder(builder: (context) {
+              final m = RelicTheme.isMobileOf(context) ? 21.0 : 16.0;
+              final lockup = Row(mainAxisSize: MainAxisSize.min, children: [
+                RelicIcon(size: m),
+                SizedBox(width: m * 0.33),
+                Text(
+                  'Relic',
+                  style: RelicTheme.headline(
+                    size: m,
+                    weight: FontWeight.w400,
+                    color: c.text,
+                    height: 1,
+                    letterSpacing: m * -0.02,
+                  ),
+                ),
+              ]);
+              // In a narrow window the buttons opposite win the space; the
+              // lockup scales as a unit rather than overflowing, or having the
+              // wordmark ellipsised away from its mark.
+              return FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: lockup,
+              );
+            }),
           ),
           const Spacer(),
           _SyncChip(

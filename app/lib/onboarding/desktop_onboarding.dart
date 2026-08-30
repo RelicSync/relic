@@ -677,7 +677,7 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
           const SizedBox(height: 4),
           // Wordmark follows the theme ink — the cream default is only
           // readable on dark.
-          RelicWordmark(gemSize: 34, color: c.text),
+          RelicWordmark(markSize: 34, color: c.text),
           const SizedBox(height: 20),
           Text('Everything you copy,\non every device.',
               textAlign: TextAlign.center,
@@ -892,7 +892,7 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
                     fontSize: 44,
                     letterSpacing: 10,
                     fontWeight: FontWeight.w700,
-                    fontFamily: 'IBMPlexMono')),
+                    fontFamily: 'JetBrainsMono')),
           ),
           const SizedBox(height: 20),
           if (_busy)

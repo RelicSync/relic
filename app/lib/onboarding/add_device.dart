@@ -616,7 +616,7 @@ class _RecoveryKitScreenState extends State<RecoveryKitScreen> {
         autocorrect: false,
         enableSuggestions: false,
         style: TextStyle(
-            color: c.text, fontFamily: 'IBMPlexMono', letterSpacing: 2),
+            color: c.text, fontFamily: 'JetBrainsMono', letterSpacing: 2),
         textCapitalization: TextCapitalization.characters,
         decoration: InputDecoration(
           hintText: hint,

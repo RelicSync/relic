@@ -1065,7 +1065,7 @@ class _PopupViewState extends State<PopupView> {
         severity: ToastSeverity.accent,
         icon: LucideIcons.gem,
         iconBuilder: (sz, col) =>
-            RelicMark(size: sz, color: col, facets: false),
+            RelicMark(size: sz, color: col),
       ),
     );
     if (nowPromoted && widget.repo.promotionSound) {

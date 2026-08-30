@@ -108,8 +108,24 @@ flutter:
     - assets/sounds/relic-sound.wav
     - assets/brand/
 
-  # IBM Plex, bundled (SIL OFL) â€” no CDN at runtime, identical on every platform.
+  # Bundled type (all SIL OFL) — no CDN at runtime, identical on every platform.
+  #
+  # Stack Sans + JetBrains Mono are the 2026 design system:
+  #   Headline = titles and numbers, Text = every other string, Mono = kickers,
+  #   tags, counters, keycaps and secret values.
+  # IBM Plex is the outgoing pair. It stays declared only because the marketing
+  # and store screenshot harnesses under test/ still compose their frames in it;
+  # drop it (and the four .ttf files) once those are converted.
   fonts:
+    - family: StackSansHeadline
+      fonts:
+        - asset: assets/fonts/StackSansHeadline.ttf   # variable (wght 200..700)
+    - family: StackSansText
+      fonts:
+        - asset: assets/fonts/StackSansText.ttf       # variable (wght 200..700)
+    - family: JetBrainsMono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono.ttf       # variable (wght 100..800)
     - family: IBMPlexSans
       fonts:
         - asset: assets/fonts/IBMPlexSans.ttf   # variable (wght axis)

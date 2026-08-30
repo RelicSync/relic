@@ -98,6 +98,7 @@ enum GhostStyle {
   ghost,
 
   /// Filled accent CTA (copy-on-selected, header +, primary dialog actions).
+  /// Carries the system's gold gradient, not a flat fill.
   filled,
 
   /// Destructive ghost: danger-colored glyph, transparent at rest,
@@ -154,10 +155,8 @@ class GhostButton extends StatelessWidget {
       swallowTap: swallowTap,
       builder: (context, hovered) {
         final (Color bg, Color fg) = switch (style) {
-          GhostStyle.filled => (
-              hovered ? c.accentBright : c.accent,
-              c.onAccent,
-            ),
+          // bg is only used when there is no gradient, i.e. when disabled.
+          GhostStyle.filled => (disabled ? c.track : c.accent, c.onAccent),
           GhostStyle.danger => (
               hovered ? c.dangerBg : const Color(0x00000000),
               c.dangerText,
@@ -175,6 +174,17 @@ class GhostButton extends StatelessWidget {
         };
         final fgFinal = disabled ? c.textFaintest : fg;
         final iSize = iconSize ?? s * 0.5;
+        // The gold gradient is the primary CTA's whole identity. Hover is the
+        // system's `brightness(1.06)`, approximated by lifting both stops.
+        final gradient = (style == GhostStyle.filled && !disabled)
+            ? (hovered
+                ? const LinearGradient(
+                    begin: Alignment(-0.5, -1),
+                    end: Alignment(0.5, 1),
+                    colors: [Color(0xFFFFDE3B), Color(0xFFF6B948)],
+                  )
+                : Gradients.gold)
+            : null;
 
         Widget inner;
         if (label == null) {
@@ -209,10 +219,25 @@ class GhostButton extends StatelessWidget {
           height: s,
           padding: label == null
               ? EdgeInsets.zero
-              : const EdgeInsets.symmetric(horizontal: 10),
+              : const EdgeInsets.symmetric(horizontal: 16),
           decoration: BoxDecoration(
-            color: disabled && style == GhostStyle.filled ? c.track : bg,
-            borderRadius: BorderRadius.circular(radius ?? Radii.input),
+            color: gradient == null ? bg : null,
+            gradient: gradient,
+            borderRadius: BorderRadius.circular(
+              // The system has one button shape: a pill. Icon-only squares
+              // stay squircles so a 24px chrome button doesn't turn into a
+              // circle.
+              radius ?? (label == null ? Radii.input : Radii.pill),
+            ),
+            boxShadow: gradient == null
+                ? null
+                : [
+                    BoxShadow(
+                      color: const Color(0xFFF2AE38).withValues(alpha: 0.35),
+                      blurRadius: 14,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
           ),
           // Container's `alignment` makes it EXPAND under bounded constraints,
           // which would stretch labeled buttons to full width. Icon-only

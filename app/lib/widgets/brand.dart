@@ -4,27 +4,35 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../data/supabase_auth.dart';
 import 'relic_mark.dart';
 
-/// The full Relic logo: the polished gem + the "RELIC" mono wordmark, matching
-/// the website nav (gem + wide-tracked mono caps). Use this on brand surfaces
-/// instead of a giant bare icon.
+/// The full Relic logo: the gold shard + the "Relic" wordmark, matching the
+/// site nav. The lockup is proportional to the mark — the wordmark is set at
+/// the mark's own height in Stack Sans Headline *regular*, tracked −2%, one
+/// third of a mark-height away. Use this on brand surfaces instead of a giant
+/// bare icon.
 class RelicWordmark extends StatelessWidget {
-  final double gemSize;
+  /// Height of the mark, and the wordmark's font size.
+  final double markSize;
   final Color color;
-  const RelicWordmark({super.key, this.gemSize = 26, this.color = const Color(0xFFF2ECDD)});
+  const RelicWordmark({
+    super.key,
+    this.markSize = 26,
+    this.color = const Color(0xFF111110),
+  });
 
   @override
   Widget build(BuildContext context) => Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          RelicIcon(size: gemSize),
-          SizedBox(width: gemSize * 0.42),
+          RelicIcon(size: markSize),
+          SizedBox(width: markSize * 0.33),
           Text(
-            'RELIC',
+            'Relic',
             style: TextStyle(
-              fontFamily: 'IBMPlexMono',
-              fontWeight: FontWeight.w700,
-              fontSize: gemSize * 0.60,
-              letterSpacing: gemSize * 0.11,
+              fontFamily: 'StackSansHeadline',
+              fontWeight: FontWeight.w400,
+              fontSize: markSize,
+              letterSpacing: markSize * -0.02,
+              height: 1,
               color: color,
             ),
           ),

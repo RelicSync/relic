@@ -547,7 +547,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         const SizedBox(height: 28),
         // Wordmark follows the theme ink — the cream default is only readable
         // on dark.
-        Center(child: RelicWordmark(gemSize: 40, color: c.text)),
+        Center(child: RelicWordmark(markSize: 40, color: c.text)),
         const SizedBox(height: 24),
         Text('Everything you copy,\non every device.',
             textAlign: TextAlign.center,
@@ -677,7 +677,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
             border: Border.all(color: c.border)),
         child: SelectableText(kit,
             style: TextStyle(
-                fontFamily: 'IBMPlexMono', color: c.accentBright, height: 1.6, fontSize: 13)),
+                fontFamily: 'JetBrainsMono', color: c.accentBright, height: 1.6, fontSize: 13)),
       ),
       const SizedBox(height: 12),
       Row(children: [
@@ -859,7 +859,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
           enableSuggestions: false,
           textCapitalization: TextCapitalization.characters,
           style: TextStyle(
-              color: c.text, fontFamily: 'IBMPlexMono', letterSpacing: 2),
+              color: c.text, fontFamily: 'JetBrainsMono', letterSpacing: 2),
           decoration: InputDecoration(
             hintText: '2XXX-XXXX-XXXX-XXXX-XXXX',
             hintStyle: TextStyle(color: c.textMuted, letterSpacing: 0),
@@ -900,7 +900,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
                   fontSize: 52,
                   letterSpacing: 12,
                   fontWeight: FontWeight.w700,
-                  fontFamily: 'IBMPlexMono')),
+                  fontFamily: 'JetBrainsMono')),
         ),
         const SizedBox(height: 24),
         if (_busy)

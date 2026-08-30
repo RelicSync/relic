@@ -41,6 +41,9 @@ void main() {
         await loader.load();
       }
 
+      await load('StackSansHeadline', ['assets/fonts/StackSansHeadline.ttf']);
+      await load('StackSansText', ['assets/fonts/StackSansText.ttf']);
+      await load('JetBrainsMono', ['assets/fonts/JetBrainsMono.ttf']);
       await load('IBMPlexSans', ['assets/fonts/IBMPlexSans.ttf']);
       await load('IBMPlexMono', [
         'assets/fonts/IBMPlexMono-Regular.ttf',
@@ -335,6 +338,9 @@ void main() {
         await loader.load();
       }
 
+      await load('StackSansHeadline', ['assets/fonts/StackSansHeadline.ttf']);
+      await load('StackSansText', ['assets/fonts/StackSansText.ttf']);
+      await load('JetBrainsMono', ['assets/fonts/JetBrainsMono.ttf']);
       await load('IBMPlexSans', ['assets/fonts/IBMPlexSans.ttf']);
       await load('IBMPlexMono', [
         'assets/fonts/IBMPlexMono-Regular.ttf',

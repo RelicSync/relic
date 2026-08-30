@@ -694,7 +694,6 @@ class _ResultRowState extends State<ResultRow> {
           RelicMark(
             size: 14,
             color: c.accent,
-            facets: false,
           ), // filled gem = in vault
           const SizedBox(width: 6),
         ],
@@ -756,7 +755,6 @@ class _ResultRowState extends State<ResultRow> {
           iconBuilder: (sz, fg) => RelicMark(
             size: sz,
             color: r.promoted ? c.accent : fg,
-            facets: false,
             filled: r.promoted,
           ),
           size: 28,
@@ -837,7 +835,6 @@ class _ResultRowState extends State<ResultRow> {
           iconBuilder: (sz, fg) => RelicMark(
             size: sz,
             color: r.promoted ? c.accent : fg,
-            facets: false,
             filled: r.promoted,
           ),
           size: 28,
@@ -1184,7 +1181,7 @@ class _MiniResultRowState extends State<MiniResultRow> {
               // the item is promoted.
               if (r.promoted) ...[
                 const SizedBox(width: 8),
-                RelicMark(size: 12, color: c.accent, facets: false),
+                RelicMark(size: 12, color: c.accent),
               ],
               _editSlot(c, sel),
             ],
@@ -1340,21 +1337,22 @@ class _MetaChip extends StatelessWidget {
     final c = RelicTheme.of(context);
     final icon = tagIconFor(label);
     final onTap = this.onTap;
+    // The system's tag chip: a gold-tint ground with deep-gold mono text and
+    // no border. Gold is never a hairline here — the fill does the work.
     final chip = Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
         decoration: BoxDecoration(
-          color: c.accent.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(Radii.chip),
-          border: Border.all(color: c.accent.withValues(alpha: 0.30), width: 1),
+          color: c.tagBg,
+          borderRadius: BorderRadius.circular(Radii.tag),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             if (icon != null) ...[
-              Icon(icon, size: 10, color: c.accent),
+              Icon(icon, size: 10, color: c.tagText),
               const SizedBox(width: 3),
             ],
-            Text(label, style: RelicTheme.mono(size: 10, color: c.accent)),
+            Text(label, style: RelicTheme.mono(size: 10, color: c.tagText)),
           ],
         ),
       );
