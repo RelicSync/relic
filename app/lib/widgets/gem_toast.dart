@@ -2,11 +2,17 @@ import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
 
+import '../theme/tokens.dart';
 import 'relic_mark.dart';
 
 /// A brief celebratory flourish shown bottom-center of the screen when a relic
-/// is promoted to the vault via the hotkey: the gem pops in, jumps, spins, then
-/// fades out. Calls [onDone] when finished so the host can hide the window.
+/// is promoted to the vault via the hotkey: the Relic mark pops in, jumps,
+/// spins, then fades out. Calls [onDone] when finished so the host can hide the
+/// window.
+///
+/// The mark is the 2026 gold shard ([RelicIcon]) at its full gradient self —
+/// the old faceted gem the class is named for is retired, and nothing here
+/// paints a circle, facet lines or a glow behind it.
 class GemToast extends StatefulWidget {
   final VoidCallback onDone;
   const GemToast({super.key, required this.onDone});
@@ -45,7 +51,7 @@ class _GemToastState extends State<GemToast>
     return Align(
       alignment: Alignment.bottomCenter,
       child: Padding(
-        padding: const EdgeInsets.only(bottom: 46),
+        padding: const EdgeInsets.only(bottom: Insets.section + Insets.sm),
         child: AnimatedBuilder(
           animation: _ctl,
           builder: (_, _) {
@@ -68,9 +74,9 @@ class _GemToastState extends State<GemToast>
             final fadeIn = Curves.easeOut.transform(_iv(v, 0, 0.12));
             final fadeOut = 1 - Curves.easeIn.transform(_iv(v, 0.82, 1.0));
             final opacity = (fadeIn * fadeOut).clamp(0.0, 1.0);
-            // Bare gem: no circle, no facet lines (transparent facet), no glow.
-            // The spin is around the vertical axis (a coin-flip) via a 3D
-            // rotateY with a touch of perspective.
+            // The bare mark: no plate behind it, no glow. The spin is around
+            // the vertical axis (a coin-flip) via a 3D rotateY with a touch of
+            // perspective.
             return Opacity(
               opacity: opacity,
               child: Transform.translate(

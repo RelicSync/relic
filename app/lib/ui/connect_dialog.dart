@@ -6,14 +6,14 @@ import 'package:flutter/material.dart'
         Material,
         MaterialType,
         TextField,
-        InputDecoration,
-        InputBorder,
         showDialog;
 import 'package:http/http.dart' as http;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
+import '../widgets/controls.dart';
+import '../widgets/fields.dart';
 
 /// The two-step "Connect…" modal (the Obsidian-style progressive disclosure):
 ///
@@ -35,7 +35,9 @@ Future<void> showConnectDialog(
 }) {
   return showDialog<void>(
     context: context,
-    barrierColor: const Color(0x99000000),
+    // The palette has no dedicated scrim token; the window shadow is the
+    // closest, and it already darkens correctly in both themes.
+    barrierColor: colors.shadowStrong,
     builder: (_) => RelicTheme(
       colors: colors,
       child: _ConnectDialog(onCloud: onCloud, onSelfHost: onSelfHost),
@@ -155,19 +157,14 @@ class _ConnectDialogState extends State<_ConnectDialog> {
           width: 460,
           child: Container(
             decoration: BoxDecoration(
+              // Parchment ground for the dialog itself; the two destination
+              // choices below are the white cards that sit on it.
               color: c.base,
-              borderRadius: BorderRadius.circular(Radii.popup),
+              borderRadius: BorderRadius.circular(Radii.card),
               border: Border.all(color: c.border),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0x99140E04),
-                  blurRadius: 80,
-                  spreadRadius: -24,
-                  offset: const Offset(0, 40),
-                ),
-              ],
+              boxShadow: Shadows.window(c),
             ),
-            padding: const EdgeInsets.fromLTRB(28, 26, 28, 24),
+            padding: const EdgeInsets.all(Insets.xxl),
             child: _step == 0 ? _chooser(c) : _selfHostForm(c),
           ),
         ),
@@ -183,18 +180,14 @@ class _ConnectDialogState extends State<_ConnectDialog> {
     children: [
       Text(
         'Connect to your vault',
-        style: RelicTheme.sans(
-          size: 18,
-          weight: FontWeight.w600,
-          color: c.text,
-        ),
+        style: RelicTheme.headline(size: 20, color: c.text),
       ),
-      const SizedBox(height: 4),
+      const SizedBox(height: Insets.sm),
       Text(
         'Where should this device sync?',
         style: RelicTheme.sans(size: 13, color: c.textMuted),
       ),
-      const SizedBox(height: 18),
+      const SizedBox(height: Insets.xl),
       _choice(
         c,
         selected: _cloud,
@@ -203,7 +196,7 @@ class _ConnectDialogState extends State<_ConnectDialog> {
         sub: 'We host it. Nothing to set up.',
         onTap: () => setState(() => _cloud = true),
       ),
-      const SizedBox(height: 10),
+      const SizedBox(height: Insets.md),
       _choice(
         c,
         selected: !_cloud,
@@ -212,12 +205,12 @@ class _ConnectDialogState extends State<_ConnectDialog> {
         sub: "Self-hosted. We can't see it.",
         onTap: () => setState(() => _cloud = false),
       ),
-      const SizedBox(height: 20),
+      const SizedBox(height: Insets.xxl),
       Row(
         children: [
           const Spacer(),
           _ghost(c, 'Cancel', () => Navigator.of(context).pop()),
-          const SizedBox(width: 8),
+          const SizedBox(width: Insets.sm),
           _primary(c, 'Next', _next),
         ],
       ),
@@ -231,47 +224,46 @@ class _ConnectDialogState extends State<_ConnectDialog> {
     required String title,
     required String sub,
     required VoidCallback onTap,
-  }) => GestureDetector(
+  }) => Hoverable(
     onTap: onTap,
-    child: MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-        decoration: BoxDecoration(
-          color: selected ? c.surface : c.base,
-          borderRadius: BorderRadius.circular(Radii.input),
-          border: Border.all(
-            color: selected ? c.accent : c.borderStrong,
-            width: selected ? 1.5 : 1,
-          ),
+    // The row's selection language: a white card that lifts on a warm gold
+    // shadow behind a gold hairline, against a plain hairlined card at rest.
+    builder: (context, hovered) => AnimatedContainer(
+      duration: Motion.selection,
+      padding: const EdgeInsets.all(Insets.lg),
+      decoration: BoxDecoration(
+        color: selected
+            ? c.selectedCard
+            : (hovered ? c.surfaceHover : c.panel),
+        borderRadius: BorderRadius.circular(Radii.card),
+        border: Border.all(
+          color: selected ? c.selectedBorder : c.border,
+          width: 1,
         ),
-        child: Row(
-          children: [
-            Icon(icon, size: 18, color: selected ? c.accent : c.textMuted),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: RelicTheme.sans(
-                      size: 13.5,
-                      weight: FontWeight.w600,
-                      color: c.text,
-                    ),
-                  ),
-                  const SizedBox(height: 1),
-                  Text(
-                    sub,
-                    style: RelicTheme.sans(size: 11.5, color: c.textMuted),
-                  ),
-                ],
-              ),
+        boxShadow: selected ? Shadows.selected(c) : null,
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: selected ? c.accent : c.textMuted),
+          const SizedBox(width: Insets.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: RelicTheme.headline(size: 14, color: c.text),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  sub,
+                  style: RelicTheme.sans(size: 11.5, color: c.textMuted),
+                ),
+              ],
             ),
-            _radioDot(c, selected),
-          ],
-        ),
+          ),
+          _radioDot(c, selected),
+        ],
       ),
     ),
   );
@@ -304,18 +296,14 @@ class _ConnectDialogState extends State<_ConnectDialog> {
     children: [
       Text(
         'Your own server',
-        style: RelicTheme.sans(
-          size: 18,
-          weight: FontWeight.w600,
-          color: c.text,
-        ),
+        style: RelicTheme.headline(size: 20, color: c.text),
       ),
-      const SizedBox(height: 4),
+      const SizedBox(height: Insets.sm),
       Text(
         'End-to-end encrypted. Your server only ever sees ciphertext.',
         style: RelicTheme.sans(size: 12.5, color: c.textMuted, height: 1.4),
       ),
-      const SizedBox(height: 18),
+      const SizedBox(height: Insets.xl),
       _label(c, 'Server address'),
       Row(
         children: [
@@ -327,21 +315,21 @@ class _ConnectDialogState extends State<_ConnectDialog> {
               hint: 'http://192.168.1.10:8787',
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: Insets.sm),
           _testButton(c),
         ],
       ),
-      const SizedBox(height: 6),
+      const SizedBox(height: Insets.sm),
       _healthLine(c),
-      const SizedBox(height: 12),
+      const SizedBox(height: Insets.lg),
       _label(c, 'Passphrase'),
       _field(c, _pass, obscure: true, leading: LucideIcons.keyRound),
-      const SizedBox(height: 6),
+      const SizedBox(height: Insets.sm),
       Text(
         'Same passphrase on every device.',
         style: RelicTheme.sans(size: 11, color: c.textMuted),
       ),
-      const SizedBox(height: 12),
+      const SizedBox(height: Insets.lg),
       GestureDetector(
         onTap: () => setState(() => _advanced = !_advanced),
         child: MouseRegion(
@@ -367,17 +355,17 @@ class _ConnectDialogState extends State<_ConnectDialog> {
         ),
       ),
       if (_advanced) ...[
-        const SizedBox(height: 10),
+        const SizedBox(height: Insets.md),
         _label(c, 'Enrollment secret'),
         _field(c, _secret, obscure: true, mono: true),
-        const SizedBox(height: 4),
+        const SizedBox(height: Insets.xs),
         Text(
           'Only if your server sets RELIC_ENROLL_SECRET.',
           style: RelicTheme.sans(size: 11, color: c.textMuted),
         ),
       ],
       if (_error != null) ...[
-        const SizedBox(height: 14),
+        const SizedBox(height: Insets.lg),
         Row(
           children: [
             Icon(LucideIcons.circleX, size: 14, color: c.dangerText),
@@ -391,7 +379,7 @@ class _ConnectDialogState extends State<_ConnectDialog> {
           ],
         ),
       ],
-      const SizedBox(height: 20),
+      const SizedBox(height: Insets.xxl),
       Row(
         children: [
           _ghost(c, 'Back', _busy ? null : () => setState(() => _step = 0)),
@@ -406,34 +394,19 @@ class _ConnectDialogState extends State<_ConnectDialog> {
     ],
   );
 
-  Widget _testButton(RelicColors c) => GestureDetector(
+  // Sized to the field beside it so the pair reads as one control row.
+  Widget _testButton(RelicColors c) => GhostButton(
+    label: _health == _Health.checking ? 'Testing…' : 'Test',
+    size: 40,
+    fontSize: 12.5,
     onTap: _health == _Health.checking ? null : _test,
-    child: MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-        decoration: BoxDecoration(
-          color: c.surface,
-          borderRadius: BorderRadius.circular(Radii.input),
-          border: Border.all(color: c.borderStrong),
-        ),
-        child: Text(
-          _health == _Health.checking ? 'Testing…' : 'Test',
-          style: RelicTheme.sans(
-            size: 12.5,
-            weight: FontWeight.w500,
-            color: c.textSecondary,
-          ),
-        ),
-      ),
-    ),
   );
 
   Widget _healthLine(RelicColors c) {
     final (color, text) = switch (_health) {
       _Health.unknown => (c.textMuted, 'Not tested yet.'),
       _Health.checking => (c.textMuted, 'Checking…'),
-      _Health.ok => (const Color(0xFF3FB950), 'Reachable.'),
+      _Health.ok => (c.success, 'Reachable.'),
       _Health.bad => (c.dangerText, "Can't reach that server."),
     };
     return Row(
@@ -452,11 +425,8 @@ class _ConnectDialogState extends State<_ConnectDialog> {
   // --- shared bits ---------------------------------------------------------
 
   Widget _label(RelicColors c, String t) => Padding(
-    padding: const EdgeInsets.only(bottom: 7),
-    child: Text(
-      t.toUpperCase(),
-      style: RelicTheme.mono(size: 10, color: c.textMuted, letterSpacing: 0.8),
-    ),
+    padding: const EdgeInsets.only(bottom: Insets.sm),
+    child: Text(t.toUpperCase(), style: RelicTheme.label(c.textMuted)),
   );
 
   Widget _field(
@@ -467,7 +437,7 @@ class _ConnectDialogState extends State<_ConnectDialog> {
     IconData? leading,
     String? hint,
   }) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+    padding: const EdgeInsets.all(Insets.md),
     decoration: BoxDecoration(
       color: c.surface,
       borderRadius: BorderRadius.circular(Radii.input),
@@ -488,13 +458,11 @@ class _ConnectDialogState extends State<_ConnectDialog> {
                 : RelicTheme.sans(size: 13.5, color: c.text),
             cursorColor: c.accent,
             maxLines: 1,
-            decoration: InputDecoration(
-              isCollapsed: true,
-              border: InputBorder.none,
+            decoration: kBareField.copyWith(
               hintText: hint,
               hintStyle: mono
-                  ? RelicTheme.mono(size: 13, color: c.textMuted)
-                  : RelicTheme.sans(size: 13.5, color: c.textMuted),
+                  ? RelicTheme.mono(size: 13, color: c.textFaintest)
+                  : RelicTheme.sans(size: 13.5, color: c.textFaintest),
             ),
           ),
         ),
@@ -503,53 +471,16 @@ class _ConnectDialogState extends State<_ConnectDialog> {
   );
 
   Widget _ghost(RelicColors c, String t, VoidCallback? onTap) =>
-      GestureDetector(
-        onTap: onTap,
-        child: MouseRegion(
-          cursor: onTap == null
-              ? SystemMouseCursors.basic
-              : SystemMouseCursors.click,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            decoration: BoxDecoration(
-              color: c.surface,
-              borderRadius: BorderRadius.circular(Radii.input),
-              border: Border.all(color: c.border),
-            ),
-            child: Text(
-              t,
-              style: RelicTheme.sans(
-                size: 13,
-                weight: FontWeight.w500,
-                color: c.textSecondary,
-              ),
-            ),
-          ),
-        ),
-      );
+      GhostButton(label: t, size: 34, fontSize: 13, onTap: onTap);
 
+  // The single gold CTA per step. GhostButton's own disabled treatment (track
+  // fill, faintest label) replaces the old half-alpha accent.
   Widget _primary(RelicColors c, String t, VoidCallback? onTap) =>
-      GestureDetector(
+      GhostButton(
+        label: t,
+        size: 34,
+        fontSize: 13,
+        style: GhostStyle.filled,
         onTap: onTap,
-        child: MouseRegion(
-          cursor: onTap == null
-              ? SystemMouseCursors.basic
-              : SystemMouseCursors.click,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-            decoration: BoxDecoration(
-              color: onTap == null ? c.accent.withValues(alpha: 0.5) : c.accent,
-              borderRadius: BorderRadius.circular(Radii.input),
-            ),
-            child: Text(
-              t,
-              style: RelicTheme.sans(
-                size: 13,
-                weight: FontWeight.w600,
-                color: c.onAccent,
-              ),
-            ),
-          ),
-        ),
       );
 }

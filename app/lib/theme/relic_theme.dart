@@ -12,7 +12,7 @@ ThemeData materialThemeFor(RelicColors c) {
     useMaterial3: true,
     brightness: brightness,
     scaffoldBackgroundColor: c.base,
-    fontFamily: 'IBMPlexSans',
+    fontFamily: 'StackSansText',
     colorScheme: ColorScheme(
       brightness: brightness,
       primary: c.accent,
@@ -53,8 +53,18 @@ ThemeData materialThemeFor(RelicColors c) {
   );
 }
 
-/// Provides the active [RelicColors] down the tree and exposes the two IBM Plex
-/// faces. Sans = UI/titles/body; Mono = search, secrets, content, labels, meta.
+/// Provides the active [RelicColors] down the tree and exposes the three faces
+/// of the 2026 system:
+///
+///   [headline] — Stack Sans Headline. Titles, big numbers, the wordmark. Set
+///                tight; the negative tracking is baked in and scales.
+///   [sans]     — Stack Sans Text. Every other string: rows, buttons, body,
+///                settings, dialogs.
+///   [mono]     — JetBrains Mono. Kickers, tags, counters, keycaps, secret
+///                values, and any content that is itself code.
+///
+/// The rule of thumb from the design: if it is prose or a control, it is sans;
+/// if it is a machine fact, it is mono.
 class RelicTheme extends InheritedWidget {
   final RelicColors colors;
 
@@ -105,12 +115,30 @@ class RelicTheme extends InheritedWidget {
     double? letterSpacing,
   }) =>
       TextStyle(
-        fontFamily: 'IBMPlexSans',
+        fontFamily: 'StackSansText',
         fontSize: size,
         fontWeight: weight,
         color: color,
         height: height,
         letterSpacing: letterSpacing,
+      );
+
+  /// Display type. The system sets headlines at −0.03em, tightening to −0.045em
+  /// at hero scale, so the tracking is derived from [size] rather than passed.
+  static TextStyle headline({
+    double size = 20,
+    FontWeight weight = FontWeight.w700,
+    Color? color,
+    double? height,
+    double? letterSpacing,
+  }) =>
+      TextStyle(
+        fontFamily: 'StackSansHeadline',
+        fontSize: size,
+        fontWeight: weight,
+        color: color,
+        height: height ?? (size >= 30 ? 1.05 : 1.2),
+        letterSpacing: letterSpacing ?? size * (size >= 48 ? -0.045 : -0.03),
       );
 
   static TextStyle mono({
@@ -121,7 +149,7 @@ class RelicTheme extends InheritedWidget {
     double? letterSpacing,
   }) =>
       TextStyle(
-        fontFamily: 'IBMPlexMono',
+        fontFamily: 'JetBrainsMono',
         fontSize: size,
         fontWeight: weight,
         color: color,
@@ -131,9 +159,19 @@ class RelicTheme extends InheritedWidget {
 
   /// A small uppercase mono section/field label.
   static TextStyle label(Color color) => const TextStyle(
-        fontFamily: 'IBMPlexMono',
+        fontFamily: 'JetBrainsMono',
         fontSize: 10,
         fontWeight: FontWeight.w600,
         letterSpacing: 0.8,
       ).copyWith(color: color);
+
+  /// The system's section kicker — "01 · CAPTURE". Uppercase mono, widely
+  /// tracked, quiet. Callers uppercase the string themselves.
+  static TextStyle kicker(Color color, {double size = 10}) => TextStyle(
+        fontFamily: 'JetBrainsMono',
+        fontSize: size,
+        fontWeight: FontWeight.w500,
+        letterSpacing: size * 0.14,
+        color: color,
+      );
 }

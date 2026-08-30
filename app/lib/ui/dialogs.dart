@@ -7,8 +7,6 @@ import 'package:flutter/material.dart'
         SelectableText,
         CircularProgressIndicator,
         TextField,
-        InputDecoration,
-        InputBorder,
         CalendarDatePicker,
         Material,
         MaterialType,
@@ -32,6 +30,7 @@ import '../models/relic.dart';
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/controls.dart';
+import '../widgets/fields.dart';
 import '../widgets/file_icons.dart';
 import '../widgets/glyphs.dart';
 
@@ -39,24 +38,97 @@ BoxDecoration _modalDecoration(RelicColors c) => BoxDecoration(
       color: c.panel,
       borderRadius: BorderRadius.circular(Radii.card),
       border: Border.all(color: c.border, width: 1),
-      boxShadow: [
-        BoxShadow(color: c.shadowModal, blurRadius: 70, spreadRadius: -18, offset: const Offset(0, 30)),
-      ],
+      boxShadow: Shadows.window(c),
     );
 
 Widget _dialogHeader(RelicColors c, Widget leading, String title, VoidCallback onClose) => Container(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      padding: const EdgeInsets.fromLTRB(Insets.xl, Insets.lg, Insets.md, Insets.lg),
       decoration: BoxDecoration(border: Border(bottom: BorderSide(color: c.border, width: 1))),
       child: Row(children: [
         leading,
-        const SizedBox(width: 9),
-        Expanded(child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: RelicTheme.sans(size: 14, weight: FontWeight.w500, color: c.text))),
-        GhostIconButton(icon: LucideIcons.x, size: 26, iconSize: 15, onTap: onClose),
+        const SizedBox(width: Insets.md),
+        Expanded(child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: RelicTheme.headline(size: 15, color: c.text))),
+        GhostIconButton(icon: LucideIcons.x, size: 28, iconSize: 15, onTap: onClose),
       ]),
     );
 
 Widget _primaryButton(RelicColors c, IconData? icon, String label, VoidCallback onTap) =>
     PrimaryButton(icon: icon, label: label, onTap: onTap);
+
+/// The system's tag chip, exactly as the result row draws it: a warm gold-tint
+/// ground with deep-gold mono on it, and no hairline. The outlined-gold chip
+/// the dialogs used to draw is gone — gold is a fill here, never an outline.
+class _TagChip extends StatelessWidget {
+  final String label;
+
+  /// Trailing affordance: the remove ×, or the inert lock on `secret`.
+  final IconData? trailingIcon;
+
+  /// Null leaves the trailing glyph inert (the secret lock).
+  final VoidCallback? onTrailingTap;
+  const _TagChip({required this.label, this.trailingIcon, this.onTrailingTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = RelicTheme.of(context);
+    final icon = trailingIcon;
+    final onTrailing = onTrailingTap;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(Insets.sm, 3, Insets.xs, 3),
+      decoration: BoxDecoration(
+        color: c.tagBg,
+        borderRadius: BorderRadius.circular(Radii.tag),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Text(label, style: RelicTheme.mono(size: 11, color: c.tagText)),
+        if (icon != null) ...[
+          const SizedBox(width: 5),
+          if (onTrailing == null)
+            Icon(icon, size: 11, color: c.tagText)
+          else
+            Hoverable(
+              onTap: onTrailing,
+              builder: (context, hovered) => Icon(icon,
+                  size: 12, color: hovered ? c.text : c.tagText),
+            ),
+        ],
+      ]),
+    );
+  }
+}
+
+/// A one-tap "add this tag" chip (the suggestion row). Same chip language,
+/// with a leading + and a warmer hover.
+class _AddTagChip extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _AddTagChip({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = RelicTheme.of(context);
+    return Hoverable(
+      onTap: onTap,
+      builder: (context, hovered) => Container(
+        padding: const EdgeInsets.fromLTRB(6, 3, Insets.sm, 3),
+        decoration: BoxDecoration(
+          // Hover moves the warm ground a step away from the page in whichever
+          // direction reads as "raised" for that palette: darker on parchment,
+          // lighter on ink.
+          color: hovered
+              ? (c.isDark ? c.selectedTile : c.ghostHover)
+              : c.tagBg,
+          borderRadius: BorderRadius.circular(Radii.tag),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(LucideIcons.plus, size: 11, color: c.tagText),
+          const SizedBox(width: 3),
+          Text(label, style: RelicTheme.mono(size: 11, color: c.tagText)),
+        ]),
+      ),
+    );
+  }
+}
 
 /// The unified view + edit screen. Opened on double-click and from the row's
 /// edit action; it both shows the relic (media, extracted/secret text, meta)
@@ -290,7 +362,7 @@ class _EditDialogState extends State<EditDialog> {
   Widget _collapsedBody(RelicColors c) {
     final r = widget.relic;
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+      padding: const EdgeInsets.fromLTRB(Insets.xl, Insets.xl, Insets.xl, Insets.xl),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // Media zone (image / file card / secret well) — omitted for plain
         // non-secret text, which has no media.
@@ -299,7 +371,7 @@ class _EditDialogState extends State<EditDialog> {
         if ((r.kind == Kind.photo || r.kind == Kind.file) &&
             _extractedText != null) ...[
           _extractedCollapsed(c),
-          const SizedBox(height: 16),
+          const SizedBox(height: Insets.xl),
         ],
         // Editable body for non-secret text relics.
         if (_bodyEditable) ...[
@@ -314,35 +386,35 @@ class _EditDialogState extends State<EditDialog> {
                 onTap: () => setState(() => _expanded = _Expanded.content)),
           ]),
           _bodyField(c),
-          const SizedBox(height: 16),
+          const SizedBox(height: Insets.xl),
         ],
         _label(c, 'Title'),
         _field(c, _title, _titleF),
-        const SizedBox(height: 16),
+        const SizedBox(height: Insets.xl),
         _label(c, 'Note'),
         _field(c, _note, _noteF, minHeight: 60, maxLines: 4),
-        const SizedBox(height: 16),
+        const SizedBox(height: Insets.xl),
         _label(c, 'Tags'),
         _tagsField(c),
         _suggestions(c),
         if (_attachmentsEditable) ...[
-          const SizedBox(height: 16),
+          const SizedBox(height: Insets.xl),
           _label(c, 'Attachments'),
           _attachmentsSection(c),
         ] else if (r.hasAttachments) ...[
-          const SizedBox(height: 16),
+          const SizedBox(height: Insets.xl),
           _label(c, 'Attachments'),
           _readonlyAttachments(c),
         ],
-        const SizedBox(height: 16),
+        const SizedBox(height: Insets.xl),
         _snippetBox(c),
-        const SizedBox(height: 12),
+        const SizedBox(height: Insets.lg),
         _metaLine(c),
-        const SizedBox(height: 8),
+        const SizedBox(height: Insets.sm),
         Row(children: [
           Icon(LucideIcons.info, size: 12, color: c.textFaintest),
-          const SizedBox(width: 6),
-          Flexible(child: Text('Title, note & tags are all searchable. Type a tag and press ↵.', style: RelicTheme.mono(size: 10, color: c.textFaintest))),
+          const SizedBox(width: Insets.sm),
+          Flexible(child: Text('Title, note and tags are all searchable. Type a tag and press Enter.', style: RelicTheme.sans(size: 11, color: c.textFaintest))),
         ]),
       ]),
     );
@@ -356,7 +428,7 @@ class _EditDialogState extends State<EditDialog> {
       return Container(
         width: double.infinity,
         constraints: const BoxConstraints(maxHeight: 160),
-        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: Insets.md),
         decoration: BoxDecoration(
           color: c.surface,
           borderRadius: BorderRadius.circular(Radii.input),
@@ -369,7 +441,7 @@ class _EditDialogState extends State<EditDialog> {
         ),
       );
     }
-    return _field(c, _body, _bodyF, minHeight: 60, maxLines: 6);
+    return _field(c, _body, _bodyF, minHeight: 60, maxLines: 6, mono: true);
   }
 
   /// Media for the collapsed body: image well, file card, or the secret well
@@ -379,26 +451,28 @@ class _EditDialogState extends State<EditDialog> {
     if (r.isSecret) {
       return [
         _revealed ? _secretRevealed(c) : _secretMasked(c),
-        const SizedBox(height: 16),
+        const SizedBox(height: Insets.xl),
       ];
     }
-    if (_isImage) return [_imageWell(c), const SizedBox(height: 16)];
-    if (r.kind == Kind.file) return [_fileCard(c), const SizedBox(height: 16)];
+    if (_isImage) return [_imageWell(c), const SizedBox(height: Insets.xl)];
+    if (r.kind == Kind.file) {
+      return [_fileCard(c), const SizedBox(height: Insets.xl)];
+    }
     return const [];
   }
 
   Widget _imageWell(RelicColors c) {
     final path = widget.repo.localImagePath(widget.relic);
     return ClipRRect(
-      borderRadius: BorderRadius.circular(Radii.input),
+      borderRadius: BorderRadius.circular(Radii.card),
       child: Container(
         width: double.infinity,
         color: c.inset,
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(Insets.md),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxHeight: 180),
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(Radii.input),
+            borderRadius: BorderRadius.circular(Radii.tile),
             child: path != null
                 ? Image.file(File(path),
                     fit: BoxFit.contain,
@@ -432,21 +506,21 @@ class _EditDialogState extends State<EditDialog> {
   Widget _fileCard(RelicColors c) {
     final r = widget.relic;
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(Insets.lg),
       decoration: BoxDecoration(
-          color: c.inset, borderRadius: BorderRadius.circular(Radii.input)),
+          color: c.inset, borderRadius: BorderRadius.circular(Radii.card)),
       child: Row(children: [
         Container(
           width: 52, height: 52,
-          decoration: BoxDecoration(color: c.surface, borderRadius: BorderRadius.circular(Radii.card), border: Border.all(color: c.border)),
+          decoration: BoxDecoration(color: c.panel, borderRadius: BorderRadius.circular(Radii.tile), border: Border.all(color: c.border)),
           alignment: Alignment.center,
-          child: Icon(fileIconFor(r.filename), size: 26, color: c.success),
+          child: Icon(fileIconFor(r.filename), size: 26, color: c.textSecondary),
         ),
-        const SizedBox(width: 16),
+        const SizedBox(width: Insets.lg),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-            Text(r.filename ?? 'file', style: RelicTheme.sans(size: 13, color: c.text), maxLines: 2, overflow: TextOverflow.ellipsis),
-            const SizedBox(height: 4),
+            Text(r.filename ?? 'file', style: RelicTheme.sans(size: 13, weight: FontWeight.w500, color: c.text), maxLines: 2, overflow: TextOverflow.ellipsis),
+            const SizedBox(height: Insets.xs),
             Text('${humanBytes(r.byteSize)}${r.device != null ? ' · ${r.device}' : ''}',
                 style: RelicTheme.mono(size: 11.5, color: c.textFaint)),
           ]),
@@ -458,18 +532,20 @@ class _EditDialogState extends State<EditDialog> {
   /// Compact one-row masked well for an unrevealed secret (not a hero panel):
   /// an eye-off icon, dotted placeholder, and a Reveal control.
   Widget _secretMasked(RelicColors c) => Container(
-        padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+        padding: const EdgeInsets.fromLTRB(Insets.lg, Insets.md, Insets.sm, Insets.md),
         decoration: BoxDecoration(
+          // Warm chip language, straight off the row: a gold-tint ground with
+          // deep-gold mono on it, and no hairline — the fill does the work.
           color: c.secretBg,
-          borderRadius: BorderRadius.circular(Radii.input),
-          border: Border.all(color: c.secretBorder),
+          borderRadius: BorderRadius.circular(Radii.card),
         ),
         child: Row(children: [
           Icon(LucideIcons.eyeOff, size: 15, color: c.secret),
-          const SizedBox(width: 10),
+          const SizedBox(width: Insets.md),
           Expanded(
             child: Text('•••• •••• ••••',
-                style: RelicTheme.mono(size: 13, color: c.secret)),
+                style: RelicTheme.mono(
+                    size: 13, color: c.secretBright, letterSpacing: 1.4)),
           ),
           GhostButton(
               icon: LucideIcons.eye,
@@ -499,15 +575,16 @@ class _EditDialogState extends State<EditDialog> {
           Container(
             width: double.infinity,
             constraints: const BoxConstraints(maxHeight: 140),
-            padding: const EdgeInsets.all(13),
+            padding: const EdgeInsets.all(Insets.lg),
             decoration: BoxDecoration(
               color: c.secretBg,
-              borderRadius: BorderRadius.circular(Radii.input),
-              border: Border.all(color: c.secretBorder),
+              borderRadius: BorderRadius.circular(Radii.card),
             ),
+            // Revealed, the plaintext is the point: it goes to full-strength ink
+            // on the warm ground, exactly as the row does when the eye is on.
             child: SingleChildScrollView(
               child: SelectableText(_content ?? '…',
-                  style: RelicTheme.mono(size: 12.5, color: c.secretBright, height: 1.7)),
+                  style: RelicTheme.mono(size: 12.5, color: c.text, height: 1.7)),
             ),
           ),
         ],
@@ -536,10 +613,10 @@ class _EditDialogState extends State<EditDialog> {
           ]),
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(13),
+            padding: const EdgeInsets.all(Insets.lg),
             decoration: BoxDecoration(
               color: c.inset,
-              borderRadius: BorderRadius.circular(Radii.input),
+              borderRadius: BorderRadius.circular(Radii.card),
             ),
             child: Text(_extractedText!,
                 maxLines: 6,
@@ -554,7 +631,7 @@ class _EditDialogState extends State<EditDialog> {
   Widget _expandedBody(RelicColors c) {
     final isContent = _expanded == _Expanded.content;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+      padding: const EdgeInsets.fromLTRB(Insets.xl, Insets.lg, Insets.xl, Insets.md),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           _label(c, isContent ? 'Content' : 'Extracted text'),
@@ -588,7 +665,7 @@ class _EditDialogState extends State<EditDialog> {
     final readOnly = _body.text.length > _hugeBody;
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: Insets.md),
       decoration: BoxDecoration(
         color: c.surface,
         borderRadius: BorderRadius.circular(Radii.input),
@@ -607,18 +684,17 @@ class _EditDialogState extends State<EditDialog> {
               maxLines: null,
               expands: true,
               textAlignVertical: TextAlignVertical.top,
-              decoration: const InputDecoration(
-                  isCollapsed: true, border: InputBorder.none),
+              decoration: kBareField,
             ),
     );
   }
 
   Widget _expandedExtracted(RelicColors c) => Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(13),
+        padding: const EdgeInsets.all(Insets.lg),
         decoration: BoxDecoration(
           color: c.inset,
-          borderRadius: BorderRadius.circular(Radii.input),
+          borderRadius: BorderRadius.circular(Radii.card),
         ),
         child: SingleChildScrollView(
           child: SelectableText(_extractedText ?? '',
@@ -641,12 +717,11 @@ class _EditDialogState extends State<EditDialog> {
     final isImg = path != null && isDisplayableImageFile(a.name, a.mime);
     final ready = path != null;
     return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+      margin: const EdgeInsets.only(bottom: Insets.sm),
+      padding: const EdgeInsets.fromLTRB(Insets.md, Insets.sm, Insets.sm, Insets.sm),
       decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(Radii.input),
-        border: Border.all(color: c.border),
+        color: c.inset,
+        borderRadius: BorderRadius.circular(Radii.row),
       ),
       child: Row(children: [
         SizedBox(
@@ -654,14 +729,14 @@ class _EditDialogState extends State<EditDialog> {
           height: 34,
           child: isImg
               ? ClipRRect(
-                  borderRadius: BorderRadius.circular(Radii.chip),
+                  borderRadius: BorderRadius.circular(Radii.tile),
                   child: Image.file(File(path), fit: BoxFit.cover,
                       errorBuilder: (_, e, s) =>
                           Icon(fileIconFor(a.name), size: 17, color: c.textSecondary)),
                 )
               : Icon(fileIconFor(a.name), size: 18, color: c.textSecondary),
         ),
-        const SizedBox(width: 10),
+        const SizedBox(width: Insets.md),
         Expanded(
           child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -670,37 +745,28 @@ class _EditDialogState extends State<EditDialog> {
                 Text(a.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: RelicTheme.sans(size: 12.5, color: c.text)),
+                    style: RelicTheme.sans(size: 12.5, weight: FontWeight.w500, color: c.text)),
                 const SizedBox(height: 2),
                 Text(ready ? humanBytes(a.size) : 'Loading…',
                     style: RelicTheme.mono(size: 10.5, color: c.textFaint)),
               ]),
         ),
         if (ready) ...[
-          _attachBtn(c, LucideIcons.externalLink, () => _openAttachment(a)),
-          const SizedBox(width: 6),
-          _attachBtn(c, LucideIcons.download, () => _saveAttachment(a)),
+          _attachBtn(LucideIcons.externalLink, () => _openAttachment(a)),
+          const SizedBox(width: Insets.xs),
+          _attachBtn(LucideIcons.download, () => _saveAttachment(a)),
         ],
       ]),
     );
   }
 
-  Widget _attachBtn(RelicColors c, IconData icon, VoidCallback onTap) =>
-      GestureDetector(
+  /// De-boxed: the old bordered 28px tile is now a plain ghost icon button, so
+  /// the attachment row reads as one surface instead of three.
+  Widget _attachBtn(IconData icon, VoidCallback onTap) => GhostIconButton(
+        icon: icon,
+        size: 28,
+        iconSize: 14,
         onTap: onTap,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-                color: c.footer,
-                borderRadius: BorderRadius.circular(Radii.chip),
-                border: Border.all(color: c.border)),
-            alignment: Alignment.center,
-            child: Icon(icon, size: 14, color: c.textSecondary),
-          ),
-        ),
       );
 
   Future<void> _openAttachment(Attachment a) async {
@@ -885,24 +951,28 @@ class _EditDialogState extends State<EditDialog> {
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          padding: const EdgeInsets.symmetric(
+              horizontal: Insets.lg, vertical: Insets.md),
           decoration: BoxDecoration(
-            color: _isSnippet ? c.accent.withValues(alpha: 0.10) : c.surface,
-            borderRadius: BorderRadius.circular(Radii.input),
+            // On: the selected-card language — warm tint + the system's gold
+            // hairline. Gold stays a fill here; the label is always ink.
+            color: _isSnippet ? c.tagBg : c.surface,
+            borderRadius: BorderRadius.circular(Radii.row),
             border:
-                Border.all(color: _isSnippet ? c.accent : c.borderStrong),
+                Border.all(color: _isSnippet ? c.selectedBorder : c.border),
           ),
           child: Row(children: [
             Icon(_isSnippet ? LucideIcons.checkSquare : LucideIcons.square,
                 size: 16, color: _isSnippet ? c.accent : c.textSecondary),
-            const SizedBox(width: 9),
+            const SizedBox(width: Insets.md),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text('Save as snippet',
-                      style: RelicTheme.sans(size: 13, color: c.text)),
-                  const SizedBox(height: 1),
+                      style: RelicTheme.sans(
+                          size: 13, weight: FontWeight.w500, color: c.text)),
+                  const SizedBox(height: 2),
                   Text('Type its title in the picker and it jumps to the top.',
                       style:
                           RelicTheme.sans(size: 11, color: c.textSecondary)),
@@ -924,20 +994,25 @@ class _EditDialogState extends State<EditDialog> {
     final r = widget.relic;
     // Phones: the touch clamp widens every icon button to 40px+, so the full
     // row can't fit at 360 logical — tighten gaps and drop the labeled Cancel
-    // (the header X and system back already dismiss).
+    // (the header X and system back already dismiss). The side padding tightens
+    // too: a clamped 42px target already carries ~14px of dead space around its
+    // glyph, so the body's Insets.xl gutter double-counts here and pushed the
+    // Save pill past the edge on a 360dp phone.
     final mobile = RelicTheme.isMobileOf(context);
-    final gap = SizedBox(width: mobile ? 4 : 8);
+    final gap = SizedBox(width: mobile ? 4 : Insets.sm);
+    final ico = _footerIcon;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+      padding: EdgeInsets.symmetric(
+          horizontal: mobile ? Insets.md : Insets.xl, vertical: Insets.md),
       decoration: BoxDecoration(border: Border(top: BorderSide(color: c.border, width: 1))),
       child: Row(children: [
         GhostButton(
             icon: LucideIcons.trash2,
-            size: 30,
+            size: ico,
             style: GhostStyle.danger,
             tooltip: 'Delete',
             onTap: widget.onDelete),
-        SizedBox(width: mobile ? 6 : 12),
+        SizedBox(width: mobile ? 6 : Insets.md),
         // When the edit would empty the relic, hide the action cluster and warn
         // instead — keeps the row from overflowing at the 380px Mini width.
         if (_wouldBeEmpty)
@@ -945,14 +1020,14 @@ class _EditDialogState extends State<EditDialog> {
             child: Text(
               'Keep some text or an attachment, or delete this relic instead.',
               maxLines: 2,
-              style: RelicTheme.sans(size: 10.5, color: c.warningDim),
+              style: RelicTheme.sans(size: 11, color: c.warning),
             ),
           )
         else ...[
           if (widget.onShare != null) ...[
             GhostIconButton(
                 icon: LucideIcons.share2,
-                size: 30,
+                size: ico,
                 iconSize: 14,
                 tooltip: 'Share',
                 onTap: widget.onShare),
@@ -961,7 +1036,7 @@ class _EditDialogState extends State<EditDialog> {
           if (r.kind == Kind.string && r.firstUrl != null) ...[
             GhostIconButton(
                 icon: LucideIcons.externalLink,
-                size: 30,
+                size: ico,
                 iconSize: 14,
                 tooltip: 'Open link',
                 onTap: () => _openLink(r.firstUrl!)),
@@ -977,7 +1052,7 @@ class _EditDialogState extends State<EditDialog> {
           ],
           GhostIconButton(
               icon: LucideIcons.copy,
-              size: 30,
+              size: ico,
               iconSize: 14,
               tooltip: 'Copy',
               onTap: widget.onCopy),
@@ -985,7 +1060,7 @@ class _EditDialogState extends State<EditDialog> {
         const Spacer(),
         if (!mobile) ...[
           GhostButton(label: 'Cancel', size: 30, onTap: widget.onCancel),
-          const SizedBox(width: 8),
+          const SizedBox(width: Insets.sm),
         ],
         Opacity(
           opacity: _wouldBeEmpty ? 0.4 : 1,
@@ -998,6 +1073,13 @@ class _EditDialogState extends State<EditDialog> {
       ]),
     );
   }
+
+  /// Footer icon buttons. `GhostButton` widens an icon-only button on phones to
+  /// `(size * 1.4).clamp(40, 64)`, so 30 becomes 42 and an image relic's six
+  /// actions overflow the 360dp footer by ~1px, slicing the Save pill. 28 lands
+  /// on exactly the 40px minimum target, which buys back 2px a button without
+  /// going under the touch floor. Desktop keeps 30 and is unchanged.
+  double get _footerIcon => RelicTheme.isMobileOf(context) ? 28 : 30;
 
   /// Save-to-device icon with the ported state colors (warning on error,
   /// success when saved, faint while saving).
@@ -1016,13 +1098,13 @@ class _EditDialogState extends State<EditDialog> {
     return color != null
         ? GhostButton(
             iconBuilder: (s, _) => Icon(icon, size: s, color: color),
-            size: 30,
+            size: _footerIcon,
             iconSize: 14,
             tooltip: tip,
             onTap: _save)
         : GhostIconButton(
             icon: icon,
-            size: 30,
+            size: _footerIcon,
             iconSize: 14,
             tooltip: tip,
             onTap: _save);
@@ -1033,13 +1115,13 @@ class _EditDialogState extends State<EditDialog> {
     return color != null
         ? GhostButton(
             iconBuilder: (s, _) => Icon(LucideIcons.externalLink, size: s, color: color),
-            size: 30,
+            size: _footerIcon,
             iconSize: 14,
             tooltip: 'Open file',
             onTap: _open)
         : GhostIconButton(
             icon: LucideIcons.externalLink,
-            size: 30,
+            size: _footerIcon,
             iconSize: 14,
             tooltip: 'Open file',
             onTap: _open);
@@ -1056,12 +1138,11 @@ class _EditDialogState extends State<EditDialog> {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       for (final a in existing)
         Container(
-          margin: const EdgeInsets.only(bottom: 6),
-          padding: const EdgeInsets.fromLTRB(10, 7, 6, 7),
+          margin: const EdgeInsets.only(bottom: Insets.sm),
+          padding: const EdgeInsets.fromLTRB(Insets.md, 6, 6, 6),
           decoration: BoxDecoration(
-            color: c.surface,
-            borderRadius: BorderRadius.circular(Radii.input),
-            border: Border.all(color: c.border),
+            color: c.inset,
+            borderRadius: BorderRadius.circular(Radii.row),
           ),
           child: Row(children: [
             Icon(fileIconFor(a.name),
@@ -1069,7 +1150,7 @@ class _EditDialogState extends State<EditDialog> {
                 color: _removedIds.contains(a.id)
                     ? c.textFaintest
                     : c.textSecondary),
-            const SizedBox(width: 9),
+            const SizedBox(width: Insets.md),
             Expanded(
               child: Text(
                 a.name,
@@ -1085,80 +1166,65 @@ class _EditDialogState extends State<EditDialog> {
                 ),
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: Insets.sm),
             Text(humanBytes(a.size),
                 style: RelicTheme.mono(size: 10.5, color: c.textFaint)),
-            const SizedBox(width: 6),
-            GestureDetector(
+            const SizedBox(width: Insets.xs),
+            GhostIconButton(
+              icon: _removedIds.contains(a.id)
+                  ? LucideIcons.undo2
+                  : LucideIcons.x,
+              size: 26,
+              iconSize: 14,
               onTap: () => setState(() {
                 if (!_removedIds.remove(a.id)) _removedIds.add(a.id);
               }),
-              child: MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: Icon(
-                  _removedIds.contains(a.id)
-                      ? LucideIcons.undo2
-                      : LucideIcons.x,
-                  size: 14,
-                  color: c.textSecondary,
-                ),
-              ),
             ),
           ]),
         ),
       for (var i = 0; i < _added.length; i++)
         Container(
-          margin: const EdgeInsets.only(bottom: 6),
-          padding: const EdgeInsets.fromLTRB(10, 7, 6, 7),
+          margin: const EdgeInsets.only(bottom: Insets.sm),
+          padding: const EdgeInsets.fromLTRB(Insets.md, 6, 6, 6),
           decoration: BoxDecoration(
-            color: c.surface,
-            borderRadius: BorderRadius.circular(Radii.input),
-            border: Border.all(color: c.accent.withValues(alpha: 0.35)),
+            // Newly picked files sit on the warm tag ground so "added, not yet
+            // saved" reads without an outlined-gold box.
+            color: c.tagBg,
+            borderRadius: BorderRadius.circular(Radii.row),
           ),
           child: Row(children: [
             Icon(fileIconFor(_added[i].$1), size: 15, color: c.accent),
-            const SizedBox(width: 9),
+            const SizedBox(width: Insets.md),
             Expanded(
               child: Text(_added[i].$1,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: RelicTheme.sans(size: 12.5, color: c.text)),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: Insets.sm),
             Text(humanBytes(_added[i].$3.length),
-                style: RelicTheme.mono(size: 10.5, color: c.textFaint)),
-            const SizedBox(width: 6),
-            GestureDetector(
+                style: RelicTheme.mono(size: 10.5, color: c.tagText)),
+            const SizedBox(width: Insets.xs),
+            GhostIconButton(
+              icon: LucideIcons.x,
+              size: 26,
+              iconSize: 14,
               onTap: () => setState(() {
                 _added.removeAt(i);
                 _attachNote = null;
               }),
-              child: Icon(LucideIcons.x, size: 14, color: c.textSecondary),
             ),
           ]),
         ),
       Row(children: [
-        GestureDetector(
+        GhostButton(
+          icon: LucideIcons.paperclip,
+          label: _attachPicking ? 'Adding…' : 'Add files',
+          size: 30,
+          iconSize: 13,
           onTap: _pickAttachFiles,
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: c.surface,
-                borderRadius: BorderRadius.circular(Radii.input),
-                border: Border.all(color: c.borderStrong),
-              ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(LucideIcons.paperclip, size: 13, color: c.textSecondary),
-                const SizedBox(width: 6),
-                Text(_attachPicking ? 'Adding…' : 'Add files',
-                    style: RelicTheme.sans(size: 12, color: c.textSecondary)),
-              ]),
-            ),
-          ),
         ),
-        const SizedBox(width: 10),
+        const SizedBox(width: Insets.md),
         if (existing.isNotEmpty || _added.isNotEmpty)
           Text(
             '${humanBytes(_keptExistingBytes + _addedBytes)} / ${humanBytes(cap)}',
@@ -1167,9 +1233,9 @@ class _EditDialogState extends State<EditDialog> {
       ]),
       if (_attachNote != null)
         Padding(
-          padding: const EdgeInsets.only(top: 6),
+          padding: const EdgeInsets.only(top: Insets.sm),
           child: Text(_attachNote!,
-              style: RelicTheme.mono(size: 10, color: c.warning)),
+              style: RelicTheme.sans(size: 11, color: c.warning)),
         ),
     ]);
   }
@@ -1217,30 +1283,33 @@ class _EditDialogState extends State<EditDialog> {
   }
 
   Widget _label(RelicColors c, String t) => Padding(
-        padding: const EdgeInsets.only(bottom: 7),
-        child: Text(t.toUpperCase(), style: RelicTheme.mono(size: 10, color: c.textMuted, letterSpacing: 0.8)),
+        padding: const EdgeInsets.only(bottom: Insets.sm),
+        child: Text(t.toUpperCase(), style: RelicTheme.label(c.textMuted)),
       );
 
   Widget _field(RelicColors c, TextEditingController ctl, FocusNode fn,
-      {bool focused = false, double minHeight = 0, int maxLines = 1}) {
+      {bool focused = false,
+      double minHeight = 0,
+      int maxLines = 1,
+      bool mono = false}) {
     return Container(
       constraints: BoxConstraints(minHeight: minHeight),
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: Insets.md),
       decoration: BoxDecoration(
         color: c.surface,
         borderRadius: BorderRadius.circular(Radii.input),
         border: Border.all(color: focused ? c.accent : c.borderStrong, width: focused ? 1.5 : 1),
-        boxShadow: focused ? [BoxShadow(color: c.accent.withValues(alpha: 0.18), blurRadius: 0, spreadRadius: 3)] : null,
       ),
       child: TextField(
         controller: ctl,
         focusNode: fn,
-        style: RelicTheme.sans(size: 13.5, color: c.text, height: 1.4),
+        style: mono
+            ? RelicTheme.mono(size: 12.5, color: c.text, height: 1.55)
+            : RelicTheme.sans(size: 13.5, color: c.text, height: 1.4),
         cursorColor: c.accent,
         maxLines: maxLines,
         minLines: 1,
-        decoration: const InputDecoration(
-            isCollapsed: true, border: InputBorder.none),
+        decoration: kBareField,
       ),
     );
   }
@@ -1250,32 +1319,13 @@ class _EditDialogState extends State<EditDialog> {
     final avail = _allUserTags.where((t) => !_tags.contains(t)).take(24).toList();
     if (avail.isEmpty) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.only(top: Insets.md),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-        Text('YOUR TAGS · TAP TO ADD',
-            style: RelicTheme.mono(size: 9.5, color: c.textMuted, letterSpacing: 0.8)),
-        const SizedBox(height: 7),
+        Text('YOUR TAGS · TAP TO ADD', style: RelicTheme.kicker(c.textMuted)),
+        const SizedBox(height: Insets.sm),
         Wrap(spacing: 6, runSpacing: 6, children: [
           for (final t in avail)
-            GestureDetector(
-              onTap: () => setState(() => _tags.add(t)),
-              child: MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(6, 3, 8, 3),
-                  decoration: BoxDecoration(
-                    color: c.accent.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(Radii.chip),
-                    border: Border.all(color: c.accent.withValues(alpha: 0.25)),
-                  ),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(LucideIcons.plus, size: 11, color: c.accent),
-                    const SizedBox(width: 3),
-                    Text(t, style: RelicTheme.mono(size: 11, color: c.accent)),
-                  ]),
-                ),
-              ),
-            ),
+            _AddTagChip(label: t, onTap: () => setState(() => _tags.add(t))),
         ]),
       ]),
     );
@@ -1283,33 +1333,24 @@ class _EditDialogState extends State<EditDialog> {
 
   Widget _tagsField(RelicColors c) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+      padding: const EdgeInsets.symmetric(horizontal: Insets.md, vertical: Insets.md),
       decoration: BoxDecoration(color: c.surface, borderRadius: BorderRadius.circular(Radii.input), border: Border.all(color: c.borderStrong, width: 1)),
       child: Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
         // auto-assigned (machine) tags — removable, EXCEPT `secret`: dropping
         // it here would silently unmask the value, so it shows a lock instead.
         for (final t in _machine)
-          Container(
-            padding: const EdgeInsets.fromLTRB(8, 3, 5, 3),
-            decoration: BoxDecoration(color: c.accent.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(Radii.chip), border: Border.all(color: c.accent.withValues(alpha: 0.30))),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Text(t, style: RelicTheme.mono(size: 11, color: c.accent)),
-              const SizedBox(width: 5),
-              if (t == 'secret')
-                Icon(LucideIcons.lock, size: 11, color: c.accent.withValues(alpha: 0.7))
-              else
-                GestureDetector(onTap: () => setState(() => _machine.remove(t)), child: Icon(LucideIcons.x, size: 12, color: c.accent.withValues(alpha: 0.7))),
-            ]),
+          _TagChip(
+            label: t,
+            trailingIcon: t == 'secret' ? LucideIcons.lock : LucideIcons.x,
+            onTrailingTap: t == 'secret'
+                ? null
+                : () => setState(() => _machine.remove(t)),
           ),
         for (final t in _tags)
-          Container(
-            padding: const EdgeInsets.fromLTRB(8, 3, 5, 3),
-            decoration: BoxDecoration(color: c.accent.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(Radii.chip), border: Border.all(color: c.accent.withValues(alpha: 0.30))),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Text(t, style: RelicTheme.mono(size: 11, color: c.accent)),
-              const SizedBox(width: 5),
-              GestureDetector(onTap: () => setState(() => _tags.remove(t)), child: Icon(LucideIcons.x, size: 12, color: c.accent.withValues(alpha: 0.7))),
-            ]),
+          _TagChip(
+            label: t,
+            trailingIcon: LucideIcons.x,
+            onTrailingTap: () => setState(() => _tags.remove(t)),
           ),
         IntrinsicWidth(
           child: ConstrainedBox(
@@ -1320,8 +1361,7 @@ class _EditDialogState extends State<EditDialog> {
               style: RelicTheme.mono(size: 12, color: c.text),
               cursorColor: c.accent,
               maxLines: 1,
-              decoration: const InputDecoration(
-                  isCollapsed: true, border: InputBorder.none),
+              decoration: kBareField,
               onSubmitted: (v) {
                 // Same normalization as TagsSheet create / addCustomTag — a
                 // tag with spaces or casing drift is unfilterable (`tag:x`
@@ -1465,7 +1505,7 @@ class _ComposeDialogState extends State<ComposeDialog> {
             widget.onCancel),
         Flexible(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+            padding: const EdgeInsets.fromLTRB(Insets.xl, Insets.xl, Insets.xl, Insets.lg),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               if (widget.allowSnippet) ...[
                 GestureDetector(
@@ -1474,14 +1514,14 @@ class _ComposeDialogState extends State<ComposeDialog> {
                     cursor: SystemMouseCursors.click,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 10),
+                          horizontal: Insets.lg, vertical: Insets.md),
                       decoration: BoxDecoration(
-                        color: _asSnippet
-                            ? c.accent.withValues(alpha: 0.10)
-                            : c.surface,
-                        borderRadius: BorderRadius.circular(Radii.input),
+                        // Selected: warm tint + the system's gold hairline, the
+                        // same treatment the edit screen's snippet box gets.
+                        color: _asSnippet ? c.tagBg : c.surface,
+                        borderRadius: BorderRadius.circular(Radii.row),
                         border: Border.all(
-                            color: _asSnippet ? c.accent : c.borderStrong),
+                            color: _asSnippet ? c.selectedBorder : c.border),
                       ),
                       child: Row(children: [
                         Icon(
@@ -1490,7 +1530,7 @@ class _ComposeDialogState extends State<ComposeDialog> {
                                 : LucideIcons.square,
                             size: 16,
                             color: _asSnippet ? c.accent : c.textSecondary),
-                        const SizedBox(width: 9),
+                        const SizedBox(width: Insets.md),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1498,12 +1538,13 @@ class _ComposeDialogState extends State<ComposeDialog> {
                               Text('Save as snippet',
                                   style: RelicTheme.sans(
                                       size: 13,
-                                      color:
-                                          _asSnippet ? c.accent : c.text)),
+                                      weight: FontWeight.w500,
+                                      color: c.text)),
+                              const SizedBox(height: 2),
                               Text(
                                   'Type its trigger in the picker and it jumps to the top.',
                                   style: RelicTheme.sans(
-                                      size: 11, color: c.textFaintest)),
+                                      size: 11, color: c.textSecondary)),
                             ],
                           ),
                         ),
@@ -1511,19 +1552,19 @@ class _ComposeDialogState extends State<ComposeDialog> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: Insets.xl),
               ],
               _label(c, _asSnippet ? 'Trigger label (e.g. ;welcome)' : 'Title (optional)'),
               _field(c, _title, _titleF),
-              const SizedBox(height: 14),
+              const SizedBox(height: Insets.xl),
               _label(c, _asSnippet ? 'Snippet text' : 'Text'),
               _field(c, _body, _bodyF,
                   focused: true, minHeight: 84, maxLines: 8),
-              const SizedBox(height: 14),
+              const SizedBox(height: Insets.xl),
               _label(c, 'Tags'),
               _tagsField(c),
-              _suggestions(c),
-              const SizedBox(height: 14),
+              _suggestions(),
+              const SizedBox(height: Insets.xl),
               _label(c, 'Attachments'),
               _attachments(c),
             ]),
@@ -1535,7 +1576,7 @@ class _ComposeDialogState extends State<ComposeDialog> {
   }
 
   Widget _footer(RelicColors c) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+        padding: const EdgeInsets.symmetric(horizontal: Insets.xl, vertical: Insets.md),
         decoration: BoxDecoration(
             border: Border(top: BorderSide(color: c.border, width: 1))),
         child: Row(children: [
@@ -1546,15 +1587,17 @@ class _ComposeDialogState extends State<ComposeDialog> {
               child: Row(mainAxisSize: MainAxisSize.min, children: [
                 Icon(_promote ? LucideIcons.checkSquare : LucideIcons.square,
                     size: 15, color: _promote ? c.accent : c.textSecondary),
-                const SizedBox(width: 7),
+                const SizedBox(width: Insets.sm),
                 Text('Save to Vault',
-                    style: RelicTheme.sans(size: 12.5, color: c.textSecondary)),
+                    style: RelicTheme.sans(
+                        size: 12.5,
+                        color: _promote ? c.text : c.textSecondary)),
               ]),
             ),
           ),
           const Spacer(),
           GhostButton(label: 'Cancel', size: 30, onTap: widget.onCancel),
-          const SizedBox(width: 8),
+          const SizedBox(width: Insets.sm),
           Opacity(
             opacity: _canCreate ? 1 : 0.4,
             child: _primaryButton(c, LucideIcons.check, 'Create', () {
@@ -1579,7 +1622,7 @@ class _ComposeDialogState extends State<ComposeDialog> {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       if (_files.isNotEmpty)
         Padding(
-          padding: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.only(bottom: Insets.sm),
           child: Column(
             children: [
               for (var i = 0; i < _files.length; i++) _attachRow(c, i),
@@ -1587,36 +1630,23 @@ class _ComposeDialogState extends State<ComposeDialog> {
           ),
         ),
       Row(children: [
-        GestureDetector(
+        GhostButton(
+          icon: LucideIcons.paperclip,
+          label: _picking ? 'Adding…' : 'Add files',
+          size: 30,
+          iconSize: 13,
           onTap: _pickFiles,
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: c.surface,
-                borderRadius: BorderRadius.circular(Radii.input),
-                border: Border.all(color: c.borderStrong),
-              ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(LucideIcons.paperclip, size: 13, color: c.textSecondary),
-                const SizedBox(width: 6),
-                Text(_picking ? 'Adding…' : 'Add files',
-                    style: RelicTheme.sans(size: 12, color: c.textSecondary)),
-              ]),
-            ),
-          ),
         ),
-        const SizedBox(width: 10),
+        const SizedBox(width: Insets.md),
         if (_files.isNotEmpty)
           Text('${humanBytes(_attachBytes)} / ${humanBytes(cap)}',
               style: RelicTheme.mono(size: 10.5, color: c.textFaint)),
       ]),
       if (_capNote != null)
         Padding(
-          padding: const EdgeInsets.only(top: 6),
+          padding: const EdgeInsets.only(top: Insets.sm),
           child: Text(_capNote!,
-              style: RelicTheme.mono(size: 10, color: c.warning)),
+              style: RelicTheme.sans(size: 11, color: c.warning)),
         ),
     ]);
   }
@@ -1624,32 +1654,33 @@ class _ComposeDialogState extends State<ComposeDialog> {
   Widget _attachRow(RelicColors c, int i) {
     final f = _files[i];
     return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.fromLTRB(10, 7, 6, 7),
+      margin: const EdgeInsets.only(bottom: Insets.sm),
+      padding: const EdgeInsets.fromLTRB(Insets.md, 6, 6, 6),
       decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(Radii.input),
-        border: Border.all(color: c.border),
+        color: c.inset,
+        borderRadius: BorderRadius.circular(Radii.row),
       ),
       child: Row(children: [
         Icon(fileIconFor(f.$1), size: 15, color: c.textSecondary),
-        const SizedBox(width: 9),
+        const SizedBox(width: Insets.md),
         Expanded(
           child: Text(f.$1,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: RelicTheme.sans(size: 12.5, color: c.text)),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: Insets.sm),
         Text(humanBytes(f.$3.length),
             style: RelicTheme.mono(size: 10.5, color: c.textFaint)),
-        const SizedBox(width: 6),
-        GestureDetector(
+        const SizedBox(width: Insets.xs),
+        GhostIconButton(
+          icon: LucideIcons.x,
+          size: 26,
+          iconSize: 14,
           onTap: () => setState(() {
             _files.removeAt(i);
             _capNote = null;
           }),
-          child: Icon(LucideIcons.x, size: 14, color: c.textSecondary),
         ),
       ]),
     );
@@ -1658,17 +1689,18 @@ class _ComposeDialogState extends State<ComposeDialog> {
   // --- shared field widgets (mirrors EditDialog) ---
 
   Widget _label(RelicColors c, String t) => Padding(
-        padding: const EdgeInsets.only(bottom: 7),
-        child: Text(t.toUpperCase(),
-            style:
-                RelicTheme.mono(size: 10, color: c.textMuted, letterSpacing: 0.8)),
+        padding: const EdgeInsets.only(bottom: Insets.sm),
+        child: Text(t.toUpperCase(), style: RelicTheme.label(c.textMuted)),
       );
 
   Widget _field(RelicColors c, TextEditingController ctl, FocusNode fn,
-      {bool focused = false, double minHeight = 0, int maxLines = 1}) {
+      {bool focused = false,
+      double minHeight = 0,
+      int maxLines = 1,
+      bool mono = false}) {
     return Container(
       constraints: BoxConstraints(minHeight: minHeight),
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: Insets.md),
       decoration: BoxDecoration(
         color: c.surface,
         borderRadius: BorderRadius.circular(Radii.input),
@@ -1679,50 +1711,34 @@ class _ComposeDialogState extends State<ComposeDialog> {
       child: TextField(
         controller: ctl,
         focusNode: fn,
-        style: RelicTheme.sans(size: 13.5, color: c.text, height: 1.4),
+        style: mono
+            ? RelicTheme.mono(size: 12.5, color: c.text, height: 1.55)
+            : RelicTheme.sans(size: 13.5, color: c.text, height: 1.4),
         cursorColor: c.accent,
         maxLines: maxLines,
         minLines: 1,
         onChanged: (_) => setState(() {}),
-        decoration: const InputDecoration(
-            isCollapsed: true, border: InputBorder.none),
+        decoration: kBareField,
       ),
     );
   }
 
-  Widget _suggestions(RelicColors c) {
+  Widget _suggestions() {
     final avail = _allUserTags.where((t) => !_tags.contains(t)).take(20).toList();
     if (avail.isEmpty) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.only(top: Insets.md),
       child: Wrap(spacing: 6, runSpacing: 6, children: [
         for (final t in avail)
-          GestureDetector(
-            onTap: () => setState(() => _tags.add(t)),
-            child: MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: Container(
-                padding: const EdgeInsets.fromLTRB(6, 3, 8, 3),
-                decoration: BoxDecoration(
-                  color: c.accent.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(Radii.chip),
-                  border: Border.all(color: c.accent.withValues(alpha: 0.25)),
-                ),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(LucideIcons.plus, size: 11, color: c.accent),
-                  const SizedBox(width: 3),
-                  Text(t, style: RelicTheme.mono(size: 11, color: c.accent)),
-                ]),
-              ),
-            ),
-          ),
+          _AddTagChip(label: t, onTap: () => setState(() => _tags.add(t))),
       ]),
     );
   }
 
   Widget _tagsField(RelicColors c) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+      padding: const EdgeInsets.symmetric(
+          horizontal: Insets.md, vertical: Insets.md),
       decoration: BoxDecoration(
           color: c.surface,
           borderRadius: BorderRadius.circular(Radii.input),
@@ -1733,20 +1749,10 @@ class _ComposeDialogState extends State<ComposeDialog> {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             for (final t in _tags)
-              Container(
-                padding: const EdgeInsets.fromLTRB(8, 3, 5, 3),
-                decoration: BoxDecoration(
-                    color: c.accent.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(Radii.chip),
-                    border: Border.all(color: c.accent.withValues(alpha: 0.30))),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Text(t, style: RelicTheme.mono(size: 11, color: c.accent)),
-                  const SizedBox(width: 5),
-                  GestureDetector(
-                      onTap: () => setState(() => _tags.remove(t)),
-                      child: Icon(LucideIcons.x,
-                          size: 12, color: c.accent.withValues(alpha: 0.7))),
-                ]),
+              _TagChip(
+                label: t,
+                trailingIcon: LucideIcons.x,
+                onTrailingTap: () => setState(() => _tags.remove(t)),
               ),
             IntrinsicWidth(
               child: ConstrainedBox(
@@ -1757,8 +1763,7 @@ class _ComposeDialogState extends State<ComposeDialog> {
                   style: RelicTheme.mono(size: 12, color: c.text),
                   cursorColor: c.accent,
                   maxLines: 1,
-                  decoration: const InputDecoration(
-                      isCollapsed: true, border: InputBorder.none),
+                  decoration: kBareField,
                   onSubmitted: (v) {
                     // Normalized like every other tag-creation path.
                     final t =
@@ -1923,11 +1928,11 @@ class _TagsSheetState extends State<TagsSheet> {
               widget.vaultOnly ? 'Tags · Vault' : 'Tags', widget.onClose),
           // search
           Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
+            padding: const EdgeInsets.fromLTRB(Insets.xl, Insets.lg, Insets.xl, 6),
             child: GestureDetector(
               onTap: _qf.requestFocus,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                padding: const EdgeInsets.symmetric(horizontal: Insets.md, vertical: Insets.md),
                 decoration: BoxDecoration(
                   color: c.surface,
                   borderRadius: BorderRadius.circular(Radii.input),
@@ -1935,7 +1940,7 @@ class _TagsSheetState extends State<TagsSheet> {
                 ),
                 child: Row(children: [
                   Icon(LucideIcons.search, size: 14, color: c.textFaintest),
-                  const SizedBox(width: 9),
+                  const SizedBox(width: Insets.md),
                   Expanded(
                     child: TextField(
                       controller: _q,
@@ -1944,9 +1949,7 @@ class _TagsSheetState extends State<TagsSheet> {
                       style: RelicTheme.mono(size: 12.5, color: c.text),
                       cursorColor: c.accent,
                       maxLines: 1,
-                      decoration: InputDecoration(
-                        isCollapsed: true,
-                        border: InputBorder.none,
+                      decoration: kBareField.copyWith(
                         hintText: 'Filter tags…',
                         hintStyle:
                             RelicTheme.mono(size: 12.5, color: c.textFaintest),
@@ -1959,25 +1962,25 @@ class _TagsSheetState extends State<TagsSheet> {
           ),
           Flexible(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(14, 8, 14, 16),
+              padding: const EdgeInsets.fromLTRB(Insets.xl, Insets.sm, Insets.xl, Insets.xl),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 _section(c, 'YOUR TAGS'),
                 if (_creating) _newTagInput(c),
                 // The "+ New tag" lives inline as the first chip, so it always
                 // sits with the tags instead of floating in the header corner.
                 _chips(c, user,
-                    accent: true, leading: _creating ? null : _addChip(c)),
+                    accent: true, leading: _creating ? null : _addChip()),
                 if (machine.isNotEmpty) ...[
                   _section(c, 'AUTO'),
                   _chips(c, machine, accent: false),
                 ],
-                const SizedBox(height: 16),
+                const SizedBox(height: Insets.xl),
                 Row(children: [
-                  Icon(LucideIcons.info, size: 11, color: c.textFaintest),
-                  const SizedBox(width: 6),
+                  Icon(LucideIcons.info, size: 12, color: c.textFaintest),
+                  const SizedBox(width: Insets.sm),
                   Flexible(
                     child: Text('Tap to filter (tap again to unselect) · long-press to rename or delete.',
-                        style: RelicTheme.mono(size: 10, color: c.textFaintest)),
+                        style: RelicTheme.sans(size: 11, color: c.textFaintest)),
                   ),
                 ]),
               ]),
@@ -1989,50 +1992,40 @@ class _TagsSheetState extends State<TagsSheet> {
   }
 
   Widget _section(RelicColors c, String t) => Padding(
-        padding: const EdgeInsets.fromLTRB(2, 12, 0, 8),
-        child: Text(t, style: RelicTheme.mono(size: 10, color: c.textMuted, letterSpacing: 0.8)),
+        padding: const EdgeInsets.fromLTRB(2, Insets.lg, 0, Insets.md),
+        child: Text(t, style: RelicTheme.kicker(c.textMuted)),
       );
 
-  /// The "+ New tag" creator, styled as an accent chip that flows inline with
-  /// the user's tags (the first item in the YOUR TAGS wrap).
-  Widget _addChip(RelicColors c) {
+  /// The "+ New tag" creator, flowing inline with the user's tags (the first
+  /// item in the YOUR TAGS wrap). It is the pane's one gold CTA: creating a tag
+  /// is the only thing here that isn't filtering, so it takes the filled
+  /// gradient pill and every other chip stays on the warm tint.
+  Widget _addChip() {
     final m = RelicTheme.isMobileOf(context);
-    return GestureDetector(
+    return GhostButton(
+      icon: LucideIcons.plus,
+      label: 'New tag',
+      size: m ? 36 : 32,
+      iconSize: m ? 14 : 12,
+      fontSize: m ? 12.5 : 11.5,
+      style: GhostStyle.filled,
       onTap: _startCreate,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: Container(
-          height: m ? 36 : 32,
-          padding: const EdgeInsets.fromLTRB(9, 0, 11, 0),
-          decoration: BoxDecoration(
-            color: c.accent.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(Radii.chip),
-            border: Border.all(color: c.accent.withValues(alpha: 0.45)),
-          ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(LucideIcons.plus, size: m ? 14 : 12, color: c.accent),
-            const SizedBox(width: 5),
-            Text('New tag',
-                style: RelicTheme.mono(size: m ? 12 : 11, color: c.accent)),
-          ]),
-        ),
-      ),
     );
   }
 
   /// Inline input for creating a reusable tag.
   Widget _newTagInput(RelicColors c) => Padding(
-        padding: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.only(bottom: Insets.sm),
         child: Container(
-          padding: const EdgeInsets.fromLTRB(10, 4, 4, 4),
+          padding: const EdgeInsets.fromLTRB(Insets.md, Insets.xs, Insets.xs, Insets.xs),
           decoration: BoxDecoration(
             color: c.surface,
-            borderRadius: BorderRadius.circular(Radii.chip),
+            borderRadius: BorderRadius.circular(Radii.input),
             border: Border.all(color: c.accent, width: 1.5),
           ),
           child: Row(children: [
-            Text('#', style: RelicTheme.mono(size: 12, color: c.accentMuted)),
-            const SizedBox(width: 4),
+            Text('#', style: RelicTheme.mono(size: 12, color: c.textFaintest)),
+            const SizedBox(width: Insets.xs),
             Expanded(
               child: TextField(
                 controller: _newCtl,
@@ -2041,9 +2034,7 @@ class _TagsSheetState extends State<TagsSheet> {
                 style: RelicTheme.mono(size: 12, color: c.text),
                 cursorColor: c.accent,
                 maxLines: 1,
-                decoration: InputDecoration(
-                  isCollapsed: true,
-                  border: InputBorder.none,
+                decoration: kBareField.copyWith(
                   hintText: 'name your tag…',
                   hintStyle: RelicTheme.mono(size: 12, color: c.textFaintest),
                 ),
@@ -2092,31 +2083,31 @@ class _TagsSheetState extends State<TagsSheet> {
                     // every pill full-width (one per row). The fixed height +
                     // the Row (mainAxisSize.min, default center) centers content
                     // vertically while letting each pill hug its text.
-                    padding: EdgeInsets.fromLTRB(sel ? 8 : 10, 0, 8, 0),
+                    padding: EdgeInsets.fromLTRB(sel ? 10 : 12, 0, 12, 0),
                     decoration: BoxDecoration(
-                      color: sel ? c.accent : c.accent.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(Radii.chip),
-                      // Selected: solid accent. Unselected: a hairline in light,
-                      // nothing in dark (the tint fill carries the shape there).
-                      border: sel
-                          ? Border.all(color: c.accent)
-                          : (c.isDark ? null : Border.all(color: c.border)),
+                      // Selected: a flat gold fill — loud, but deliberately not
+                      // the gradient, which belongs to the one CTA above.
+                      // Unselected: the warm tag chip — tint ground, deep-gold
+                      // mono, no hairline in either palette.
+                      color: sel ? c.accent : c.tagBg,
+                      borderRadius: BorderRadius.circular(Radii.pill),
                     ),
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
                       if (sel) ...[
                         Icon(LucideIcons.check, size: 11, color: c.onAccent),
-                        const SizedBox(width: 4),
+                        const SizedBox(width: Insets.xs),
                       ],
                       Text(e.key,
                           style: RelicTheme.mono(
-                              size: m ? 13 : 12, color: sel ? c.onAccent : c.accent)),
+                              size: m ? 13 : 12,
+                              color: sel ? c.onAccent : c.tagText)),
                       const SizedBox(width: 6),
                       Text('${e.value}',
                           style: RelicTheme.mono(
                               size: 10.5,
                               color: sel
                                   ? c.onAccent.withValues(alpha: 0.7)
-                                  : c.accent.withValues(alpha: 0.6))),
+                                  : c.tagText.withValues(alpha: 0.7))),
                     ]),
                   ),
                 ),
@@ -2129,10 +2120,10 @@ class _TagsSheetState extends State<TagsSheet> {
 
   /// Inline rename/delete editor shown in place of a long-pressed chip.
   Widget _editChip(RelicColors c) => Container(
-        padding: const EdgeInsets.fromLTRB(8, 3, 4, 3),
+        padding: const EdgeInsets.fromLTRB(Insets.md, 3, Insets.xs, 3),
         decoration: BoxDecoration(
           color: c.surface,
-          borderRadius: BorderRadius.circular(Radii.chip),
+          borderRadius: BorderRadius.circular(Radii.pill),
           border: Border.all(color: c.accent, width: 1.5),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -2145,8 +2136,7 @@ class _TagsSheetState extends State<TagsSheet> {
                 style: RelicTheme.mono(size: 12, color: c.text),
                 cursorColor: c.accent,
                 maxLines: 1,
-                decoration: const InputDecoration(
-                    isCollapsed: true, border: InputBorder.none),
+                decoration: kBareField,
                 onSubmitted: (_) => _commitRename(),
               ),
             ),
@@ -2233,9 +2223,9 @@ class _BulkTagDialogState extends State<BulkTagDialog> {
             widget.onCancel,
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(18, 16, 18, 4),
+            padding: const EdgeInsets.fromLTRB(Insets.xl, Insets.xl, Insets.xl, Insets.xs),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: Insets.md),
               decoration: BoxDecoration(
                 color: c.surface,
                 borderRadius: BorderRadius.circular(Radii.input),
@@ -2244,28 +2234,26 @@ class _BulkTagDialogState extends State<BulkTagDialog> {
               child: TextField(
                 controller: _ctl,
                 focusNode: _focus,
-                style: RelicTheme.sans(size: 13, color: c.text),
+                style: RelicTheme.sans(size: 13.5, color: c.text),
                 cursorColor: c.accent,
                 maxLines: 1,
-                decoration: InputDecoration(
-                  isCollapsed: true,
-                  border: InputBorder.none,
+                decoration: kBareField.copyWith(
                   hintText: 'tag name…',
                   hintStyle:
-                      RelicTheme.sans(size: 13, color: c.textFaintest),
+                      RelicTheme.sans(size: 13.5, color: c.textFaintest),
                 ),
                 onSubmitted: (_) => _apply(),
               ),
             ),
           ),
           Container(
-            margin: const EdgeInsets.only(top: 14),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+            margin: const EdgeInsets.only(top: Insets.lg),
+            padding: const EdgeInsets.symmetric(horizontal: Insets.xl, vertical: Insets.md),
             decoration: BoxDecoration(
                 border: Border(top: BorderSide(color: c.border, width: 1))),
             child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
               GhostButton(label: 'Cancel', size: 30, onTap: widget.onCancel),
-              const SizedBox(width: 8),
+              const SizedBox(width: Insets.sm),
               _primaryButton(c, null, 'Apply', _apply),
             ]),
           ),
@@ -2392,7 +2380,7 @@ class _RemindDialogState extends State<RemindDialog> {
                 children: [
                   if (widget.preview.isNotEmpty)
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(18, 12, 18, 0),
+                      padding: const EdgeInsets.fromLTRB(Insets.xl, Insets.lg, Insets.xl, 0),
                       child: Text(
                         widget.preview,
                         maxLines: 1,
@@ -2418,7 +2406,7 @@ class _RemindDialogState extends State<RemindDialog> {
                   // Time: hour / minute steppers (carets) + AM/PM. Minutes
                   // step by 5; both wrap around.
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                    padding: const EdgeInsets.fromLTRB(Insets.xl, Insets.lg, Insets.xl, Insets.lg),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
@@ -2431,9 +2419,9 @@ class _RemindDialogState extends State<RemindDialog> {
                               _setHour12(_hour12 == 1 ? 12 : _hour12 - 1),
                         ),
                         Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          padding: const EdgeInsets.symmetric(horizontal: Insets.xs),
                           child: Text(':',
-                              style: RelicTheme.mono(size: 22, color: c.text)),
+                              style: RelicTheme.mono(size: 22, color: c.textFaint)),
                         ),
                         _stepper(
                           c,
@@ -2443,7 +2431,7 @@ class _RemindDialogState extends State<RemindDialog> {
                           onDown: () => setState(
                               () => _minute = (_minute - 5 + 60) % 60),
                         ),
-                        const SizedBox(width: 16),
+                        const SizedBox(width: Insets.xl),
                         Column(mainAxisSize: MainAxisSize.min, children: [
                           _ampmBtn(c, 'AM', !_isPm, () => _setPm(false)),
                           const SizedBox(height: 6),
@@ -2455,32 +2443,26 @@ class _RemindDialogState extends State<RemindDialog> {
                   if (widget.pending.isNotEmpty) ...[
                     Container(height: 1, color: c.border),
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(18, 10, 12, 2),
-                      child: Text(
-                        'SCHEDULED',
-                        style: RelicTheme.mono(
-                            size: 9, color: c.textFaintest, letterSpacing: 1.2),
-                      ),
+                      padding: const EdgeInsets.fromLTRB(Insets.xl, Insets.md, Insets.md, Insets.xs),
+                      child: Text('SCHEDULED',
+                          style: RelicTheme.kicker(c.textMuted)),
                     ),
                     for (final (id, at) in widget.pending)
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(18, 2, 8, 2),
+                        padding: const EdgeInsets.fromLTRB(Insets.xl, 2, Insets.md, 2),
                         child: Row(children: [
                           Expanded(
                             child: Text(
                               _fmtRemindAt(
                                   DateTime.fromMillisecondsSinceEpoch(at)),
-                              style: RelicTheme.sans(size: 12, color: c.text),
+                              style: RelicTheme.sans(size: 12.5, color: c.text),
                             ),
                           ),
-                          GestureDetector(
-                            behavior: HitTestBehavior.opaque,
+                          GhostIconButton(
+                            icon: LucideIcons.x,
+                            size: 26,
+                            iconSize: 14,
                             onTap: () => widget.onClear(id),
-                            child: Padding(
-                              padding: const EdgeInsets.all(6),
-                              child: Icon(LucideIcons.x,
-                                  size: 14, color: c.textSecondary),
-                            ),
                           ),
                         ]),
                       ),
@@ -2494,7 +2476,7 @@ class _RemindDialogState extends State<RemindDialog> {
             ),
           ),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+            padding: const EdgeInsets.symmetric(horizontal: Insets.xl, vertical: Insets.md),
             decoration: BoxDecoration(
                 border: Border(top: BorderSide(color: c.border, width: 1))),
             child: Row(children: [
@@ -2502,12 +2484,12 @@ class _RemindDialogState extends State<RemindDialog> {
                 child: Text(
                   valid ? _fmtRemindAt(_resolved) : 'Pick a future time',
                   style: RelicTheme.sans(
-                      size: 11,
+                      size: 11.5,
                       color: valid ? c.textSecondary : c.textFaintest),
                 ),
               ),
               GhostButton(label: 'Close', size: 30, onTap: widget.onCancel),
-              const SizedBox(width: 8),
+              const SizedBox(width: Insets.sm),
               Opacity(
                 opacity: valid ? 1 : 0.4,
                 child: _primaryButton(c, LucideIcons.alarmClock, 'Set', () {
@@ -2528,37 +2510,32 @@ class _RemindDialogState extends State<RemindDialog> {
     required VoidCallback onDown,
   }) {
     return Column(mainAxisSize: MainAxisSize.min, children: [
-      _caret(c, LucideIcons.chevronUp, onUp),
-      const SizedBox(height: 4),
+      _caret(LucideIcons.chevronUp, onUp),
+      const SizedBox(height: Insets.xs),
       Container(
         width: 58,
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.symmetric(vertical: Insets.sm),
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: c.surface,
           borderRadius: BorderRadius.circular(Radii.input),
           border: Border.all(color: c.borderStrong),
         ),
+        // A clock reading is a machine fact, so it stays mono — proportional
+        // headline digits would jitter as the stepper runs.
         child: Text(value, style: RelicTheme.mono(size: 22, color: c.text)),
       ),
-      const SizedBox(height: 4),
-      _caret(c, LucideIcons.chevronDown, onDown),
+      const SizedBox(height: Insets.xs),
+      _caret(LucideIcons.chevronDown, onDown),
     ]);
   }
 
-  Widget _caret(RelicColors c, IconData icon, VoidCallback onTap) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
-          child: Icon(icon, size: 20, color: c.textSecondary),
-        ),
-      ),
-    );
-  }
+  Widget _caret(IconData icon, VoidCallback onTap) => GhostIconButton(
+        icon: icon,
+        size: 34,
+        iconSize: 20,
+        onTap: onTap,
+      );
 
   Widget _ampmBtn(RelicColors c, String label, bool on, VoidCallback onTap) {
     return GestureDetector(
@@ -2567,16 +2544,20 @@ class _RemindDialogState extends State<RemindDialog> {
         cursor: SystemMouseCursors.click,
         child: Container(
           width: 46,
-          padding: const EdgeInsets.symmetric(vertical: 8),
+          padding: const EdgeInsets.symmetric(vertical: Insets.sm),
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: on ? c.accent.withValues(alpha: 0.16) : c.surface,
+            // On: the warm tag ground with the system's gold hairline — never
+            // gold text on bare white.
+            color: on ? c.tagBg : c.surface,
             borderRadius: BorderRadius.circular(Radii.input),
-            border: Border.all(color: on ? c.accent : c.borderStrong),
+            border: Border.all(color: on ? c.selectedBorder : c.borderStrong),
           ),
           child: Text(label,
-              style: RelicTheme.sans(
-                  size: 12, color: on ? c.accent : c.textSecondary)),
+              style: RelicTheme.mono(
+                  size: 11.5,
+                  weight: FontWeight.w600,
+                  color: on ? c.tagText : c.textSecondary)),
         ),
       ),
     );
@@ -2618,19 +2599,19 @@ class ConfirmDialog extends StatelessWidget {
             onCancel,
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+            padding: const EdgeInsets.fromLTRB(Insets.xl, Insets.xl, Insets.xl, Insets.xxl),
             child: Align(
               alignment: Alignment.centerLeft,
               child: Text(message,
-                  style: RelicTheme.sans(size: 13.5, color: c.textSecondary, height: 1.5)),
+                  style: RelicTheme.sans(size: 13.5, color: c.textSecondary, height: 1.55)),
             ),
           ),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+            padding: const EdgeInsets.symmetric(horizontal: Insets.xl, vertical: Insets.md),
             decoration: BoxDecoration(border: Border(top: BorderSide(color: c.border, width: 1))),
             child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
               GhostButton(label: 'Cancel', size: 30, onTap: onCancel),
-              const SizedBox(width: 8),
+              const SizedBox(width: Insets.sm),
               // Destructive confirm is a standing tint (dangerBg + dangerText),
               // no longer a solid-red button; non-destructive is the accent CTA.
               if (danger)

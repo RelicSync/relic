@@ -88,8 +88,9 @@ bool desktopEntryIsCurrent(String body, String exec) =>
     body.contains('x-scheme-handler/relic');
 
 /// The icon, resized to a size the hicolor theme actually indexes. The source
-/// asset is 291px, and a stray size in a `256x256` directory is exactly the
-/// kind of thing icon caches silently skip.
+/// asset is the 1024px cream tile from tool/make_app_icon.py, and a stray size
+/// in a `256x256` directory is exactly the kind of thing icon caches silently
+/// skip.
 Uint8List _iconPng(Uint8List source) {
   final decoded = img.decodeImage(source);
   if (decoded == null) return source;
@@ -115,7 +116,7 @@ Future<bool> ensureRegistered() async {
         File('$base/icons/hicolor/256x256/apps/$_iconName.png');
     if (!icon.existsSync()) {
       try {
-        final bytes = await rootBundle.load('assets/beautiful-icon.png');
+        final bytes = await rootBundle.load('assets/app_icon.png');
         icon.parent.createSync(recursive: true);
         icon.writeAsBytesSync(_iconPng(bytes.buffer.asUint8List()));
       } catch (_) {

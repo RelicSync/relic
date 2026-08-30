@@ -1,9 +1,11 @@
 import 'package:flutter/widgets.dart';
-import 'package:flutter/material.dart' show TextField, InputDecoration, InputBorder;
+import 'package:flutter/material.dart' show TextField;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
+import '../widgets/controls.dart';
+import '../widgets/fields.dart';
 import '../widgets/relic_mark.dart';
 
 /// Connect to your vault. Two modes:
@@ -91,94 +93,85 @@ class _ConnectViewState extends State<ConnectView> {
     final buttonLabel = _busy
         ? (signIn && _signUp ? 'Creating…' : (signIn ? 'Signing in…' : 'Connecting…'))
         : (signIn
-            ? (_signUp ? 'Create account & vault' : 'Sign in & decrypt')
-            : 'Connect & decrypt');
+            ? (_signUp ? 'Create account and vault' : 'Sign in and decrypt')
+            : 'Connect and decrypt');
 
     return SizedBox(
       width: 480,
       child: Container(
         decoration: BoxDecoration(
+          // A floating panel over the app: the system's card shape and the one
+          // window elevation, never a hand-rolled shadow.
           color: c.base,
-          borderRadius: BorderRadius.circular(Radii.popup),
+          borderRadius: BorderRadius.circular(Radii.card),
           border: Border.all(color: c.border),
-          boxShadow: [BoxShadow(color: const Color(0x99140E04), blurRadius: 80, spreadRadius: -24, offset: const Offset(0, 40))],
+          boxShadow: Shadows.window(c),
         ),
-        padding: const EdgeInsets.fromLTRB(30, 30, 30, 30),
+        padding: const EdgeInsets.all(Insets.xxxl),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
           Row(children: [
             const RelicIcon(size: 22),
             const SizedBox(width: 9),
-            Text('RELIC', style: RelicTheme.mono(size: 14, weight: FontWeight.w600, color: c.textMuted, letterSpacing: 2.4)),
+            // The lockup's wordmark is the system's kicker: tracked mono, quiet,
+            // sitting above the headline rather than competing with it.
+            Text('RELIC', style: RelicTheme.kicker(c.textMuted, size: 13)),
             const Spacer(),
             if (widget.onCancel != null)
-              GestureDetector(
+              GhostIconButton(
+                icon: LucideIcons.x,
+                size: 26,
+                iconSize: 14,
                 onTap: widget.onCancel,
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  child: Container(
-                    width: 26,
-                    height: 26,
-                    decoration: BoxDecoration(
-                      color: c.surface,
-                      borderRadius: BorderRadius.circular(Radii.chip),
-                      border: Border.all(color: c.border, width: 1),
-                    ),
-                    alignment: Alignment.center,
-                    child: Icon(LucideIcons.x, size: 14, color: c.textSecondary),
-                  ),
-                ),
               ),
           ]),
-          const SizedBox(height: 18),
+          const SizedBox(height: Insets.xl),
           Text('Connect to your vault',
-              style: RelicTheme.sans(size: 19, weight: FontWeight.w600, color: c.text, letterSpacing: -0.2)),
-          const SizedBox(height: 6),
+              style: RelicTheme.headline(size: 22, color: c.text)),
+          const SizedBox(height: Insets.sm),
           Text(subtitle, style: RelicTheme.sans(size: 13, color: c.textMuted, height: 1.5)),
-          const SizedBox(height: 18),
+          const SizedBox(height: Insets.xxl),
           if (signIn) ...[
             _label(c, 'Email'),
             _field(c, _email, leading: LucideIcons.mail),
-            const SizedBox(height: 14),
+            const SizedBox(height: Insets.lg),
             _label(c, 'Password'),
             _field(c, _password, obscure: true, leading: LucideIcons.lock),
-            const SizedBox(height: 14),
+            const SizedBox(height: Insets.lg),
             _label(c, 'Encryption passphrase'),
             _field(c, _pass, obscure: true, focused: true, leading: LucideIcons.keyRound),
           ] else ...[
             _label(c, 'Worker URL'),
             _field(c, _url, mono: true),
-            const SizedBox(height: 14),
+            const SizedBox(height: Insets.lg),
             _label(c, 'Device token'),
             _field(c, _token, mono: true, obscure: true),
-            const SizedBox(height: 14),
+            const SizedBox(height: Insets.lg),
             _label(c, 'Encryption passphrase'),
             _field(c, _pass, obscure: true, focused: true, leading: LucideIcons.keyRound),
           ],
           if (_error != null) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: Insets.md),
             Row(children: [
               Icon(LucideIcons.circleX, size: 14, color: c.dangerText),
               const SizedBox(width: 7),
               Expanded(child: Text(_error!, style: RelicTheme.sans(size: 12, color: c.dangerText))),
             ]),
           ],
-          const SizedBox(height: 18),
-          GestureDetector(
-            onTap: _busy ? null : _submit,
-            child: MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                decoration: BoxDecoration(color: c.accent, borderRadius: BorderRadius.circular(Radii.input)),
-                alignment: Alignment.center,
-                child: Text(buttonLabel,
-                    style: RelicTheme.sans(size: 13.5, weight: FontWeight.w600, color: c.onAccent)),
-              ),
+          const SizedBox(height: Insets.xxl),
+          // The one gold CTA on this surface: the system's gradient fill and
+          // its glow, full width. A null handler is the disabled state.
+          SizedBox(
+            width: double.infinity,
+            child: GhostButton(
+              label: buttonLabel,
+              size: 40,
+              fontSize: 13.5,
+              style: GhostStyle.filled,
+              onTap: _busy ? null : _submit,
             ),
           ),
           if (signIn) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: Insets.lg),
             Center(
               child: _link(
                 c,
@@ -191,7 +184,7 @@ class _ConnectViewState extends State<ConnectView> {
             ),
           ],
           if (widget.onSignIn != null) ...[
-            const SizedBox(height: 10),
+            const SizedBox(height: Insets.md),
             Center(
               child: _link(
                 c,
@@ -209,22 +202,27 @@ class _ConnectViewState extends State<ConnectView> {
   }
 
   Widget _label(RelicColors c, String t) => Padding(
-        padding: const EdgeInsets.only(bottom: 7),
-        child: Text(t.toUpperCase(), style: RelicTheme.mono(size: 10, color: c.textMuted, letterSpacing: 0.8)),
+        padding: const EdgeInsets.only(bottom: Insets.sm),
+        child: Text(t.toUpperCase(), style: RelicTheme.label(c.textMuted)),
       );
 
-  Widget _link(RelicColors c, String t, VoidCallback onTap) => GestureDetector(
+  // Gold as *text* is the deep gold, never the fill gold; the hover cue is an
+  // underline rather than a brighter yellow.
+  Widget _link(RelicColors c, String t, VoidCallback onTap) => Hoverable(
         onTap: onTap,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: Text(t, style: RelicTheme.sans(size: 12, weight: FontWeight.w500, color: c.accent)),
+        builder: (context, hovered) => Text(
+          t,
+          style: RelicTheme.sans(size: 12, weight: FontWeight.w500, color: c.accentMuted).copyWith(
+            decoration: hovered ? TextDecoration.underline : TextDecoration.none,
+            decorationColor: c.accentMuted,
+          ),
         ),
       );
 
   Widget _field(RelicColors c, TextEditingController ctl,
       {bool mono = false, bool obscure = false, bool focused = false, IconData? leading}) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+      padding: const EdgeInsets.all(Insets.md),
       decoration: BoxDecoration(
         color: c.surface,
         borderRadius: BorderRadius.circular(Radii.input),
@@ -239,8 +237,7 @@ class _ConnectViewState extends State<ConnectView> {
             style: (mono ? RelicTheme.mono(size: 13, color: c.text) : RelicTheme.sans(size: 13.5, color: c.text)),
             cursorColor: c.accent,
             maxLines: 1,
-            decoration: const InputDecoration(
-                isCollapsed: true, border: InputBorder.none),
+            decoration: kBareField,
           ),
         ),
       ]),

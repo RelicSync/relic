@@ -45,11 +45,14 @@ class DrillShell extends StatelessWidget {
           appBar: AppBar(
             backgroundColor: c.base,
             foregroundColor: c.text,
-            title: Text(title),
+            title: Text(
+              title,
+              style: RelicTheme.headline(size: 17, color: c.text),
+            ),
             actions: [
               for (final a in actions)
                 Padding(
-                  padding: const EdgeInsets.only(right: 10),
+                  padding: const EdgeInsets.only(right: Insets.sm),
                   child: Center(child: a),
                 ),
             ],
@@ -64,26 +67,20 @@ class DrillShell extends StatelessWidget {
         child: Material(
           color: c.base,
           child: Padding(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(Insets.xl),
             child: Container(
               decoration: BoxDecoration(
                 color: c.base,
-                borderRadius: BorderRadius.circular(Radii.popup),
+                borderRadius: BorderRadius.circular(Radii.card),
                 border: Border.all(color: c.border),
-                boxShadow: [
-                  BoxShadow(
-                    color: c.shadowStrong,
-                    blurRadius: 80,
-                    spreadRadius: -24,
-                    offset: const Offset(0, 40),
-                  ),
-                ],
+                boxShadow: Shadows.card(c),
               ),
               clipBehavior: Clip.antiAlias,
               child: Column(
                 children: [
                   Container(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                    padding: const EdgeInsets.fromLTRB(
+                        Insets.lg, Insets.md, Insets.lg, Insets.md),
                     decoration: BoxDecoration(
                       border: Border(bottom: BorderSide(color: c.border)),
                     ),
@@ -96,14 +93,10 @@ class DrillShell extends StatelessWidget {
                           tooltip: 'Back',
                           onTap: () => Navigator.of(context).maybePop(),
                         ),
-                        const SizedBox(width: 9),
+                        const SizedBox(width: Insets.sm),
                         Text(
                           title,
-                          style: RelicTheme.sans(
-                            size: 13.5,
-                            weight: FontWeight.w500,
-                            color: c.text,
-                          ),
+                          style: RelicTheme.headline(size: 15, color: c.text),
                         ),
                         const Spacer(),
                         ...actions,
@@ -121,8 +114,10 @@ class DrillShell extends StatelessWidget {
   Widget _body({required bool mobile}) {
     final pad = padding ??
         (mobile
-            ? const EdgeInsets.fromLTRB(20, 12, 20, 24)
-            : const EdgeInsets.fromLTRB(24, 16, 24, 24));
+            ? const EdgeInsets.fromLTRB(
+                Insets.xl, Insets.lg, Insets.xl, Insets.xxxl)
+            : const EdgeInsets.fromLTRB(
+                Insets.xxl, Insets.xl, Insets.xxl, Insets.xxl));
     final constrained = ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 560),
       child: child,

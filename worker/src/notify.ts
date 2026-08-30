@@ -11,8 +11,10 @@
 // source of truth.
 //
 // Cost/scale: idle sockets use the WebSocket Hibernation API, so they accrue no
-// duration billing — we pay only for the brief broadcast bursts. One DO per
-// account id means connections are naturally sharded with no hot key.
+// duration billing, and keepalives are answered by the runtime via an
+// auto-response pair rather than waking us — so we pay only for the brief
+// broadcast bursts. One DO per account id means connections are naturally
+// sharded with no hot key.
 //
 // Self-host runs this same Worker code WITHOUT a Durable Object binding, so
 // pokeSync() and the /sync/socket route both no-op there and the client falls
@@ -24,11 +26,27 @@ interface Attachment {
   device: string;
 }
 
+// The client's keepalive, byte for byte. Registered as an auto-response pair
+// below; both halves must match what app/lib/data/sync_socket.dart sends.
+const PING = JSON.stringify({ t: "ping" });
+const PONG = JSON.stringify({ t: "pong" });
+
 export class SyncSocket {
   constructor(
     private readonly state: DurableObjectState,
     private readonly env: Env,
-  ) {}
+  ) {
+    // Answer keepalives without waking up. An application-level ping is an
+    // ordinary message: it would leave hibernation, run webSocketMessage() to do
+    // nothing, and bill a request plus a slice of wall clock — every 30s, for
+    // every connected device, forever. Registering the pair hands the reply to
+    // the runtime instead, which the docs are explicit about not charging for.
+    //
+    // This has to live on the server even though new clients now use protocol
+    // ping frames (which never reach us at all): builds already in the wild keep
+    // sending the JSON ping for as long as they run.
+    state.setWebSocketAutoResponse(new WebSocketRequestResponsePair(PING, PONG));
+  }
 
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);

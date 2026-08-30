@@ -1,12 +1,12 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter/material.dart'
-    show CircularProgressIndicator, TextField, InputDecoration, InputBorder,
-        Tooltip;
+    show CircularProgressIndicator, TextField, Tooltip;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
 import 'controls.dart';
+import 'fields.dart';
 import 'relic_mark.dart';
 
 enum Scope { all, vault }
@@ -70,19 +70,48 @@ class PopupHeader extends StatelessWidget {
       child: Row(
         children: [
           // Sized to the settings glyph in the header button opposite it (21 on
-          // mobile), so the two ends of the bar read as the same weight.
-          RelicIcon(size: RelicTheme.isMobileOf(context) ? 21 : 16),
-          const SizedBox(width: 8),
-          Text(
-            'RELIC',
-            style: RelicTheme.mono(
-              size: 11,
-              weight: FontWeight.w600,
-              color: c.textMuted,
-              letterSpacing: 2,
-            ),
+          // mobile), so the two ends of the bar read as the same weight. The
+          // wordmark is the site lockup: set at the mark's own height in
+          // Headline regular, tracked -2%, a third of a mark away.
+          // Expanded, and NOT paired with a Spacer: two flex children would
+          // split the free space between them, leaving the lockup's unused
+          // half stranded after the last button and dragging the whole action
+          // cluster off the right edge. One tight flex child holds all the
+          // slack, so the buttons stay flush right.
+          Expanded(
+            child: Builder(builder: (context) {
+              final m = RelicTheme.isMobileOf(context) ? 21.0 : 16.0;
+              final lockup = Row(mainAxisSize: MainAxisSize.min, children: [
+                RelicIcon(size: m),
+                SizedBox(width: m * 0.33),
+                Text(
+                  'Relic',
+                  style: RelicTheme.headline(
+                    size: m,
+                    weight: FontWeight.w400,
+                    color: c.text,
+                    height: 1,
+                    letterSpacing: m * -0.02,
+                  ),
+                ),
+              ]);
+              // In a narrow window the buttons opposite win the space and the
+              // lockup scales as a unit, rather than overflowing or having the
+              // wordmark ellipsised away from its mark. The height has to be
+              // bounded: a FittedBox with a tight width and an unbounded
+              // height sizes itself to the width's aspect ratio and blows the
+              // header open.
+              return SizedBox(
+                height: m * 1.25,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: lockup,
+                ),
+              );
+            }),
           ),
-          const Spacer(),
+          const SizedBox(width: 12),
           _SyncChip(
             sync: sync,
             syncing: syncing,
@@ -325,9 +354,7 @@ class SearchField extends StatelessWidget {
                   cursorColor: c.accent,
                   cursorWidth: 2,
                   maxLines: 1,
-                  decoration: InputDecoration(
-                    isCollapsed: true,
-                    border: InputBorder.none,
+                  decoration: kBareField.copyWith(
                     hintText: 'Search relics…',
                     hintStyle: RelicTheme.mono(
                       size: m ? 16 : 14,
@@ -355,7 +382,7 @@ class SearchField extends StatelessWidget {
                 if (onHelp != null) ...[
                   const SizedBox(width: 8),
                   Tooltip(
-                    message: 'Search operators & shortcuts',
+                    message: 'Search operators and shortcuts',
                     waitDuration: const Duration(milliseconds: 500),
                     textStyle: RelicTheme.mono(size: 10, color: c.text),
                     decoration: BoxDecoration(

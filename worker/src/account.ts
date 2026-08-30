@@ -134,6 +134,7 @@ export async function deleteAccount(env: Env, auth: Auth): Promise<Response> {
   // 3) D1: every per-account row. billing_events is global (no account_id) — kept.
   await env.DB.batch([
     env.DB.prepare("DELETE FROM relic_meta WHERE account_id = ?1").bind(acct),
+    env.DB.prepare("DELETE FROM account_usage WHERE account_id = ?1").bind(acct),
     env.DB.prepare("DELETE FROM ai_meta WHERE account_id = ?1").bind(acct),
     env.DB.prepare("DELETE FROM tombstones WHERE account_id = ?1").bind(acct),
     env.DB.prepare("DELETE FROM devices WHERE account_id = ?1").bind(acct),

@@ -10,6 +10,7 @@ import 'package:relic_app/onboarding/add_device.dart';
 import 'package:relic_app/platform/store_safe.dart';
 import 'package:relic_app/theme/relic_theme.dart';
 import 'package:relic_app/theme/tokens.dart';
+import 'package:relic_app/widgets/controls.dart';
 
 /// Words that must never render in a store-safe build's copy.
 final _steering = RegExp(r'upgrade|pro\b|\bmax\b|price|\$', caseSensitive: false);
@@ -83,7 +84,12 @@ void main() {
         (tester) async {
       await pumpCapDialog(tester, onUpgrade: null);
       expect(find.text('Device limit reached'), findsOneWidget);
-      expect(find.byType(OutlinedButton), findsNothing);
+      // The upgrade CTA is the dialog's only filled (gold) GhostButton; the
+      // remove/dismiss controls are danger/ghost tiers.
+      expect(
+          find.byWidgetPredicate(
+              (w) => w is GhostButton && w.style == GhostStyle.filled),
+          findsNothing);
       expect(find.textContaining(_steering, findRichText: true), findsNothing);
     });
 
@@ -91,7 +97,7 @@ void main() {
         (tester) async {
       await pumpCapDialog(tester,
           onUpgrade: () async {}, upgradeLabel: 'Upgrade');
-      expect(find.widgetWithText(OutlinedButton, 'Upgrade'), findsOneWidget);
+      expect(find.widgetWithText(GhostButton, 'Upgrade'), findsOneWidget);
       expect(find.textContaining('or upgrade your plan'), findsOneWidget);
     });
   });

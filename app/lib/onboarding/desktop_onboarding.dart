@@ -3,6 +3,7 @@ import 'dart:io' show Platform;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../data/api.dart';
 import '../data/oauth_flow.dart';
@@ -14,6 +15,7 @@ import '../services/onboarding_service.dart';
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/brand.dart';
+import '../widgets/controls.dart';
 import '../widgets/passphrase_field.dart';
 
 /// The desktop device-onboarding flow (docs/cloudflare/13-device-onboarding.md),
@@ -627,7 +629,7 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
             behavior:
                 ScrollConfiguration.of(context).copyWith(scrollbars: false),
             child: SingleChildScrollView(
-              padding: const EdgeInsets.all(28),
+              padding: const EdgeInsets.all(Insets.xxl),
               child: _body(c),
             ),
           ),
@@ -641,28 +643,39 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
       case _Step.accessibility:
         return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _header(c, 'Let Relic paste for you',
-              'macOS asks permission before any app can press keys for you. Relic uses it to paste the item you pick straight into the app you were just in, and to grab your selection when you press the save & annotate hotkey.'),
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: c.panel,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: c.borderStrong),
-            ),
+              'macOS asks permission before any app can press keys for you. Relic uses it to paste the item you pick straight into the app you were just in, and to grab your selection when you press the save and annotate hotkey.'),
+          _card(
+            c,
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Icon(Icons.info_outline, size: 18, color: c.textMuted),
-              const SizedBox(width: 10),
+              Icon(LucideIcons.info, size: 16, color: c.accent),
+              const SizedBox(width: Insets.md),
               Expanded(
-                child: Text(
-                    'Skipping is fine. Relic still keeps everything you copy, and picking an item still copies it. You just press ⌘V yourself.',
-                    style: TextStyle(color: c.textMuted, height: 1.4, fontSize: 12.5)),
+                // The keycap has to be mono, and not only because the type
+                // roles say a machine fact is mono: none of the bundled sans
+                // faces carries U+2318, so a ⌘ set in sans renders as a tofu
+                // box on the one platform that ever sees this step. JetBrains
+                // Mono has the glyph.
+                child: Text.rich(TextSpan(
+                    style: RelicTheme.sans(
+                        size: 12.5, color: c.textSecondary, height: 1.5),
+                    children: [
+                      const TextSpan(
+                          text: 'Skipping is fine. Relic still keeps everything '
+                              'you copy, and picking an item still copies it. '
+                              'You just press '),
+                      TextSpan(
+                          text: '⌘V',
+                          style: RelicTheme.mono(
+                              size: 11.5, color: c.textSecondary, height: 1.5)),
+                      const TextSpan(text: ' yourself.'),
+                    ])),
               ),
             ]),
           ),
-          const SizedBox(height: 16),
-          _primary(c, 'Open Accessibility settings',
+          const SizedBox(height: Insets.xl),
+          _primary('Open Accessibility settings',
               _busy ? null : _openAccessibility),
-          _secondary(c, _axAsked ? 'Done, continue' : 'Skip for now',
+          _secondary(_axAsked ? 'Done, continue' : 'Skip for now',
               _busy
                   ? null
                   : () {
@@ -674,58 +687,56 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
         ]);
       case _Step.welcome:
         return Column(children: [
-          const SizedBox(height: 4),
+          const SizedBox(height: Insets.xs),
           // Wordmark follows the theme ink — the cream default is only
           // readable on dark.
-          RelicWordmark(gemSize: 34, color: c.text),
-          const SizedBox(height: 20),
+          RelicWordmark(markSize: 34, color: c.text),
+          const SizedBox(height: Insets.xxl),
           Text('Everything you copy,\non every device.',
               textAlign: TextAlign.center,
-              style: TextStyle(
-                  color: c.text,
-                  fontSize: 21,
-                  height: 1.25,
-                  fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
+              style: RelicTheme.headline(
+                  size: 22, color: c.text, height: 1.25)),
+          const SizedBox(height: Insets.sm),
           Text('Sign in to sync and back up your vault, end-to-end encrypted.',
-              textAlign: TextAlign.center, style: TextStyle(color: c.textSecondary, height: 1.4)),
-          const SizedBox(height: 26),
+              textAlign: TextAlign.center,
+              style: RelicTheme.sans(
+                  size: 13, color: c.textSecondary, height: 1.5)),
+          const SizedBox(height: Insets.xxl),
           OAuthButton(
               provider: SupabaseProvider.google,
               onPressed: _busy ? null : () => _startOAuth(SupabaseProvider.google)),
-          const SizedBox(height: 10),
+          const SizedBox(height: Insets.md),
           OAuthButton(
               provider: SupabaseProvider.github,
               onPressed: _busy ? null : () => _startOAuth(SupabaseProvider.github)),
-          const SizedBox(height: 10),
+          const SizedBox(height: Insets.md),
           OAuthButton(
               provider: SupabaseProvider.apple,
               onPressed: _busy ? null : () => _startOAuth(SupabaseProvider.apple)),
           if (_busy)
             Padding(
-              padding: const EdgeInsets.only(top: 12),
+              padding: const EdgeInsets.only(top: Insets.md),
               child: Text('Waiting for your browser…',
-                  style: TextStyle(color: c.textMuted, fontSize: 12.5)),
+                  style: RelicTheme.sans(size: 12.5, color: c.textMuted)),
             ),
           if (_error != null)
             Padding(
-              padding: const EdgeInsets.only(top: 10),
-              child: Text(_error!,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: c.dangerText, height: 1.3)),
+              padding: const EdgeInsets.only(top: Insets.md),
+              child: _banner(c, _error!, danger: true, center: true),
             ),
-          _retryButton(c),
+          _retryButton(),
           const _OrDivider(),
-          _secondary(c, 'Create with email', _busy ? null : () => _go(_Step.create)),
-          const SizedBox(height: 10),
-          _secondary(c, 'Sign in with email', _busy ? null : () => _go(_Step.signIn)),
-          const SizedBox(height: 16),
-          TextButton(
-            onPressed: _busy ? null : widget.onTryDemo,
-            style: TextButton.styleFrom(foregroundColor: c.accent),
-            child: const Text('Just exploring? Try the demo  →'),
+          _secondary('Create with email', _busy ? null : () => _go(_Step.create)),
+          const SizedBox(height: Insets.sm),
+          _secondary('Sign in with email', _busy ? null : () => _go(_Step.signIn)),
+          const SizedBox(height: Insets.md),
+          GhostButton(
+            label: 'Just exploring? Try the demo  →',
+            size: 34,
+            fontSize: 12.5,
+            onTap: _busy ? null : widget.onTryDemo,
           ),
-          _back(c, widget.onCancel, label: 'Not now'),
+          _back(widget.onCancel, label: 'Not now'),
         ]);
       case _Step.oauthCreate:
         return _form(c, 'Set your vault passphrase',
@@ -754,10 +765,11 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
           _field(c, _emailC, 'Email'),
           _field(c, _passC, 'Account password', obscure: true),
           Padding(
-            padding: const EdgeInsets.only(top: 6),
+            padding: const EdgeInsets.only(top: Insets.sm),
             child: Text(
                 'Your account password signs you in. Your vault passphrase, which seals your data end-to-end, comes next and we never see it.',
-                style: TextStyle(color: c.textMuted, fontSize: 12, height: 1.35)),
+                style: RelicTheme.sans(
+                    size: 12, color: c.textMuted, height: 1.45)),
           ),
         ], 'Create account', () {
           _email = _emailC.text.trim();
@@ -774,26 +786,24 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
               'We sent a link to $_pendingEmail. Confirm it, then sign in to finish setting up your vault. You will choose your vault passphrase then.'),
           if (_error != null)
             Padding(
-              padding: const EdgeInsets.only(top: 4, bottom: 4),
-              child: Text(_error!,
-                  style: TextStyle(color: c.dangerText, height: 1.3)),
+              padding: const EdgeInsets.only(bottom: Insets.sm),
+              child: _banner(c, _error!, danger: true),
             ),
           if (_notice != null)
             Padding(
-              padding: const EdgeInsets.only(top: 4, bottom: 4),
-              child: Text(_notice!,
-                  style: TextStyle(color: c.accent, height: 1.3)),
+              padding: const EdgeInsets.only(bottom: Insets.sm),
+              child: _banner(c, _notice!),
             ),
-          const SizedBox(height: 8),
-          _primary(c, "I've confirmed, sign me in", _busy
+          const SizedBox(height: Insets.sm),
+          _primary("I've confirmed, sign me in", _busy
               ? null
               : () {
                   _emailC.text = _pendingEmail;
                   _go(_Step.signIn);
                 }),
-          const SizedBox(height: 8),
-          _secondary(c, 'Resend email', _busy ? null : _resendConfirmation),
-          _back(c, () => _go(_Step.welcome)),
+          const SizedBox(height: Insets.sm),
+          _secondary('Resend email', _busy ? null : _resendConfirmation),
+          _back(() => _go(_Step.welcome)),
         ]);
       case _Step.signIn:
         return _form(c, 'Sign in', 'Sign in to your Relic account.', [
@@ -801,23 +811,19 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
           _field(c, _passC, 'Account password', obscure: true),
           Align(
             alignment: Alignment.centerRight,
-            child: GestureDetector(
+            child: GhostButton(
+              label: 'Forgot password?',
+              size: 28,
+              fontSize: 12.5,
               onTap: _busy ? null : _forgotPassword,
-              child: MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 2, bottom: 2),
-                  child: Text('Forgot password?',
-                      style: TextStyle(color: c.textMuted, fontSize: 12.5)),
-                ),
-              ),
             ),
           ),
           Padding(
-            padding: const EdgeInsets.only(top: 6),
+            padding: const EdgeInsets.only(top: Insets.sm),
             child: Text(
                 'This resets your account password only. Your vault passphrase is separate; if you lost that, use your recovery kit.',
-                style: TextStyle(color: c.textMuted, fontSize: 12, height: 1.35)),
+                style: RelicTheme.sans(
+                    size: 12, color: c.textMuted, height: 1.45)),
           ),
         ], 'Continue', () {
           _email = _emailC.text.trim();
@@ -831,15 +837,15 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
       case _Step.chooser:
         return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _header(c, 'Unlock your vault', 'Choose how to unlock on this computer.'),
-          _door(c, Icons.password, 'Enter your vault passphrase', 'Works anywhere.',
-              () => _go(_Step.passphrase)),
-          _door(c, Icons.keyboard, 'Use another device',
+          _door(c, LucideIcons.rectangleEllipsis, 'Enter your vault passphrase',
+              'Works anywhere.', () => _go(_Step.passphrase)),
+          _door(c, LucideIcons.keyboard, 'Use another device',
               'Type the pairing code shown on a device you already use.',
               () => _go(_Step.pairCode)),
-          _door(c, Icons.vpn_key, 'I lost my vault passphrase', 'Use your recovery kit.',
-              () => _go(_Step.recovery)),
-          const SizedBox(height: 4),
-          _back(c, () => _go(_viaOAuth ? _Step.welcome : _Step.signIn)),
+          _door(c, LucideIcons.keyRound, 'I lost my vault passphrase',
+              'Use your recovery kit.', () => _go(_Step.recovery)),
+          const SizedBox(height: Insets.xs),
+          _back(() => _go(_viaOAuth ? _Step.welcome : _Step.signIn)),
         ]);
       case _Step.passphrase:
         return _form(c, 'Enter your passphrase',
@@ -854,7 +860,8 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
       case _Step.recovery:
         return _form(c, 'Use your recovery kit',
             'Paste the kit you saved, then set a new vault passphrase.', [
-          _field(c, _kitC, 'Recovery kit', maxLines: 4),
+          // The kit is a machine fact: mono, in a recessed well.
+          _field(c, _kitC, 'Recovery kit', maxLines: 4, mono: true),
           _field(c, _phraseC, 'New vault passphrase', obscure: true),
           _field(c, _confirmC, 'Repeat the vault passphrase', obscure: true),
         ], 'Unlock', () {
@@ -874,7 +881,7 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
         return _form(c, 'Use another device',
             'Open Relic on a device you already use, choose Add a device, and type the code it shows.',
             [
-              _field(c, _pairCodeC, '2XXX-XXXX-XXXX-XXXX-XXXX'),
+              _field(c, _pairCodeC, '2XXX-XXXX-XXXX-XXXX-XXXX', mono: true),
             ], 'Connect', _connectPairCode, back: () {
           _pairing?.cancel();
           _pairing = null;
@@ -884,42 +891,36 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
         return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _header(c, 'Check the code',
               'Make sure this code matches the one shown on your other device, then approve there.'),
-          const SizedBox(height: 8),
-          Center(
-            child: Text(_sas ?? '----',
-                style: TextStyle(
-                    color: c.accent,
-                    fontSize: 44,
-                    letterSpacing: 10,
-                    fontWeight: FontWeight.w700,
-                    fontFamily: 'IBMPlexMono')),
-          ),
-          const SizedBox(height: 20),
+          const SizedBox(height: Insets.sm),
+          // The verification code is a machine fact, so it sits in a recessed
+          // well in mono rather than as bare gold text on the parchment.
+          _codeWell(c, _sas ?? '----', size: 40, tracking: 10),
+          const SizedBox(height: Insets.xxl),
           if (_busy)
             Center(
                 child: Text('Waiting for the other device to approve…',
-                    style: TextStyle(color: c.textMuted)))
+                    style: RelicTheme.sans(size: 12.5, color: c.textMuted)))
           else ...[
-            _primary(c, 'The codes match', _confirmPairSas),
-            const SizedBox(height: 8),
-            // Destructive ghost: danger-tinted text, no border box.
+            _primary('The codes match', _confirmPairSas),
+            const SizedBox(height: Insets.sm),
+            // Destructive ghost: danger-tinted glyphless label, no border box.
             SizedBox(
-              height: 48,
-              child: TextButton(
-                onPressed: _rejectPairSas,
-                style: TextButton.styleFrom(foregroundColor: c.dangerText),
-                child: const Text("They don't match",
-                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+              width: double.infinity,
+              child: GhostButton(
+                label: "They don't match",
+                size: 40,
+                fontSize: 13.5,
+                style: GhostStyle.danger,
+                onTap: _rejectPairSas,
               ),
             ),
           ],
           if (_error != null)
             Padding(
-              padding: const EdgeInsets.only(top: 10),
-              child: Text(_error!,
-                  style: TextStyle(color: c.dangerText, height: 1.3)),
+              padding: const EdgeInsets.only(top: Insets.md),
+              child: _banner(c, _error!, danger: true),
             ),
-          _back(c, () {
+          _back(() {
             _pairing?.cancel();
             _pairing = null;
             _go(_Step.chooser);
@@ -937,144 +938,224 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
         ...fields,
         if (_error != null)
           Padding(
-            padding: const EdgeInsets.only(top: 4, bottom: 4),
-            child: Text(_error!,
-                style: TextStyle(color: c.dangerText, height: 1.3)),
+            padding: const EdgeInsets.only(top: Insets.xs, bottom: Insets.xs),
+            child: _banner(c, _error!, danger: true),
           ),
         if (_notice != null)
           Padding(
-            padding: const EdgeInsets.only(top: 4, bottom: 4),
-            child: Text(_notice!,
-                style: TextStyle(color: c.accent, height: 1.3)),
+            padding: const EdgeInsets.only(top: Insets.xs, bottom: Insets.xs),
+            child: _banner(c, _notice!),
           ),
-        _retryButton(c),
-        const SizedBox(height: 8),
-        _primary(c, cta, _busy ? null : onCta),
-        _back(c, back),
+        _retryButton(),
+        const SizedBox(height: Insets.md),
+        _primary(cta, _busy ? null : onCta),
+        _back(back),
       ]);
 
   /// "Try again" for a hard hasVault() failure — re-runs the routing check with
   /// the session already in hand. Renders nothing when there's no pending retry.
-  Widget _retryButton(RelicColors c) {
+  Widget _retryButton() {
     final retry = _retry;
     if (retry == null) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: _secondary(c, 'Try again', _busy ? null : retry),
+      padding: const EdgeInsets.only(top: Insets.sm),
+      child: _secondary('Try again', _busy ? null : retry),
     );
   }
 
   Widget _header(RelicColors c, String title, String sub) => Padding(
-        padding: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.only(bottom: Insets.xl),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title,
-              style: TextStyle(
-                  color: c.text, fontSize: 20, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 6),
-          Text(sub, style: TextStyle(color: c.textMuted, height: 1.4)),
+          Text(title, style: RelicTheme.headline(size: 21, color: c.text)),
+          const SizedBox(height: Insets.sm),
+          Text(sub,
+              style: RelicTheme.sans(
+                  size: 13, color: c.textSecondary, height: 1.5)),
         ]),
       );
 
+  /// A resting white card on the parchment ground.
+  Widget _card(RelicColors c, {required Widget child}) => Container(
+        padding: const EdgeInsets.all(Insets.lg),
+        decoration: BoxDecoration(
+          color: c.panel,
+          borderRadius: BorderRadius.circular(Radii.card),
+          border: Border.all(color: c.border),
+          boxShadow: Shadows.card(c),
+        ),
+        child: child,
+      );
+
+  /// Inline status line. A confirmation is gold *text*, so it takes the tag
+  /// tint underneath it rather than sitting bare on the ground; an error takes
+  /// the danger tint the same way.
+  Widget _banner(RelicColors c, String text,
+          {bool danger = false, bool center = false}) =>
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(
+            horizontal: Insets.md, vertical: Insets.sm),
+        decoration: BoxDecoration(
+          color: danger ? c.dangerBg : c.tagBg,
+          borderRadius: BorderRadius.circular(Radii.chip),
+        ),
+        child: Text(text,
+            textAlign: center ? TextAlign.center : TextAlign.start,
+            style: RelicTheme.sans(
+                size: 12.5,
+                color: danger ? c.dangerText : c.tagText,
+                height: 1.4)),
+      );
+
+  /// A recessed well for a code the user reads off the screen: mono digits on
+  /// [RelicColors.inset], never bare gold on the ground.
+  Widget _codeWell(RelicColors c, String code,
+          {double size = 40, double tracking = 8}) =>
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(
+            horizontal: Insets.lg, vertical: Insets.xl),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: c.inset,
+          borderRadius: BorderRadius.circular(Radii.input),
+          border: Border.all(color: c.isDark ? c.selected : c.border),
+        ),
+        child: Text(code,
+            style: RelicTheme.mono(
+                size: size,
+                weight: FontWeight.w700,
+                color: c.accentDeep,
+                letterSpacing: tracking)),
+      );
+
   Widget _field(RelicColors c, TextEditingController ctrl, String hint,
-          {bool obscure = false, int maxLines = 1}) =>
+          {bool obscure = false, int maxLines = 1, bool mono = false}) =>
       Padding(
-        padding: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.only(bottom: Insets.md),
         child: TextField(
           controller: ctrl,
           obscureText: obscure,
           maxLines: obscure ? 1 : maxLines,
-          style: TextStyle(color: c.text),
+          style: mono
+              ? RelicTheme.mono(size: 13, color: c.text, height: 1.5)
+              : RelicTheme.sans(size: 13.5, color: c.text),
           decoration: InputDecoration(
             hintText: hint,
-            hintStyle: TextStyle(color: c.textMuted),
+            hintStyle: mono
+                ? RelicTheme.mono(size: 12.5, color: c.textFaintest)
+                : RelicTheme.sans(size: 13.5, color: c.textFaintest),
             filled: true,
-            fillColor: c.surface,
+            // Machine-fact fields (the kit, a pairing code) read as recessed
+            // wells; prose fields stay on the ordinary input surface.
+            fillColor: mono ? c.inset : c.surface,
             enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(Radii.input),
                 borderSide: BorderSide(color: c.borderStrong)),
             focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(Radii.input),
-                borderSide: BorderSide(color: c.accent)),
+                borderSide: BorderSide(color: c.accent, width: 1.5)),
           ),
         ),
       );
 
-  Widget _primary(RelicColors c, String label, VoidCallback? onTap) => SizedBox(
-        height: 48,
-        child: FilledButton(
-          onPressed: onTap,
-          style: FilledButton.styleFrom(
-              backgroundColor: c.accent,
-              foregroundColor: c.onAccent,
-              disabledBackgroundColor: c.track,
-              shape:
-                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-          child: _busy && onTap != null
-              ? SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: c.onAccent))
-              : Text(label,
-                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+  /// The step's one gold CTA: a full-width filled pill with its own glow. While
+  /// an action runs the label holds its place and the leading glyph becomes the
+  /// spinner, so the button never changes shape mid-flight.
+  Widget _primary(String label, VoidCallback? onTap) => SizedBox(
+        width: double.infinity,
+        child: GhostButton(
+          label: label,
+          size: 44,
+          style: GhostStyle.filled,
+          fontSize: 14,
+          iconSize: 16,
+          iconBuilder: _busy
+              ? (size, color) => SizedBox(
+                    width: size,
+                    height: size,
+                    child:
+                        CircularProgressIndicator(strokeWidth: 2, color: color),
+                  )
+              : null,
+          onTap: onTap,
         ),
       );
 
   // Secondary/back actions de-boxed to the ghost language: no border, quiet text.
-  Widget _secondary(RelicColors c, String label, VoidCallback? onTap) => SizedBox(
-        height: 48,
-        child: TextButton(
-          onPressed: onTap,
-          style: TextButton.styleFrom(foregroundColor: c.text),
-          child: Text(label,
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+  Widget _secondary(String label, VoidCallback? onTap) => SizedBox(
+        width: double.infinity,
+        child: GhostButton(
+          label: label,
+          size: 40,
+          fontSize: 13.5,
+          onTap: onTap,
         ),
       );
 
-  // Door option cards keep their hairline border — they are region separators.
+  /// Door option cards: white cards on the parchment ground, each with a
+  /// gold-tint icon tile.
   Widget _door(RelicColors c, IconData icon, String title, String sub,
           VoidCallback onTap) =>
       Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: Material(
-          color: c.panel,
-          borderRadius: BorderRadius.circular(12),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(12),
-            onTap: _busy ? null : onTap,
-            child: Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: c.borderStrong)),
-              child: Row(children: [
-                Icon(icon, color: c.accent, size: 20),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(title,
-                            style: TextStyle(
-                                color: c.text, fontWeight: FontWeight.w600)),
-                        Text(sub,
-                            style:
-                                TextStyle(color: c.textMuted, fontSize: 12)),
-                      ]),
-                ),
-                Icon(Icons.chevron_right, color: c.textMuted),
-              ]),
+        padding: const EdgeInsets.only(bottom: Insets.md),
+        child: Hoverable(
+          onTap: _busy ? null : onTap,
+          builder: (context, hovered) => AnimatedContainer(
+            duration: Motion.selection,
+            padding: const EdgeInsets.all(Insets.lg),
+            decoration: BoxDecoration(
+              color: hovered && !_busy ? c.surfaceHover : c.panel,
+              borderRadius: BorderRadius.circular(Radii.card),
+              border: Border.all(
+                  color: hovered && !_busy ? c.selectedBorder : c.border),
+              boxShadow: hovered && !_busy
+                  ? Shadows.selected(c)
+                  : Shadows.card(c),
             ),
+            child: Row(children: [
+              Container(
+                width: 32,
+                height: 32,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: c.tagBg,
+                  borderRadius: BorderRadius.circular(Radii.tile),
+                ),
+                child: Icon(icon, color: c.accent, size: 17),
+              ),
+              const SizedBox(width: Insets.md),
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title,
+                          style: RelicTheme.sans(
+                              size: 13.5,
+                              weight: FontWeight.w500,
+                              color: c.text)),
+                      const SizedBox(height: 2),
+                      Text(sub,
+                          style: RelicTheme.sans(
+                              size: 11.5, color: c.textMuted, height: 1.35)),
+                    ]),
+              ),
+              const SizedBox(width: Insets.sm),
+              Icon(LucideIcons.chevronRight, size: 14, color: c.textFaintest),
+            ]),
           ),
         ),
       );
 
-  Widget _back(RelicColors c, VoidCallback onTap, {String label = 'Back'}) =>
-      Padding(
-        padding: const EdgeInsets.only(top: 6),
-        child: TextButton(
-          onPressed: _busy ? null : onTap,
-          style: TextButton.styleFrom(foregroundColor: c.textMuted),
-          child: Text(label),
+  Widget _back(VoidCallback onTap, {String label = 'Back'}) => Padding(
+        padding: const EdgeInsets.only(top: Insets.sm),
+        child: Center(
+          child: GhostButton(
+            label: label,
+            size: 32,
+            fontSize: 12.5,
+            onTap: _busy ? null : onTap,
+          ),
         ),
       );
 }
@@ -1085,14 +1166,15 @@ class _OrDivider extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = RelicTheme.of(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 16),
+      padding: const EdgeInsets.symmetric(vertical: Insets.xl),
       child: Row(children: [
-        Expanded(child: Divider(color: c.borderStrong)),
+        Expanded(child: Container(height: 1, color: c.border)),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Text('or', style: TextStyle(color: c.textMuted, fontSize: 12)),
+          padding: const EdgeInsets.symmetric(horizontal: Insets.md),
+          child:
+              Text('or', style: RelicTheme.sans(size: 12, color: c.textMuted)),
         ),
-        Expanded(child: Divider(color: c.borderStrong)),
+        Expanded(child: Container(height: 1, color: c.border)),
       ]),
     );
   }

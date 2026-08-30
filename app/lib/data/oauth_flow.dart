@@ -181,13 +181,39 @@ class OAuthFlow {
   /// bringing itself forward at this point; the deep-link button is the
   /// belt-and-braces path back for browsers/users where that hand-off gets
   /// lost (relic:// is registered on every desktop platform we ship).
+  ///
+  /// The colors are the 2026 system's, hand-copied from `theme/tokens.dart`
+  /// because this string is served to a browser and cannot reach the theme.
+  /// Light is the default world and dark is real parity, same as the app. Gold
+  /// is a fill here (the CTA); the heading is ink, never bare gold on cream.
+  /// The bundled faces are not available to a loopback page, so system-ui is
+  /// the honest fallback rather than a lookalike.
   static String _closePage(bool ok) => '''
 <!doctype html><meta charset="utf-8"><title>Relic</title>
-<body style="font-family:system-ui;background:#16130E;color:#F2ECDD;display:grid;place-items:center;height:100vh;margin:0">
-<div style="text-align:center">
-<h2 style="color:#DAA43E">${ok ? 'Signed in' : 'Sign-in failed'}</h2>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--ground:#F5F1E8;--card:#FFFFFF;--ink:#111110;--muted:#5B5B57;--faint:#8C8C86;
+--hairline:rgba(17,17,16,0.08);--shadow:0 10px 30px rgba(140,100,20,0.15);--bad:#B23A28}
+@media (prefers-color-scheme:dark){
+:root{--ground:#111110;--card:#1D1D1B;--ink:#F1F1EF;--muted:#B9B9B3;--faint:#8A8A84;
+--hairline:rgba(241,241,239,0.10);--shadow:0 10px 24px rgba(0,0,0,0.45);--bad:#D9705E}}
+body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--ground);
+color:var(--muted);display:grid;place-items:center;min-height:100vh;margin:0;padding:24px}
+.card{background:var(--card);border:1px solid var(--hairline);border-radius:18px;
+box-shadow:var(--shadow);padding:40px 44px;max-width:420px;text-align:center}
+h2{margin:0 0 10px;color:var(--ink);font-size:26px;font-weight:700;letter-spacing:-0.03em;line-height:1.05}
+h2.bad{color:var(--bad)}
+p{margin:0;font-size:16px;line-height:1.55}
+.cta{display:inline-block;margin-top:22px;padding:11px 26px;border-radius:999px;
+background:linear-gradient(150deg,#FFD616,#F2AE38);color:#33200A;text-decoration:none;
+font-size:15px;font-weight:600;box-shadow:0 8px 24px rgba(242,174,56,0.40)}
+.foot{margin-top:22px;color:var(--faint);font-size:13px}
+</style>
+<body>
+<div class="card">
+<h2${ok ? '' : ' class="bad"'}>${ok ? 'Signed in' : 'Sign-in failed'}</h2>
 <p>${ok ? 'Finish unlocking in the Relic app.' : 'You can close this tab and try again in Relic.'}</p>
-${ok ? '<p><a href="$relicUrlScheme://open" style="display:inline-block;margin-top:8px;padding:10px 22px;background:#DAA43E;color:#16130E;border-radius:8px;text-decoration:none;font-weight:600">Open Relic</a></p>' : ''}
-<p style="color:#8A8272;font-size:13px">Then this tab can be closed.</p>
+${ok ? '<p><a class="cta" href="$relicUrlScheme://open">Open Relic</a></p>' : ''}
+<p class="foot">Then this tab can be closed.</p>
 </div></body>''';
 }

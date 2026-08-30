@@ -65,9 +65,17 @@ static void my_application_activate(GApplication* application) {
 
   FlView* view = fl_view_new(project);
   GdkRGBA background_color;
-  // Background defaults to black, override it here if necessary, e.g. #00000000
-  // for transparent.
-  gdk_rgba_parse(&background_color, "#000000");
+  // The ground the view paints wherever Flutter has not: the parchment base,
+  // RelicColors.light.base in lib/theme/tokens.dart. The Flutter template
+  // leaves this black, which reads as a dark seam on every resize and on the
+  // first frames after a summon. This is the Linux twin of the Windows
+  // WindowOptions.backgroundColor and of Android's launch_bg.
+  //
+  // It is deliberately the light base, not the booted appearance: this runs
+  // before the engine exists, so nothing here can read the saved theme, and
+  // light is the product default. A dark-theme user sees cream for the width
+  // of a resize, which is the cheaper of the two mistakes.
+  gdk_rgba_parse(&background_color, "#F5F1E8");
   fl_view_set_background_color(view, &background_color);
   gtk_widget_show(GTK_WIDGET(view));
   gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));

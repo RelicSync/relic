@@ -121,7 +121,7 @@ MimeType=x-scheme-handler/relic;
 StartupWMClass=space.relic.app
 StartupNotify=false
 EOF
-cp "$APP_DIR/assets/beautiful-icon.png" "$STAGE/space.relic.app.png"
+cp "$APP_DIR/assets/app_icon.png" "$STAGE/space.relic.app.png"
 
 cat > "$STAGE/README.txt" <<EOF
 Relic $VER — Linux x86_64

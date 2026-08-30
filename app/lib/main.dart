@@ -22,8 +22,8 @@ import 'ui/popup.dart';
 import 'ui/settings.dart';
 import 'ui/share_dialog.dart';
 import 'ui/toast.dart';
+import 'widgets/brand.dart';
 import 'widgets/controls.dart';
-import 'widgets/relic_mark.dart';
 
 /// `relic_app` → the real tray-resident product.
 /// `relic_app --gallery` → the design storybook (every surface).
@@ -152,6 +152,10 @@ class _GalleryAppState extends State<GalleryApp> {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Relic',
+      // The storybook is where surfaces get judged, so its own Material
+      // fallbacks (dialog barriers, text fields, selection handles) have to be
+      // on-palette too, not stock blue-on-white.
+      theme: materialThemeFor(colors),
       home: RelicTheme(
         colors: colors,
         child: Scaffold(
@@ -166,7 +170,7 @@ class _GalleryAppState extends State<GalleryApp> {
             Expanded(
               child: Center(
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(40),
+                  padding: const EdgeInsets.all(Insets.section),
                   child: _surfaceWidget(),
                 ),
               ),
@@ -371,24 +375,22 @@ class _Rail extends StatelessWidget {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(18, 22, 18, 18),
-          child: Row(children: [
-            Container(
-              width: 30,
-              height: 30,
-              // Brand tile: deliberately dark in both themes so the gem reads.
-              decoration: BoxDecoration(color: const Color(0xFF16130E), borderRadius: BorderRadius.circular(8)),
-              alignment: Alignment.center,
-              child: const RelicIcon(size: 22),
-            ),
-            const SizedBox(width: 10),
-            Text('RELIC',
-                style: RelicTheme.mono(size: 16, weight: FontWeight.w700, color: c.text, letterSpacing: 1.4)),
-          ]),
+          // The site lockup, whole: shard + Headline wordmark, no chip behind
+          // it. The old dark tile existed because the retired faceted gem
+          // needed a ground to read against; the 2026 mark is a flat gold
+          // shard that reads on parchment and on ink alike, so a hardcoded
+          // near-black square in a light-default app is now just a hole in the
+          // rail. The mono "RELIC" is gone with it — the wordmark is Headline
+          // set at the mark's height, and mono is for machine facts.
+          padding: const EdgeInsets.fromLTRB(
+              Insets.xl, Insets.xxl, Insets.xl, Insets.xl),
+          child: const RelicWordmark(markSize: 22),
         ),
         Expanded(
           child: ListView(
-            padding: const EdgeInsets.symmetric(horizontal: 10),
+            // 8 here + each item's 12 puts the labels on the same left edge as
+            // the wordmark above them.
+            padding: const EdgeInsets.symmetric(horizontal: Insets.sm),
             children: [
               for (final s in Surface.values)
                 _RailItem(label: s.label, selected: s == surface, onTap: () => onSurface(s)),
@@ -396,26 +398,16 @@ class _Rail extends StatelessWidget {
           ),
         ),
         Padding(
-          padding: const EdgeInsets.all(12),
-          child: GestureDetector(
+          padding: const EdgeInsets.all(Insets.md),
+          // De-boxed: the theme switch is a ghost pill, not an outlined box.
+          // It stretches to the rail's width, which is the one place a labeled
+          // GhostButton is allowed to fill rather than hug.
+          child: GhostButton(
+            icon: dark ? LucideIcons.moon : LucideIcons.sun,
+            label: dark ? 'Dark theme' : 'Light theme',
+            size: 34,
+            iconSize: 15,
             onTap: onToggleTheme,
-            child: MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                decoration: BoxDecoration(
-                  color: c.surface,
-                  borderRadius: BorderRadius.circular(Radii.input),
-                  border: Border.all(color: c.border),
-                ),
-                child: Row(children: [
-                  Icon(dark ? LucideIcons.moon : LucideIcons.sun, size: 15, color: c.accent),
-                  const SizedBox(width: 9),
-                  Text(dark ? 'Dark theme' : 'Light theme',
-                      style: RelicTheme.sans(size: 12.5, color: c.textSecondary)),
-                ]),
-              ),
-            ),
           ),
         ),
       ]),
@@ -432,23 +424,30 @@ class _RailItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = RelicTheme.of(context);
-    return GestureDetector(
+    // Selection is the result row's language, scaled down: a floating card on
+    // the rail's ground, gold hairline, warm shadow — and ink text, not gold.
+    // (Gold text on a bare white card is the one thing this system never does.)
+    return Hoverable(
       onTap: onTap,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: Container(
-          margin: const EdgeInsets.only(bottom: 2),
-          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
-          decoration: BoxDecoration(
-            color: selected ? c.selected : const Color(0x00000000),
-            borderRadius: BorderRadius.circular(7),
-          ),
-          child: Text(label,
-              style: RelicTheme.sans(
-                  size: 13,
-                  weight: selected ? FontWeight.w500 : FontWeight.w400,
-                  color: selected ? c.accent : c.textSecondary)),
+      builder: (context, hovered) => AnimatedContainer(
+        duration: Motion.selection,
+        margin: const EdgeInsets.only(bottom: Insets.xs),
+        padding:
+            const EdgeInsets.symmetric(horizontal: Insets.md, vertical: Insets.sm),
+        decoration: BoxDecoration(
+          color: selected
+              ? c.selectedCard
+              : (hovered ? c.surfaceHover : const Color(0x00000000)),
+          borderRadius: BorderRadius.circular(Radii.chip),
+          border:
+              selected ? Border.all(color: c.selectedBorder, width: 1) : null,
+          boxShadow: selected ? Shadows.selected(c) : null,
         ),
+        child: Text(label,
+            style: RelicTheme.sans(
+                size: 13,
+                weight: selected ? FontWeight.w600 : FontWeight.w400,
+                color: selected ? c.textOnSelected : c.textSecondary)),
       ),
     );
   }
@@ -467,18 +466,21 @@ class _ComponentsBoard extends StatelessWidget {
     return SizedBox(
       width: 560,
       child: Container(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(Insets.xxl),
         decoration: BoxDecoration(
           color: c.panel,
           borderRadius: BorderRadius.circular(Radii.card),
           border: Border.all(color: c.border, width: 1),
+          // The board is a card sitting on the gallery backdrop, so it lifts
+          // off it the way every other card in the system does.
+          boxShadow: Shadows.card(c),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
             _sectionLabel(c, 'GHOST BUTTON · STYLES'),
-            Wrap(spacing: 10, runSpacing: 10, children: [
+            Wrap(spacing: Insets.md, runSpacing: Insets.md, children: [
               GhostButton(icon: LucideIcons.copy, label: 'Ghost', onTap: () {}),
               GhostButton(
                   icon: LucideIcons.check,
@@ -501,9 +503,9 @@ class _ComponentsBoard extends StatelessWidget {
                   style: GhostStyle.active,
                   onTap: () {}),
             ]),
-            const SizedBox(height: 22),
+            const SizedBox(height: Insets.xxl),
             _sectionLabel(c, 'GHOST BUTTON · ICON-ONLY'),
-            Wrap(spacing: 10, runSpacing: 10, children: [
+            Wrap(spacing: Insets.md, runSpacing: Insets.md, children: [
               GhostButton(icon: LucideIcons.copy, onTap: () {}),
               GhostButton(
                   icon: LucideIcons.check,
@@ -523,17 +525,17 @@ class _ComponentsBoard extends StatelessWidget {
                   onTap: () {}),
               GhostIconButton(icon: LucideIcons.x, onTap: () {}),
             ]),
-            const SizedBox(height: 22),
+            const SizedBox(height: Insets.xxl),
             _sectionLabel(c, 'PRIMARY BUTTON'),
-            Wrap(spacing: 10, runSpacing: 10, children: [
+            Wrap(spacing: Insets.md, runSpacing: Insets.md, children: [
               PrimaryButton(
                   icon: LucideIcons.check, label: 'Enabled', onTap: () {}),
               const PrimaryButton(
                   icon: LucideIcons.check, label: 'Disabled', onTap: null),
             ]),
-            const SizedBox(height: 22),
+            const SizedBox(height: Insets.xxl),
             _sectionLabel(c, 'NEW TOKENS'),
-            Wrap(spacing: 12, runSpacing: 12, children: [
+            Wrap(spacing: Insets.md, runSpacing: Insets.md, children: [
               _swatch(c, 'ghostHover', c.ghostHover),
               _swatch(c, 'selectedCard', c.selectedCard),
               _swatch(c, 'surfaceRaised', c.surfaceRaised),
@@ -546,11 +548,11 @@ class _ComponentsBoard extends StatelessWidget {
     );
   }
 
+  /// The system's section eyebrow. Callers pass the string already uppercased,
+  /// as kicker expects.
   Widget _sectionLabel(RelicColors c, String t) => Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: Text(t,
-            style:
-                RelicTheme.mono(size: 10, color: c.textMuted, letterSpacing: 0.8)),
+        padding: const EdgeInsets.only(bottom: Insets.md),
+        child: Text(t, style: RelicTheme.kicker(c.textMuted)),
       );
 
   Widget _swatch(RelicColors c, String name, Color color) => Column(
@@ -562,12 +564,15 @@ class _ComponentsBoard extends StatelessWidget {
             height: 44,
             decoration: BoxDecoration(
               color: color,
-              borderRadius: BorderRadius.circular(Radii.input),
+              // A swatch is a tile, not an input.
+              borderRadius: BorderRadius.circular(Radii.tile),
               border: Border.all(color: c.border, width: 1),
             ),
           ),
-          const SizedBox(height: 5),
-          Text(name, style: RelicTheme.mono(size: 9, color: c.textMuted)),
+          const SizedBox(height: Insets.sm),
+          // Token names are machine facts, so they stay mono — at the system's
+          // smallest mono size rather than an off-scale 9.
+          Text(name, style: RelicTheme.mono(size: 10, color: c.textMuted)),
         ],
       );
 }

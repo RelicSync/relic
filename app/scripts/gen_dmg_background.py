@@ -5,8 +5,9 @@
 600x400 points inside the DMG window create-dmg opens at that size. Icons sit
 at (150,190) and (450,190), 100pt, per build_release_macos.sh.
 
-Needs Pillow and the macOS system font: python3 -m pip install Pillow, run on
-a Mac. Re-run after editing, eyeball the PNG, commit both files.
+Needs Pillow: python3 -m pip install Pillow. Type is the bundled Stack Sans
+faces (docs/design/media-style-guide.md), not the system font, so this runs
+anywhere. Re-run after editing, eyeball the PNG, commit both files.
 
 The copy leads with double-click, not drag: a double-clicked Relic runs from
 the read-only image, offers "Install and reopen" (install_offer.dart), and
@@ -23,18 +24,25 @@ OUT = Path(__file__).resolve().parent.parent / "macos" / "dmg-background.png"
 S = 2  # @2x
 W, H = 600 * S, 400 * S
 
-BG = (0x16, 0x13, 0x0E)
-TEXT = (0xEF, 0xE6, 0xD6)
-MUTED = (0x8A, 0x80, 0x70)
-ARROW = (0x6B, 0x62, 0x54)
+# 2026 system, light world (docs/design/media-style-guide.md): parchment
+# ground, ink headline, muted body, faint captions. The arrow stays quieter
+# than the caption text, same hierarchy the old dark art had.
+BG = (0xF5, 0xF1, 0xE8)
+TEXT = (0x11, 0x11, 0x10)
+BODY = (0x5B, 0x5B, 0x57)
+MUTED = (0x9C, 0x9C, 0x96)
+ARROW = (0x9C, 0x9C, 0x96)
 
-SF = "/System/Library/Fonts/SFNS.ttf"
+FONTS = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 
 
 def font(size, weight=400):
-    f = ImageFont.truetype(SF, int(size * S))
-    # SFNS.ttf axes: Width, Optical Size, GRAD, Weight.
-    f.set_variation_by_axes([100, min(96, max(17, size * S)), 400, weight])
+    face = "StackSansHeadline.ttf" if weight >= 600 else "StackSansText.ttf"
+    f = ImageFont.truetype(FONTS / face, int(size * S))
+    try:
+        f.set_variation_by_axes([weight])
+    except OSError:
+        pass  # static face; the file's own weight stands
     return f
 
 
@@ -62,7 +70,7 @@ center(
     "Click Install and reopen when Relic asks, and you are done.",
     296,
     font(15, 500),
-    TEXT,
+    BODY,
 )
 center(
     "Dragging into Applications works too. Then opening it from there is on you.",

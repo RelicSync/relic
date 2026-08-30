@@ -117,7 +117,7 @@ class ResultRow extends StatefulWidget {
   /// touch. Public because keyboard navigation has to compute a scroll offset
   /// for a row the lazy ListView may not have built yet (popup.dart
   /// `_scrollListToSelected`).
-  static double heightFor(bool isMobile) => isMobile ? 96 : 76;
+  static double heightFor(bool isMobile) => isMobile ? 104 : 84;
 
   /// Whether the open-in-browser affordance should appear for this row.
   bool get _showOpen => onOpenLink != null && relic.hasLink;
@@ -142,6 +142,11 @@ class ResultRow extends StatefulWidget {
 class _ResultRowState extends State<ResultRow> {
   bool _hover = false;
   DateTime? _lastTapAt;
+
+  /// A secret row showing its plaintext. Deliberately per-row widget state and
+  /// never persisted: the list rebuilds on every summon, so a secret revealed
+  /// once is hidden again the next time the popup opens.
+  bool _revealed = false;
 
   /// Set from [RelicTheme.isMobileOf] each build; the helpers below read it to
   /// switch between the compact desktop metrics and roomier phone ones.
@@ -215,27 +220,17 @@ class _ResultRowState extends State<ResultRow> {
               // rows separate by spacing alone; the fixed row height keeps the
               // layout stable in every state.
               Positioned.fill(
-                top: _v(3, 4),
-                bottom: _v(4, 5),
+                top: _v(4, 5),
+                bottom: _v(5, 6),
                 child: IgnorePointer(
                   child: DecoratedBox(
                     decoration: sel
                         ? BoxDecoration(
                             color: c.selectedCard,
-                            borderRadius: BorderRadius.circular(10.5),
-                            border: Border.all(
-                              color: c.isDark
-                                  ? c.accent.withValues(alpha: 0.35)
-                                  : c.border,
-                              width: 1,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: c.cardShadow,
-                                blurRadius: 8,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
+                            borderRadius: BorderRadius.circular(Radii.row),
+                            border:
+                                Border.all(color: c.selectedBorder, width: 1),
+                            boxShadow: Shadows.selected(c),
                           )
                         : BoxDecoration(
                             color: bulk
@@ -243,7 +238,7 @@ class _ResultRowState extends State<ResultRow> {
                                 : _hover
                                     ? c.surfaceHover
                                     : const Color(0x00000000),
-                            borderRadius: BorderRadius.circular(10.5),
+                            borderRadius: BorderRadius.circular(Radii.row),
                           ),
                   ),
                 ),
@@ -256,7 +251,7 @@ class _ResultRowState extends State<ResultRow> {
                 // 12 here + the list's 12 outer padding = the icon sits 24
                 // from the window edge with the highlight edge exactly
                 // halfway, on both platforms (popup.dart results ListView).
-                padding: EdgeInsets.fromLTRB(12, _v(9, 12), 12, _v(9, 12)),
+                padding: EdgeInsets.fromLTRB(14, _v(12, 15), 14, _v(12, 15)),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
@@ -297,9 +292,11 @@ class _ResultRowState extends State<ResultRow> {
                       Container(
                         decoration: BoxDecoration(
                           color: c.selectedCard,
+                          // The card's radius less its 1px inset, so the
+                          // mask corner sits exactly on the card's.
                           borderRadius: const BorderRadius.only(
-                            topRight: Radius.circular(9.5),
-                            bottomRight: Radius.circular(9.5),
+                            topRight: Radius.circular(Radii.row - 1),
+                            bottomRight: Radius.circular(Radii.row - 1),
                           ),
                         ),
                         alignment: Alignment.center,
@@ -336,18 +333,20 @@ class _ResultRowState extends State<ResultRow> {
     final metaColor = sel ? c.accentMuted : c.textFaint;
 
     if (r.isSecret) {
+      final plain = r.content?.trim();
+      final showing = _revealed && plain != null && plain.isNotEmpty;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Text(
-            '•••• •••• •••• ••••',
+            showing ? plain : '•••• •••• •••• ••••',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: RelicTheme.mono(
               size: _v(13, 15),
-              color: c.secretBright,
-              letterSpacing: 1.4,
+              color: showing ? c.text : c.secretBright,
+              letterSpacing: showing ? 0 : 1.4,
             ),
           ),
           const SizedBox(height: 3),
@@ -650,8 +649,20 @@ class _ResultRowState extends State<ResultRow> {
 
   String _secretLabel(Relic r) {
     final label = r.title ?? 'Secret';
-    return '$label · Reveal to view';
+    return _revealed ? label : '$label · hidden';
   }
+
+  /// The show/hide control for a secret row. First-class: it sits in the row
+  /// at rest, not behind a selection or a dialog, because reading a secret is
+  /// the whole reason you went looking for one.
+  Widget _secretEye(RelicColors c, double size) => GhostButton(
+        icon: _revealed ? LucideIcons.eyeOff : LucideIcons.eye,
+        size: size,
+        style: _revealed ? GhostStyle.active : GhostStyle.ghost,
+        swallowTap: true,
+        tooltip: _revealed ? 'Hide' : 'Show',
+        onTap: () => setState(() => _revealed = !_revealed),
+      );
 
   /// Resting trailing cluster — always in flow. Secret badge / promoted star /
   /// not-synced spinner, then copy. Defines the body's reserved right-edge
@@ -675,6 +686,8 @@ class _ResultRowState extends State<ResultRow> {
         ] else if (r.isSecret) ...[
           _SecretBadge(),
           const SizedBox(width: 6),
+          _secretEye(c, 30),
+          const SizedBox(width: 6),
         ] else if (widget.sync == RelicSync.syncing) ...[
           SizedBox(
             width: 12,
@@ -694,7 +707,6 @@ class _ResultRowState extends State<ResultRow> {
           RelicMark(
             size: 14,
             color: c.accent,
-            facets: false,
           ), // filled gem = in vault
           const SizedBox(width: 6),
         ],
@@ -756,13 +768,16 @@ class _ResultRowState extends State<ResultRow> {
           iconBuilder: (sz, fg) => RelicMark(
             size: sz,
             color: r.promoted ? c.accent : fg,
-            facets: false,
             filled: r.promoted,
           ),
           size: 28,
           swallowTap: true,
           onTap: widget.onPromoteToggle,
         ),
+        if (r.isSecret) ...[
+          const SizedBox(width: 3),
+          _secretEye(c, 28),
+        ],
         if (widget._showOpen) ...[
           const SizedBox(width: 3),
           GhostButton(
@@ -833,11 +848,14 @@ class _ResultRowState extends State<ResultRow> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (r.isSecret) ...[
+          _secretEye(c, 28),
+          const SizedBox(width: 3),
+        ],
         GhostButton(
           iconBuilder: (sz, fg) => RelicMark(
             size: sz,
             color: r.promoted ? c.accent : fg,
-            facets: false,
             filled: r.promoted,
           ),
           size: 28,
@@ -1184,7 +1202,7 @@ class _MiniResultRowState extends State<MiniResultRow> {
               // the item is promoted.
               if (r.promoted) ...[
                 const SizedBox(width: 8),
-                RelicMark(size: 12, color: c.accent, facets: false),
+                RelicMark(size: 12, color: c.accent),
               ],
               _editSlot(c, sel),
             ],
@@ -1284,14 +1302,16 @@ class _MiniResultRowState extends State<MiniResultRow> {
         child: inner,
       );
 
+  // Same chip language as [_MetaChip]: a gold-tint ground carries the deep
+  // gold, so the label never sits as bare gold on white. No hairline.
   Widget _snippetPill(RelicColors c) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: c.accent.withValues(alpha: 0.45)),
+          color: c.tagBg,
+          borderRadius: BorderRadius.circular(Radii.tag),
         ),
         child: Text('snippet',
-            style: RelicTheme.mono(size: 8.5, color: c.accent, letterSpacing: 0.7)),
+            style: RelicTheme.mono(size: 8.5, color: c.tagText, letterSpacing: 0.7)),
       );
 }
 
@@ -1299,19 +1319,20 @@ class _SecretBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = RelicTheme.of(context);
+    // A meta chip like any other: gold-tint ground, deep-gold mono, no
+    // hairline. The old outlined-gold badge is what the 2026 system retired.
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: c.secretBg,
-        borderRadius: BorderRadius.circular(Radii.chip),
-        border: Border.all(color: c.secretBorder, width: 1),
+        color: c.tagBg,
+        borderRadius: BorderRadius.circular(Radii.tag),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(LucideIcons.lock, size: 10, color: c.secret),
+          Icon(LucideIcons.lock, size: 10, color: c.tagText),
           const SizedBox(width: 4),
-          Text('Secret', style: RelicTheme.mono(size: 9, color: c.secret)),
+          Text('Secret', style: RelicTheme.mono(size: 9, color: c.tagText)),
         ],
       ),
     );
@@ -1340,21 +1361,22 @@ class _MetaChip extends StatelessWidget {
     final c = RelicTheme.of(context);
     final icon = tagIconFor(label);
     final onTap = this.onTap;
+    // The system's tag chip: a gold-tint ground with deep-gold mono text and
+    // no border. Gold is never a hairline here — the fill does the work.
     final chip = Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
         decoration: BoxDecoration(
-          color: c.accent.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(Radii.chip),
-          border: Border.all(color: c.accent.withValues(alpha: 0.30), width: 1),
+          color: c.tagBg,
+          borderRadius: BorderRadius.circular(Radii.tag),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             if (icon != null) ...[
-              Icon(icon, size: 10, color: c.accent),
+              Icon(icon, size: 10, color: c.tagText),
               const SizedBox(width: 3),
             ],
-            Text(label, style: RelicTheme.mono(size: 10, color: c.accent)),
+            Text(label, style: RelicTheme.mono(size: 10, color: c.tagText)),
           ],
         ),
       );

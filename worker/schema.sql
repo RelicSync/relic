@@ -72,6 +72,19 @@ CREATE TABLE IF NOT EXISTS relic_meta (
 );
 CREATE INDEX IF NOT EXISTS idx_meta_updated ON relic_meta(account_id, updated_at, uid);
 CREATE INDEX IF NOT EXISTS idx_meta_stream  ON relic_meta(account_id, promoted, created_at);
+-- Covers the account_usage seed scan (SUM(byte_size) + SUM(promoted) by account)
+-- end to end, so it reads index entries only. See migrations/0008.
+CREATE INDEX IF NOT EXISTS idx_meta_usage   ON relic_meta(account_id, byte_size, promoted);
+
+-- Cached aggregates over relic_meta, so the storage/vault caps stop scanning it
+-- on every write (migrations/0008_account_usage.sql has the rationale). A
+-- missing row means "not computed yet", never zero: src/usage.ts recomputes and
+-- seeds it inside the same batch as the write that needed it.
+CREATE TABLE IF NOT EXISTS account_usage (
+    account_id  TEXT PRIMARY KEY,
+    bytes_used  INTEGER NOT NULL,
+    vault_count INTEGER NOT NULL
+);
 
 -- AI records + the work lease (migrations/0007_ai_meta.sql has the rationale).
 -- Kept off relic_meta on purpose: relic pushes must advance updated_at, so AI

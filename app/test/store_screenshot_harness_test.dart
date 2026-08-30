@@ -41,6 +41,9 @@ void main() {
         await loader.load();
       }
 
+      await load('StackSansHeadline', ['assets/fonts/StackSansHeadline.ttf']);
+      await load('StackSansText', ['assets/fonts/StackSansText.ttf']);
+      await load('JetBrainsMono', ['assets/fonts/JetBrainsMono.ttf']);
       await load('IBMPlexSans', ['assets/fonts/IBMPlexSans.ttf']);
       await load('IBMPlexMono', [
         'assets/fonts/IBMPlexMono-Regular.ttf',
@@ -146,6 +149,8 @@ void main() {
     const iphone69 = Size(1320, 2868);
     // 13" iPad portrait: 1032x1376 logical @2x -> 2064x2752 raw.
     const ipad13 = Size(2064, 2752);
+    // Large-Pixel Android (Pixel 9 Pro XL): 448x997 logical @3x -> 1344x2992.
+    const pixelXl = Size(1344, 2992);
 
     Widget popup(RelicColors c) =>
         PopupView(repo: repo, onClose: () {}, onSettings: () {});
@@ -173,6 +178,15 @@ void main() {
       build: popup,
       physical: phone,
     );
+    // Same timeline at the large-Pixel viewport (see the note on the Pixel
+    // search shot below). The website's sync pair pastes this beside the
+    // desktop popup, so both halves show the same vault at honest widths.
+    await renderShot(
+      name: 'popup-light-pixel',
+      c: RelicColors.light,
+      build: popup,
+      physical: pixelXl,
+    );
 
     // 2. Search active (dark). Type into the search field; the popup's 140ms
     // debounce is covered by the settle() pumps.
@@ -181,6 +195,20 @@ void main() {
       c: RelicColors.dark,
       build: popup,
       physical: phone,
+      interact: () async {
+        await tester.enterText(find.byType(TextField).first, 'business');
+        await tester.pump(const Duration(milliseconds: 200));
+      },
+    );
+    // 2b. Same search, light (parchment), at the large-Pixel viewport. The
+    // website's Android slot ships this one: at the S21-class 360 logical
+    // width the selected row's action cluster fades the title mid-word, and
+    // the extra 88 logical points are what let it read whole.
+    await renderShot(
+      name: 'popup-search-light-pixel',
+      c: RelicColors.light,
+      build: popup,
+      physical: pixelXl,
       interact: () async {
         await tester.enterText(find.byType(TextField).first, 'business');
         await tester.pump(const Duration(milliseconds: 200));
@@ -335,6 +363,9 @@ void main() {
         await loader.load();
       }
 
+      await load('StackSansHeadline', ['assets/fonts/StackSansHeadline.ttf']);
+      await load('StackSansText', ['assets/fonts/StackSansText.ttf']);
+      await load('JetBrainsMono', ['assets/fonts/JetBrainsMono.ttf']);
       await load('IBMPlexSans', ['assets/fonts/IBMPlexSans.ttf']);
       await load('IBMPlexMono', [
         'assets/fonts/IBMPlexMono-Regular.ttf',
@@ -490,6 +521,34 @@ void main() {
     await renderShot(
       name: 'desktop-vault-dark',
       c: RelicColors.dark,
+      shotRepo: repo,
+      interact: () async {
+        await tester.tap(find.text('Vault'));
+        await tester.pump(const Duration(milliseconds: 200));
+      },
+    );
+
+    // 6. Light (parchment) counterparts of 2, 3 and 5. Light is the default
+    // world in the 2026 design system, so the website ships the parchment
+    // versions of these three; the dark ones above stay for the ink-band
+    // contexts (og image, dark gallery slots).
+    await renderShot(
+      name: 'desktop-search-light',
+      c: RelicColors.light,
+      shotRepo: repo,
+      interact: () async {
+        await tester.enterText(find.byType(TextField).first, 'office chair');
+        await tester.pump(const Duration(milliseconds: 200));
+      },
+    );
+    await renderShot(
+      name: 'desktop-masked-light',
+      c: RelicColors.light,
+      shotRepo: secretRepo,
+    );
+    await renderShot(
+      name: 'desktop-vault-light',
+      c: RelicColors.light,
       shotRepo: repo,
       interact: () async {
         await tester.tap(find.text('Vault'));

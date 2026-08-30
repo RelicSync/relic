@@ -1,140 +1,145 @@
 import 'package:flutter/widgets.dart';
 
-/// The polished gem brand icon (raster `assets/beautiful-icon.png`). This is the
-/// app's main mark — used for the tray/window, the promote flourish, and brand
-/// logos. The small inline vault-save markers keep [RelicMark] (the flat
-/// diamond) since it reads better at tiny sizes.
+/// The Relic mark: the gold shard from the 2026 design system, transcribed
+/// from `logo-mark.svg` (148×150 viewBox) so it can be painted either with the
+/// brand gradient or as a flat tint. The old faceted gem — and its raster
+/// `assets/beautiful-icon.png` — is retired; there is now one mark at every
+/// size.
+///
+/// The gradient is the one baked into the delivered asset and is not to be
+/// restyled: #FFE24A → #FFCE06 → #F2A93B along (30,20) → (130,140).
+class _Shard {
+  static const double vw = 148;
+  static const double vh = 150;
+
+  /// The mark's aspect ratio, for callers that size by height.
+  static const double aspect = vw / vh;
+
+  static const gradient = LinearGradient(
+    colors: [Color(0xFFFFE24A), Color(0xFFFFCE06), Color(0xFFF2A93B)],
+    stops: [0, 0.5, 1],
+  );
+
+  /// The outline, in viewBox units.
+  static Path path() => Path()
+    ..moveTo(27.4388, 140.916)
+    ..lineTo(132.709, 140.969)
+    ..cubicTo(140.828, 140.973, 146.838, 133.421, 145.013, 125.51)
+    ..lineTo(121.339, 22.9363)
+    ..cubicTo(120.235, 18.1532, 116.458, 14.4442, 111.656, 13.4276)
+    ..lineTo(80.9218, 6.92219)
+    ..cubicTo(76.2452, 5.93228, 71.4106, 7.66958, 68.4338, 11.4098)
+    ..lineTo(52.6439, 31.2487)
+    ..lineTo(20.1246, 72.1069)
+    ..lineTo(4.33476, 91.9458)
+    ..cubicTo(1.35791, 95.686, 0.749738, 100.787, 2.76379, 105.122)
+    ..lineTo(15.9997, 133.613)
+    ..cubicTo(18.0679, 138.064, 22.53, 140.913, 27.4388, 140.916)
+    ..close();
+}
+
+/// The brand mark at its full, gradient-filled self. This is the app's logo —
+/// window header, onboarding, the promote flourish, brand lockups.
+///
+/// [size] is the height; the mark is a touch narrower than it is tall.
 class RelicIcon extends StatelessWidget {
   final double size;
   const RelicIcon({super.key, this.size = 24});
 
   @override
-  Widget build(BuildContext context) => Image.asset(
-        'assets/beautiful-icon.png',
-        width: size,
-        height: size,
-        filterQuality: FilterQuality.medium,
+  Widget build(BuildContext context) => CustomPaint(
+        size: Size(size * _Shard.aspect, size),
+        painter: const _ShardPainter(),
       );
 }
 
-/// The Relic gem mark, drawn from the design's SVG path
-/// `M5 4 H19 L21.5 9 L12 21 L2.5 9 Z` on a 24×24 viewbox.
+/// The same mark, flat-tinted, for the places a logo has to behave like an
+/// icon: inline "kept in the vault" markers, paused and empty states, a mark
+/// sitting on a gold fill. A solid shape is what actually reads at 12px.
 class RelicMark extends StatelessWidget {
   final double size;
   final Color color;
+
+  /// Draw the pause bars through the shard (capture paused).
   final bool paused;
-  final Color? facet; // faint facet line color (defaults to a dark overlay)
-  final bool facets; // draw the faint facet lines (off → a clean solid gem)
-  final bool filled; // false → outline-only gem (e.g. a "not in vault" state)
+
+  /// False → the outline only, e.g. a "not in the vault" state.
+  final bool filled;
 
   const RelicMark({
     super.key,
     this.size = 24,
-    this.color = const Color(0xFFDAA43E),
+    this.color = const Color(0xFFDA9E12),
     this.paused = false,
-    this.facet,
-    this.facets = true,
     this.filled = true,
   });
 
   @override
   Widget build(BuildContext context) => CustomPaint(
-        size: Size.square(size),
-        painter: _GemPainter(
-            color: color,
-            paused: paused,
-            facet: facet,
-            facets: facets,
-            filled: filled),
+        size: Size(size * _Shard.aspect, size),
+        painter: _ShardPainter(color: color, paused: paused, filled: filled),
       );
 }
 
-class _GemPainter extends CustomPainter {
-  final Color color;
+class _ShardPainter extends CustomPainter {
+  /// Null → fill with the brand gradient.
+  final Color? color;
   final bool paused;
-  final Color? facet;
-  final bool facets;
   final bool filled;
-  _GemPainter(
-      {required this.color,
-      required this.paused,
-      this.facet,
-      required this.facets,
-      required this.filled});
 
-  Path _gem(double s) {
-    double x(double v) => v / 24 * s;
-    return Path()
-      ..moveTo(x(5), x(4))
-      ..lineTo(x(19), x(4))
-      ..lineTo(x(21.5), x(9))
-      ..lineTo(x(12), x(21))
-      ..lineTo(x(2.5), x(9))
-      ..close();
-  }
+  const _ShardPainter({this.color, this.paused = false, this.filled = true});
 
   @override
   void paint(Canvas canvas, Size size) {
-    final s = size.width;
-    double u(double v) => v / 24 * s;
+    final s = (size.width / _Shard.vw) < (size.height / _Shard.vh)
+        ? size.width / _Shard.vw
+        : size.height / _Shard.vh;
+
+    final paint = Paint()..isAntiAlias = true;
+    if (color == null) {
+      paint.shader = _Shard.gradient.createShader(
+          Rect.fromPoints(const Offset(30, 20), const Offset(130, 140)));
+    } else {
+      paint.color = color!;
+    }
+
+    canvas.save();
+    canvas.translate(
+        (size.width - _Shard.vw * s) / 2, (size.height - _Shard.vh * s) / 2);
+    canvas.scale(s);
+
+    final path = _Shard.path();
 
     if (paused) {
-      final stroke = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = u(1.3)
-        ..color = color;
-      canvas.drawPath(_gem(s), stroke);
-      final bar = Paint()..color = color;
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-            Rect.fromLTWH(u(9.4), u(9.5), u(1.7), u(5)), Radius.circular(u(0.6))),
-        bar,
-      );
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-            Rect.fromLTWH(u(13), u(9.5), u(1.7), u(5)), Radius.circular(u(0.6))),
-        bar,
-      );
-      return;
-    }
-
-    if (!filled) {
+      // Bars knocked out of the shard's body, over its visual mass (which
+      // sits right of the viewBox centre).
+      canvas.saveLayer(const Rect.fromLTWH(0, 0, _Shard.vw, _Shard.vh), Paint());
+      canvas.drawPath(path, paint..style = PaintingStyle.fill);
+      final knockout = Paint()..blendMode = BlendMode.clear;
+      for (final x in const [60.0, 88.0]) {
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+              Rect.fromLTWH(x, 66, 18, 52), const Radius.circular(6)),
+          knockout,
+        );
+      }
+      canvas.restore();
+    } else if (filled) {
+      canvas.drawPath(path, paint..style = PaintingStyle.fill);
+    } else {
       canvas.drawPath(
-        _gem(s),
-        Paint()
+        path,
+        paint
           ..style = PaintingStyle.stroke
-          ..strokeWidth = u(2.2)
-          ..strokeJoin = StrokeJoin.round
-          ..color = color,
+          ..strokeWidth = (9 / s).clamp(6.0, 14.0)
+          ..strokeJoin = StrokeJoin.round,
       );
-      return;
     }
 
-    canvas.drawPath(_gem(s), Paint()..color = color);
-
-    // faint facets, scaled with size; skip on tiny marks (and when off)
-    if (facets && s >= 24) {
-      final f = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = (u(0.7)).clamp(0.4, 1.2)
-        ..color = facet ?? const Color(0x4D16130E);
-      void line(double ax, double ay, double bx, double by) =>
-          canvas.drawLine(Offset(u(ax), u(ay)), Offset(u(bx), u(by)), f);
-      line(2.5, 9, 21.5, 9);
-      line(9, 4, 8, 9);
-      line(8, 9, 12, 21);
-      line(15, 4, 16, 9);
-      line(16, 9, 12, 21);
-      line(5, 4, 8, 9);
-      line(19, 4, 16, 9);
-    }
+    canvas.restore();
   }
 
   @override
-  bool shouldRepaint(_GemPainter old) =>
-      old.color != color ||
-      old.paused != paused ||
-      old.facet != facet ||
-      old.facets != facets ||
-      old.filled != filled;
+  bool shouldRepaint(_ShardPainter old) =>
+      old.color != color || old.paused != paused || old.filled != filled;
 }
