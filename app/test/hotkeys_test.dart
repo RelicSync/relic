@@ -95,17 +95,32 @@ void main() {
     });
 
     test('chips name the keys the user is actually holding', () {
-      // Control is 'Ctrl' on both platforms — it IS the Control key on macOS,
-      // so the default's label is honest there without a special case.
+      // Control is 'Ctrl' everywhere — it IS the Control key on macOS, so the
+      // default's label is honest there without a special case.
       expect(HotkeyBinding.defaultHistory.chips, ['Ctrl', 'Shift', 'Q']);
       // Meta and Alt are the two that rename. Whichever platform this runs on,
-      // the chip must never claim a key macOS doesn't have.
+      // the chip must never claim a key that host doesn't have.
       const metaAlt = HotkeyBinding(win: true, alt: true, usbUsage: 0x00070014, label: 'Q');
       final chips = metaAlt.chips;
       expect(chips.last, 'Q');
       expect(chips, isNot(contains('Ctrl')));
-      expect(chips, Platform.isMacOS ? contains('Cmd') : contains('Win'));
+      expect(
+          chips,
+          Platform.isMacOS
+              ? contains('Cmd')
+              : Platform.isLinux
+                  ? contains('Super')
+                  : contains('Win'));
       expect(chips, Platform.isMacOS ? contains('Option') : contains('Alt'));
+    });
+
+    test('the meta chip is engraved per platform', () {
+      // The host-independent version of the check above: one physical key, three
+      // names. This is the arm the Windows dev box could never reach.
+      const metaAlt = HotkeyBinding(win: true, alt: true, usbUsage: 0x00070014, label: 'Q');
+      expect(metaAlt.chipsOn(isMacOS: true, isLinux: false), ['Option', 'Cmd', 'Q']);
+      expect(metaAlt.chipsOn(isMacOS: false, isLinux: true), ['Alt', 'Super', 'Q']);
+      expect(metaAlt.chipsOn(isMacOS: false, isLinux: false), ['Alt', 'Win', 'Q']);
     });
 
     testWidgets('the recorder files Command under win and Control under ctrl',

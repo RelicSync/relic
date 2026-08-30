@@ -101,11 +101,26 @@ class HotkeyBinding {
   /// Keycap chips for the settings UI, modifiers first (stable order). The
   /// chord itself is platform-neutral (Ctrl+Shift+Q/W/E is free on macOS too);
   /// only the meta/alt names differ.
-  List<String> get chips => [
+  List<String> get chips =>
+      chipsOn(isMacOS: Platform.isMacOS, isLinux: Platform.isLinux);
+
+  /// [chips] with the platform passed in, so every arm is reachable from a test
+  /// on any host.
+  ///
+  /// The meta key is named three ways, because the physical key is the same one
+  /// and only its engraving changes: Command on macOS, Super on Linux (X11 and
+  /// every desktop name it that, and 'Win' on a machine that has never run
+  /// Windows reads as a different key), and the Windows key on Windows.
+  List<String> chipsOn({required bool isMacOS, required bool isLinux}) => [
         if (ctrl) 'Ctrl',
-        if (alt) Platform.isMacOS ? 'Option' : 'Alt',
+        if (alt) isMacOS ? 'Option' : 'Alt',
         if (shift) 'Shift',
-        if (win) Platform.isMacOS ? 'Cmd' : 'Win',
+        if (win)
+          isMacOS
+              ? 'Cmd'
+              : isLinux
+                  ? 'Super'
+                  : 'Win',
         label,
       ];
 
