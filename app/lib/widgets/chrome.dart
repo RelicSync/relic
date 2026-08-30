@@ -73,7 +73,12 @@ class PopupHeader extends StatelessWidget {
           // mobile), so the two ends of the bar read as the same weight. The
           // wordmark is the site lockup: set at the mark's own height in
           // Headline regular, tracked -2%, a third of a mark away.
-          Flexible(
+          // Expanded, and NOT paired with a Spacer: two flex children would
+          // split the free space between them, leaving the lockup's unused
+          // half stranded after the last button and dragging the whole action
+          // cluster off the right edge. One tight flex child holds all the
+          // slack, so the buttons stay flush right.
+          Expanded(
             child: Builder(builder: (context) {
               final m = RelicTheme.isMobileOf(context) ? 21.0 : 16.0;
               final lockup = Row(mainAxisSize: MainAxisSize.min, children: [
@@ -90,17 +95,23 @@ class PopupHeader extends StatelessWidget {
                   ),
                 ),
               ]);
-              // In a narrow window the buttons opposite win the space; the
-              // lockup scales as a unit rather than overflowing, or having the
-              // wordmark ellipsised away from its mark.
-              return FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
-                child: lockup,
+              // In a narrow window the buttons opposite win the space and the
+              // lockup scales as a unit, rather than overflowing or having the
+              // wordmark ellipsised away from its mark. The height has to be
+              // bounded: a FittedBox with a tight width and an unbounded
+              // height sizes itself to the width's aspect ratio and blows the
+              // header open.
+              return SizedBox(
+                height: m * 1.25,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: lockup,
+                ),
               );
             }),
           ),
-          const Spacer(),
+          const SizedBox(width: 12),
           _SyncChip(
             sync: sync,
             syncing: syncing,
