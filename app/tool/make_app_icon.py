@@ -11,6 +11,8 @@ Outputs, relative to `app/`:
     assets/app_icon.png                     1024, in-app brand raster
     assets/tray_icon.ico                    tray (16/20/24/32/48/64)
     windows/runner/resources/app_icon.ico   Windows app icon (16..256)
+    ios/Runner/Assets.xcassets/AppIcon.appiconset/*.png    iPhone + iPad
+    ios/Runner/Assets.xcassets/LaunchImage.imageset/*.png  splash mark
 
 Usage:  python tool/make_app_icon.py
 
@@ -19,6 +21,7 @@ Requires Pillow. Re-run this rather than hand-editing the outputs.
 
 from __future__ import annotations
 
+import json
 import os
 from PIL import Image, ImageDraw
 
@@ -51,6 +54,11 @@ GRAD_FROM, GRAD_TO = (30.0, 20.0), (130.0, 140.0)
 TILE = (0xF7, 0xF2, 0xE7)  # cream, the app's own surface
 TILE_RADIUS = 0.20  # fraction of the tile edge
 MARK_HEIGHT = 0.60  # fraction of the tile edge
+
+# The iOS splash mark: no tile behind it, it sits straight on the
+# LaunchBackground colour, which is RelicColors.base for the active theme.
+LAUNCH_POINTS = 116  # the size LaunchScreen.storyboard declares
+LAUNCH_MARK_HEIGHT = 0.70  # fraction of the launch canvas
 
 
 def flatten(steps: int = 48) -> list[tuple[float, float]]:
@@ -111,21 +119,80 @@ def render_mark(px: int) -> Image.Image:
     return out.resize((w, h), Image.LANCZOS)
 
 
-def render_icon(size: int) -> Image.Image:
-    """The full icon: the shard centred on a rounded cream tile."""
+def render_icon(size: int, radius: float = TILE_RADIUS) -> Image.Image:
+    """The full icon: the shard centred on a cream tile.
+
+    `radius` is the corner radius as a fraction of the edge; 0 leaves the tile
+    square and full-bleed.
+    """
     ss = 4
     S = size * ss
 
     tile = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     corner = ImageDraw.Draw(tile)
     corner.rounded_rectangle([0, 0, S - 1, S - 1],
-                            radius=int(S * TILE_RADIUS),
+                            radius=int(S * radius),
                             fill=TILE + (255,))
     tile = tile.resize((size, size), Image.LANCZOS)
 
     mark = render_mark(max(1, round(size * MARK_HEIGHT)))
     tile.alpha_composite(mark, ((size - mark.width) // 2, (size - mark.height) // 2))
     return tile
+
+
+def render_ios_icon(size: int) -> Image.Image:
+    """The icon as iOS wants it: full-bleed cream, square corners, no alpha.
+
+    iOS masks the corners itself, so a tile rounded here would show a second
+    corner inside that mask; and App Store submission rejects any icon that
+    carries an alpha channel, so the (fully opaque) tile is flattened to RGB.
+    """
+    return render_icon(size, radius=0.0).convert("RGB")
+
+
+def render_launch_mark(size: int) -> Image.Image:
+    """The splash shard, centred on a transparent `size` square."""
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    mark = render_mark(max(1, round(size * LAUNCH_MARK_HEIGHT)))
+    canvas.alpha_composite(mark, ((size - mark.width) // 2,
+                                  (size - mark.height) // 2))
+    return canvas
+
+
+def declared(catalog: str) -> list[dict]:
+    """The `images` an asset catalogue folder declares, in catalogue order.
+
+    Generating from Contents.json rather than a list kept here is what stops
+    the PNGs and the catalogue drifting apart.
+    """
+    with open(os.path.join(catalog, "Contents.json"), encoding="utf-8") as f:
+        return json.load(f)["images"]
+
+
+def write_ios_icons(app: str) -> None:
+    """Every AppIcon size the iOS catalogue asks for, rendered at that size."""
+    catalog = os.path.join(app, "ios", "Runner", "Assets.xcassets",
+                           "AppIcon.appiconset")
+
+    sizes: dict[str, int] = {}
+    for image in declared(catalog):
+        points = float(image["size"].split("x", 1)[0])
+        sizes[image["filename"]] = round(points * float(image["scale"].rstrip("x")))
+
+    for name, px in sorted(sizes.items(), key=lambda item: item[1]):
+        render_ios_icon(px).save(os.path.join(catalog, name))
+        print(f"ios AppIcon.appiconset/{name}", f"{px}x{px}")
+
+
+def write_ios_launch_image(app: str) -> None:
+    """The pre-Flutter splash mark, at each scale the catalogue declares."""
+    catalog = os.path.join(app, "ios", "Runner", "Assets.xcassets",
+                           "LaunchImage.imageset")
+
+    for image in declared(catalog):
+        px = LAUNCH_POINTS * int(image["scale"].rstrip("x"))
+        render_launch_mark(px).save(os.path.join(catalog, image["filename"]))
+        print(f"ios LaunchImage.imageset/{image['filename']}", f"{px}x{px}")
 
 
 def main() -> None:
@@ -149,6 +216,9 @@ def main() -> None:
     render_icon(256).save(out("windows", "runner", "resources", "app_icon.ico"),
                           sizes=[(s, s) for s in win])
     print("windows/runner/resources/app_icon.ico", win)
+
+    write_ios_icons(app)
+    write_ios_launch_image(app)
 
 
 if __name__ == "__main__":
