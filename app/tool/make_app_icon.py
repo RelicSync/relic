@@ -13,6 +13,7 @@ Outputs, relative to `app/`:
     windows/runner/resources/app_icon.ico   Windows app icon (16..256)
     ios/Runner/Assets.xcassets/AppIcon.appiconset/*.png    iPhone + iPad
     ios/Runner/Assets.xcassets/LaunchImage.imageset/*.png  splash mark
+    macos/Runner/Assets.xcassets/AppIcon.appiconset/*.png  Dock + Finder
 
 Usage:  python tool/make_app_icon.py
 
@@ -60,6 +61,15 @@ MARK_HEIGHT = 0.60  # fraction of the tile edge
 LAUNCH_POINTS = 116  # the size LaunchScreen.storyboard declares
 LAUNCH_MARK_HEIGHT = 0.70  # fraction of the launch canvas
 
+# The macOS Dock icon: the bare shard, no tile behind it at all. macOS never
+# masks an app icon, so nothing here is full-bleed either: Apple's own icons
+# sit inside a transparent margin, and art that ignores that grid renders
+# oversized next to every native app in the Dock. This canvas -> content square
+# table was measured off a stock Apple icon (the plain squircle on Automator's
+# application stub) rather than guessed: Apple does NOT scale the margin
+# proportionally, small sizes get relatively more padding.
+MACOS_GRID = {16: 10, 32: 24, 64: 50, 128: 102, 256: 204, 512: 410, 1024: 824}
+
 
 def flatten(steps: int = 48) -> list[tuple[float, float]]:
     """The outline as a polygon, cubics flattened to line segments."""
@@ -81,6 +91,18 @@ def flatten(steps: int = 48) -> list[tuple[float, float]]:
                 pts.append((x, y))
             cur = p3
     return pts
+
+
+def bounds() -> tuple[float, float, float, float]:
+    """The mark's own ink box in viewBox units, which is not the viewBox.
+
+    The shard leaves a little slack on every side of its 148x150 box, so
+    fitting it to a target square means fitting this, not the canvas.
+    """
+    pts = flatten()
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    return min(xs), min(ys), max(xs), max(ys)
 
 
 def sample(t: float) -> tuple[int, int, int]:
@@ -150,6 +172,29 @@ def render_ios_icon(size: int) -> Image.Image:
     return render_icon(size, radius=0.0).convert("RGB")
 
 
+def render_macos_icon(size: int) -> Image.Image:
+    """The icon as macOS wants it: the bare shard on full transparency.
+
+    The opposite of `render_ios_icon` on both counts. There is no tile: the
+    Dock icon is the mark itself, so everything outside the shard stays
+    transparent and the alpha channel is the point rather than a rejection
+    risk. And nothing is full-bleed: the shard is fitted to the content square
+    `MACOS_GRID` gives for this canvas, centred on its own ink rather than on
+    the viewBox, so it carries the same optical margin as its Dock neighbours.
+    """
+    box = MACOS_GRID[size]
+    x0, y0, x1, y1 = bounds()
+    scale = box / max(x1 - x0, y1 - y0)
+
+    mark = render_mark(max(1, round(VH * scale)))
+    ink = mark.getchannel("A").getbbox()  # the ink box again, after rounding
+
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    canvas.alpha_composite(mark, (round((size - ink[0] - ink[2]) / 2),
+                                  round((size - ink[1] - ink[3]) / 2)))
+    return canvas
+
+
 def render_launch_mark(size: int) -> Image.Image:
     """The splash shard, centred on a transparent `size` square."""
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
@@ -195,6 +240,26 @@ def write_ios_launch_image(app: str) -> None:
         print(f"ios LaunchImage.imageset/{image['filename']}", f"{px}x{px}")
 
 
+def write_macos_icons(app: str) -> None:
+    """Every AppIcon size the macOS catalogue asks for, on Apple's grid.
+
+    The catalogue names seven files across ten entries (each size is declared
+    at 1x and at the 2x that reuses the next file up), so rendering per unique
+    pixel size is what keeps the set to seven PNGs.
+    """
+    catalog = os.path.join(app, "macos", "Runner", "Assets.xcassets",
+                           "AppIcon.appiconset")
+
+    sizes: dict[str, int] = {}
+    for image in declared(catalog):
+        points = float(image["size"].split("x", 1)[0])
+        sizes[image["filename"]] = round(points * float(image["scale"].rstrip("x")))
+
+    for name, px in sorted(sizes.items(), key=lambda item: item[1]):
+        render_macos_icon(px).save(os.path.join(catalog, name))
+        print(f"macos AppIcon.appiconset/{name}", f"{px}x{px}")
+
+
 def main() -> None:
     here = os.path.dirname(os.path.abspath(__file__))
     app = os.path.dirname(here)
@@ -219,6 +284,7 @@ def main() -> None:
 
     write_ios_icons(app)
     write_ios_launch_image(app)
+    write_macos_icons(app)
 
 
 if __name__ == "__main__":
