@@ -373,10 +373,12 @@ void main() {
       required String name,
       required RelicColors c,
       required RelicRepo shotRepo,
+      // PopupSize.standard (520x680) at 2x. Overridden only by the App Store
+      // cross-device scene below, which wants the DEFAULT footprint instead.
+      Size physical = const Size(1040, 1360),
       Future<void> Function()? interact,
     }) async {
-      // PopupSize.standard (520x680) at 2x.
-      tester.view.physicalSize = const Size(1040, 1360);
+      tester.view.physicalSize = physical;
       tester.view.devicePixelRatio = 2.0;
 
       await tester.pumpWidget(
@@ -501,6 +503,18 @@ void main() {
         await tester.tap(find.text('Vault'));
         await tester.pump(const Duration(milliseconds: 200));
       },
+    );
+
+    // 6. App Store cross-device comp (marketing/appstore-listing/iphone-69):
+    // the desktop popup at PopupSize.small (440x540) — the app's DEFAULT
+    // footprint — at 2x -> 880x1080. A compact real window is what floats
+    // behind the iPhone in the sync comp; nothing about the size is invented.
+    // Rendered last so the receipt thumbnail is long since decoded.
+    await renderShot(
+      name: 'desktop-sync-dark',
+      c: RelicColors.dark,
+      shotRepo: repo,
+      physical: const Size(880, 1080),
     );
 
     debugDisableShadows = true;
