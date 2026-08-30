@@ -2,6 +2,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
@@ -151,6 +152,60 @@ class _HoverableState extends State<Hoverable> {
   }
 }
 
+/// Keyboard access for the ghost control set.
+///
+/// [GhostButton] is a GestureDetector, not a Material button, so on its own it
+/// is invisible to Tab and deaf to Space/Enter. That was survivable while these
+/// were chrome affordances sitting next to real Material buttons; once the
+/// restyle replaced every FilledButton/TextButton/OutlinedButton in onboarding
+/// and the dialogs with GhostButton, it would have made whole screens
+/// keyboard-unreachable. This puts focus traversal and activation back, once,
+/// for every ghost control.
+class _FocusableTap extends StatefulWidget {
+  final bool enabled;
+  final VoidCallback? onTap;
+  final Widget Function(bool focused) builder;
+  const _FocusableTap({
+    required this.enabled,
+    required this.onTap,
+    required this.builder,
+  });
+
+  @override
+  State<_FocusableTap> createState() => _FocusableTapState();
+}
+
+class _FocusableTapState extends State<_FocusableTap> {
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.enabled) return widget.builder(false);
+    return FocusableActionDetector(
+      // Only paint the ring for keyboard focus. Clicking a button focuses it
+      // too, and a ring blooming under the cursor on every click reads as a
+      // bug.
+      onShowFocusHighlight: (v) {
+        if (v != _focused) setState(() => _focused = v);
+      },
+      shortcuts: const <ShortcutActivator, Intent>{
+        SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+        SingleActivator(LogicalKeyboardKey.numpadEnter): ActivateIntent(),
+        SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+      },
+      actions: <Type, Action<Intent>>{
+        ActivateIntent: CallbackAction<ActivateIntent>(
+          onInvoke: (_) {
+            widget.onTap?.call();
+            return null;
+          },
+        ),
+      },
+      child: widget.builder(_focused),
+    );
+  }
+}
+
 enum GhostStyle {
   /// Borderless, transparent at rest (subtle surface fill on touch devices),
   /// [RelicColors.ghostHover] on hover. The default chrome button.
@@ -209,7 +264,10 @@ class GhostButton extends StatelessWidget {
     final s = mobile && label == null ? (size * 1.4).clamp(40.0, 64.0) : size;
     final disabled = onTap == null;
 
-    return Hoverable(
+    return _FocusableTap(
+      enabled: !disabled,
+      onTap: onTap,
+      builder: (focused) => Hoverable(
       onTap: onTap,
       swallowTap: swallowTap,
       builder: (context, hovered) {
@@ -221,7 +279,10 @@ class GhostButton extends StatelessWidget {
               c.dangerText,
             ),
           GhostStyle.dangerTint => (c.dangerBg, c.dangerText),
-          GhostStyle.active => (c.selected, c.accent),
+          // Toggled-on is the system's gold-tint chip: gold as a label always
+          // sits on `tagBg`, never bare. `c.selected` is pure white in light,
+          // so the old accent-on-selected pair put bright gold on white.
+          GhostStyle.active => (c.tagBg, c.accentMuted),
           GhostStyle.ghost => (
               hovered
                   ? c.ghostHover
@@ -294,6 +355,19 @@ class GhostButton extends StatelessWidget {
           // which would stretch labeled buttons to full width. Icon-only
           // squares have a fixed width, so alignment is safe there; labeled
           // buttons hug their label via a widthFactor Center instead.
+          foregroundDecoration: focused
+              ? BoxDecoration(
+                  borderRadius: BorderRadius.circular(
+                    radius ?? (label == null ? Radii.input : Radii.pill),
+                  ),
+                  border: Border.all(
+                    // On the gold gradient the ring has to read against gold,
+                    // everywhere else against the surface behind it.
+                    color: style == GhostStyle.filled ? c.onAccent : c.accent,
+                    width: 2,
+                  ),
+                )
+              : null,
           alignment: label == null ? Alignment.center : null,
           child: label == null ? inner : Center(widthFactor: 1, child: inner),
         );
@@ -312,6 +386,7 @@ class GhostButton extends StatelessWidget {
         }
         return btn;
       },
+      ),
     );
   }
 }

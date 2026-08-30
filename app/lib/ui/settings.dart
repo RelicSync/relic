@@ -7,7 +7,7 @@ import 'package:flutter/material.dart'
     show
         TextField,
         InputDecoration,
-        InputBorder,
+        OutlineInputBorder,
         MaterialPageRoute,
         AlertDialog,
         TextButton,
@@ -41,6 +41,7 @@ import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
 import 'connect_dialog.dart';
 import '../widgets/controls.dart';
+import '../widgets/fields.dart';
 import '../widgets/passphrase_field.dart';
 import '../widgets/relic_mark.dart';
 
@@ -105,9 +106,9 @@ class _SettingsViewState extends State<SettingsView>
   static const _sections = [
     ('General', LucideIcons.slidersHorizontal),
     ('Capture', LucideIcons.clipboard),
-    ('Search & AI', LucideIcons.sparkles),
-    ('Vault & storage', LucideIcons.vault),
-    ('Sync & account', LucideIcons.userRound),
+    ('Search and AI', LucideIcons.sparkles),
+    ('Vault and storage', LucideIcons.vault),
+    ('Sync and account', LucideIcons.userRound),
     ('About', LucideIcons.info),
   ];
 
@@ -325,21 +326,19 @@ class _SettingsViewState extends State<SettingsView>
           color: c.base,
           borderRadius: BorderRadius.circular(Radii.popup),
           border: Border.all(color: c.border),
-          boxShadow: [
-            BoxShadow(
-              color: c.shadowStrong,
-              blurRadius: 80,
-              spreadRadius: -24,
-              offset: const Offset(0, 40),
-            ),
-          ],
+          boxShadow: Shadows.window(c),
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(
           children: [
             // header
             Container(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              padding: const EdgeInsets.fromLTRB(
+                Insets.lg,
+                Insets.md,
+                Insets.lg,
+                Insets.md,
+              ),
               decoration: BoxDecoration(
                 border: Border(bottom: BorderSide(color: c.border)),
               ),
@@ -347,21 +346,15 @@ class _SettingsViewState extends State<SettingsView>
                 children: [
                   const RelicIcon(size: 16),
                   const SizedBox(width: 9),
-                  Text(
-                    'RELIC',
-                    style: RelicTheme.mono(
-                      size: 11,
-                      weight: FontWeight.w600,
-                      color: c.textMuted,
-                      letterSpacing: 2,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
+                  // The lockup's mark + kicker, then the window's own name in
+                  // Headline — the same "mark · title" bar the popup uses.
+                  Text('RELIC', style: RelicTheme.kicker(c.textFaint, size: 11)),
+                  const SizedBox(width: Insets.sm),
                   Text(
                     '· Settings',
-                    style: RelicTheme.sans(
-                      size: 13,
-                      weight: FontWeight.w500,
+                    style: RelicTheme.headline(
+                      size: 15,
+                      weight: FontWeight.w600,
                       color: c.text,
                     ),
                   ),
@@ -383,10 +376,14 @@ class _SettingsViewState extends State<SettingsView>
                   Container(
                     width: 204,
                     decoration: BoxDecoration(
-                      color: c.isDark ? c.footer : c.panel,
+                      // The deepest strip in both palettes, so the selected
+                      // item can be a white card sitting on top of it (light
+                      // used to paint the sidebar white, which left the
+                      // selected row invisible against its own ground).
+                      color: c.footer,
                       border: Border(right: BorderSide(color: c.border)),
                     ),
-                    padding: const EdgeInsets.all(10),
+                    padding: const EdgeInsets.all(Insets.md),
                     child: Column(
                       children: [
                         for (var i = 0; i < _sections.length; i++)
@@ -397,7 +394,12 @@ class _SettingsViewState extends State<SettingsView>
                   // pane
                   Expanded(
                     child: SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(22, 8, 22, 20),
+                      padding: const EdgeInsets.fromLTRB(
+                        Insets.xxl,
+                        Insets.sm,
+                        Insets.xxl,
+                        Insets.xxl,
+                      ),
                       child: _pane(c),
                     ),
                   ),
@@ -415,13 +417,25 @@ class _SettingsViewState extends State<SettingsView>
     return Hoverable(
       onTap: () => setState(() => _section = i),
       builder: (context, hovered) => Container(
-        margin: const EdgeInsets.only(bottom: 2),
-        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
+        margin: const EdgeInsets.only(bottom: Insets.xs),
+        padding: const EdgeInsets.symmetric(
+          horizontal: Insets.md,
+          vertical: Insets.sm,
+        ),
         decoration: BoxDecoration(
           color: on
-              ? c.selected
+              ? c.selectedCard
               : (hovered ? c.surfaceHover : const Color(0x00000000)),
-          borderRadius: BorderRadius.circular(7),
+          borderRadius: BorderRadius.circular(Radii.tile),
+          // The selected section is the row language's floating card: white
+          // ground, gold hairline, warm shadow. Unselected items carry the
+          // same hairline at zero alpha so switching never resizes the item.
+          border: Border.all(
+            color: on
+                ? c.selectedBorder
+                : c.selectedBorder.withValues(alpha: 0),
+          ),
+          boxShadow: on ? Shadows.selected(c) : null,
         ),
         child: Row(
           children: [
@@ -452,7 +466,7 @@ class _SettingsViewState extends State<SettingsView>
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _sectionLabel(c, 'General'),
+            _paneTitle(c, 'General'),
             _toggleRow(
               c,
               'Launch Relic at login',
@@ -526,7 +540,7 @@ class _SettingsViewState extends State<SettingsView>
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _sectionLabel(c, 'Capture'),
+            _paneTitle(c, 'Capture'),
             _toggleRow(
               c,
               'Capture text',
@@ -550,10 +564,10 @@ class _SettingsViewState extends State<SettingsView>
             ),
             _toggleRow(
               c,
-              'Detect & mask secrets',
+              'Detect and mask secrets',
               repo.maskSecrets,
               repo.setMaskSecrets,
-              sub: 'API keys, tokens & card numbers are masked in the list.',
+              sub: 'API keys, tokens and card numbers are masked in the list.',
               recommended: true,
             ),
             _toggleRow(
@@ -581,7 +595,7 @@ class _SettingsViewState extends State<SettingsView>
       case 2:
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [_sectionLabel(c, 'Search & AI'), _mlSection(c)],
+          children: [_paneTitle(c, 'Search and AI'), _mlSection(c)],
         );
       case 3:
         return _storagePane(c);
@@ -606,7 +620,7 @@ class _SettingsViewState extends State<SettingsView>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _sectionLabel(c, 'Sync & account'),
+        _paneTitle(c, 'Sync and account'),
         _row(
           c,
           Row(
@@ -876,7 +890,9 @@ class _SettingsViewState extends State<SettingsView>
     final payload = SelfHostLink.build(url);
     showDialog<void>(
       context: context,
-      barrierColor: const Color(0x99000000),
+      // Both palettes' shadowStrong is black-based, so this lands on the same
+      // ~60% scrim in light and dark without inventing a colour.
+      barrierColor: c.shadowStrong.withValues(alpha: 0.6),
       builder: (dctx) => RelicTheme(
         colors: c,
         child: Center(
@@ -884,51 +900,47 @@ class _SettingsViewState extends State<SettingsView>
             width: 360,
             child: Container(
               decoration: BoxDecoration(
-                color: c.base,
-                borderRadius: BorderRadius.circular(Radii.popup),
+                color: c.panel,
+                borderRadius: BorderRadius.circular(Radii.cardLarge),
                 border: Border.all(color: c.border),
+                boxShadow: Shadows.window(c),
               ),
-              padding: const EdgeInsets.fromLTRB(28, 26, 28, 22),
+              padding: const EdgeInsets.fromLTRB(
+                Insets.xxl,
+                Insets.xxl,
+                Insets.xxl,
+                Insets.xl,
+              ),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
                 Text('Add a device',
-                    style: RelicTheme.sans(
-                        size: 18, weight: FontWeight.w600, color: c.text)),
-                const SizedBox(height: 6),
+                    style: RelicTheme.headline(size: 20, color: c.text)),
+                const SizedBox(height: Insets.sm),
                 Text(
                   'Scan this in the Relic app on your other device (Add this device → Use your own server → Scan QR), then enter the same passphrase.',
                   textAlign: TextAlign.center,
                   style: RelicTheme.sans(size: 12.5, color: c.textMuted, height: 1.45),
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: Insets.xl),
                 Container(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(Insets.lg),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFFFFFF),
-                    borderRadius: BorderRadius.circular(16),
+                    // A QR has to sit on a near-white ground in BOTH palettes
+                    // or a scanner can't read it, so this one card keeps the
+                    // light treatment on purpose.
+                    color: c.toggleKnob,
+                    borderRadius: BorderRadius.circular(Radii.card),
                   ),
                   child: QrImageView(data: payload, size: 220, version: QrVersions.auto),
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: Insets.md),
                 Text(url,
                     textAlign: TextAlign.center,
                     style: RelicTheme.mono(size: 12, color: c.textSecondary)),
-                const SizedBox(height: 18),
-                GestureDetector(
+                const SizedBox(height: Insets.xl),
+                GhostButton(
+                  label: 'Done',
+                  size: 32,
                   onTap: () => Navigator.of(dctx).pop(),
-                  child: MouseRegion(
-                    cursor: SystemMouseCursors.click,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: c.surface,
-                        borderRadius: BorderRadius.circular(Radii.input),
-                        border: Border.all(color: c.border),
-                      ),
-                      child: Text('Done',
-                          style: RelicTheme.sans(
-                              size: 13, weight: FontWeight.w500, color: c.textSecondary)),
-                    ),
-                  ),
                 ),
               ]),
             ),
@@ -947,7 +959,7 @@ class _SettingsViewState extends State<SettingsView>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _sectionLabel(c, 'Vault & storage'),
+        _paneTitle(c, 'Vault and storage'),
         if (acct != null) ...[
           _storageUsage(c, acct),
           _row(
@@ -1000,8 +1012,8 @@ class _SettingsViewState extends State<SettingsView>
                     const SizedBox(height: 2),
                     Text(
                       repo.canRedownload
-                          ? 'Downloaded thumbnails & blobs on this device. Clearing only removes items already synced. They re-download on demand.'
-                          : 'Downloaded thumbnails & blobs on this device.',
+                          ? 'Downloaded thumbnails and blobs on this device. Clearing only removes items already synced. They re-download on demand.'
+                          : 'Downloaded thumbnails and blobs on this device.',
                       style: RelicTheme.sans(
                         size: 11.5,
                         color: c.textMuted,
@@ -1111,7 +1123,7 @@ class _SettingsViewState extends State<SettingsView>
                     ? LucideIcons.loaderCircle
                     : LucideIcons.circleCheck,
                 size: 14,
-                color: c.successDim,
+                color: _storageBusy ? c.textFaint : c.success,
               ),
               const SizedBox(width: 8),
               Text(
@@ -1152,7 +1164,7 @@ class _SettingsViewState extends State<SettingsView>
             ],
           ),
           if (metered) ...[
-            const SizedBox(height: 9),
+            const SizedBox(height: Insets.md),
             Stack(
               children: [
                 Container(
@@ -1167,7 +1179,10 @@ class _SettingsViewState extends State<SettingsView>
                   child: Container(
                     height: 6,
                     decoration: BoxDecoration(
-                      color: frac > 0.9 ? c.warning : c.accent,
+                      // Gold is a fill colour, so the healthy bar takes the
+                      // system gradient; a near-full one turns flat warning.
+                      color: frac > 0.9 ? c.warning : null,
+                      gradient: frac > 0.9 ? null : Gradients.gold,
                       borderRadius: BorderRadius.circular(Radii.pill),
                     ),
                   ),
@@ -1246,10 +1261,10 @@ class _SettingsViewState extends State<SettingsView>
           if (_exportConfirming && _exportDir != null) ...[
             const SizedBox(height: 12),
             Container(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(Insets.lg),
               decoration: BoxDecoration(
-                color: c.surface,
-                borderRadius: BorderRadius.circular(Radii.input),
+                color: c.panel,
+                borderRadius: BorderRadius.circular(Radii.card),
                 border: Border.all(color: c.border),
               ),
               child: Column(
@@ -1295,7 +1310,7 @@ class _SettingsViewState extends State<SettingsView>
                       ? LucideIcons.loaderCircle
                       : LucideIcons.circleCheck,
                   size: 14,
-                  color: c.successDim,
+                  color: _exportBusy ? c.textFaint : c.success,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -1400,10 +1415,10 @@ class _SettingsViewState extends State<SettingsView>
           if (_restoreConfirming && _restoreFile != null) ...[
             const SizedBox(height: 12),
             Container(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(Insets.lg),
               decoration: BoxDecoration(
-                color: c.surface,
-                borderRadius: BorderRadius.circular(Radii.input),
+                color: c.panel,
+                borderRadius: BorderRadius.circular(Radii.card),
                 border: Border.all(color: c.border),
               ),
               child: Column(
@@ -1426,13 +1441,17 @@ class _SettingsViewState extends State<SettingsView>
                           decoration: InputDecoration(
                             isDense: true,
                             hintText: 'Backup passphrase',
-                            hintStyle:
-                                RelicTheme.sans(size: 12.5, color: c.textMuted),
+                            hintStyle: RelicTheme.sans(
+                                size: 12.5, color: c.textFaintest),
                             filled: true,
                             fillColor: c.inset,
-                            border: InputBorder.none,
+                            border: OutlineInputBorder(
+                              borderRadius:
+                                  BorderRadius.circular(Radii.input),
+                              borderSide: BorderSide.none,
+                            ),
                             contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 10),
+                                horizontal: Insets.md, vertical: Insets.md),
                           ),
                         ),
                       ),
@@ -1457,7 +1476,7 @@ class _SettingsViewState extends State<SettingsView>
                       ? LucideIcons.loaderCircle
                       : LucideIcons.circleCheck,
                   size: 14,
-                  color: c.successDim,
+                  color: _restoreBusy ? c.textFaint : c.success,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -1471,10 +1490,10 @@ class _SettingsViewState extends State<SettingsView>
           if (_importConfirming && _importDir != null) ...[
             const SizedBox(height: 12),
             Container(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(Insets.lg),
               decoration: BoxDecoration(
-                color: c.surface,
-                borderRadius: BorderRadius.circular(Radii.input),
+                color: c.panel,
+                borderRadius: BorderRadius.circular(Radii.card),
                 border: Border.all(color: c.border),
               ),
               child: Row(
@@ -1502,7 +1521,7 @@ class _SettingsViewState extends State<SettingsView>
                       ? LucideIcons.loaderCircle
                       : LucideIcons.circleCheck,
                   size: 14,
-                  color: c.successDim,
+                  color: _importBusy ? c.textFaint : c.success,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -1742,12 +1761,20 @@ class _SettingsViewState extends State<SettingsView>
 
   /// Small accent text action, matching the "Clear learned ranking" pattern.
   Widget _accentLink(RelicColors c, String label, VoidCallback onTap) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Text(label,
-            style: RelicTheme.sans(size: 11.5, color: c.accent)),
+    return Hoverable(
+      onTap: onTap,
+      builder: (context, hovered) => Text(
+        label,
+        // Gold as text is the deep gold, never the fill gold; the hover cue
+        // is an underline rather than a second, brighter gold.
+        style: RelicTheme.sans(
+          size: 11.5,
+          weight: FontWeight.w500,
+          color: c.accentMuted,
+        ).copyWith(
+          decoration: hovered ? TextDecoration.underline : null,
+          decorationColor: c.accentMuted,
+        ),
       ),
     );
   }
@@ -1777,11 +1804,11 @@ class _SettingsViewState extends State<SettingsView>
   Widget _backupSetupPanel(RelicColors c) {
     final changing = widget.repo.backupConfigured;
     return Container(
-      margin: const EdgeInsets.only(top: 12),
-      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(top: Insets.md),
+      padding: const EdgeInsets.all(Insets.lg),
       decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(Radii.input),
+        color: c.panel,
+        borderRadius: BorderRadius.circular(Radii.card),
         border: Border.all(color: c.border),
       ),
       child: Column(
@@ -1821,12 +1848,15 @@ class _SettingsViewState extends State<SettingsView>
             decoration: InputDecoration(
               isDense: true,
               hintText: 'Repeat the backup passphrase',
-              hintStyle: RelicTheme.sans(size: 12.5, color: c.textMuted),
+              hintStyle: RelicTheme.sans(size: 12.5, color: c.textFaintest),
               filled: true,
               fillColor: c.inset,
-              border: InputBorder.none,
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(Radii.input),
+                borderSide: BorderSide.none,
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                  horizontal: Insets.md, vertical: Insets.md),
             ),
           ),
           const SizedBox(height: 10),
@@ -1901,11 +1931,11 @@ class _SettingsViewState extends State<SettingsView>
   /// new user profile): re-enter the passphrase to resume scheduled backups.
   Widget _backupReauthPanel(RelicColors c) {
     return Container(
-      margin: const EdgeInsets.only(top: 8),
-      padding: const EdgeInsets.all(10),
+      margin: const EdgeInsets.only(top: Insets.sm),
+      padding: const EdgeInsets.all(Insets.md),
       decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(Radii.input),
+        color: c.panel,
+        borderRadius: BorderRadius.circular(Radii.card),
         border: Border.all(color: c.border),
       ),
       child: Row(
@@ -1920,12 +1950,15 @@ class _SettingsViewState extends State<SettingsView>
               decoration: InputDecoration(
                 isDense: true,
                 hintText: 'Backup passphrase',
-                hintStyle: RelicTheme.sans(size: 12.5, color: c.textMuted),
+                hintStyle: RelicTheme.sans(size: 12.5, color: c.textFaintest),
                 filled: true,
                 fillColor: c.inset,
-                border: InputBorder.none,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(Radii.input),
+                  borderSide: BorderSide.none,
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: Insets.md, vertical: Insets.md),
               ),
             ),
           ),
@@ -2030,7 +2063,7 @@ class _SettingsViewState extends State<SettingsView>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _sectionLabel(c, 'About'),
+        _paneTitle(c, 'About'),
         const SizedBox(height: 6),
         Row(
           children: [
@@ -2041,11 +2074,7 @@ class _SettingsViewState extends State<SettingsView>
               children: [
                 Text(
                   'Relic',
-                  style: RelicTheme.sans(
-                    size: 18,
-                    weight: FontWeight.w600,
-                    color: c.text,
-                  ),
+                  style: RelicTheme.headline(size: 18, color: c.text),
                 ),
                 const SizedBox(height: 2),
                 Text(
@@ -2103,7 +2132,7 @@ class _SettingsViewState extends State<SettingsView>
                   style: RelicTheme.sans(
                     size: 12,
                     color: _updateAvailable != null
-                        ? c.accent
+                        ? c.accentMuted
                         : _updateFailed
                             ? c.warning
                             : c.textMuted,
@@ -2489,8 +2518,7 @@ class _SettingsViewState extends State<SettingsView>
             side: BorderSide(color: c.borderStrong),
           ),
           title: Text('Delete ${_fmtCount(n)} history items?',
-              style: RelicTheme.sans(
-                  size: 17, weight: FontWeight.w600, color: c.text)),
+              style: RelicTheme.headline(size: 18, color: c.text)),
           content: Text(
             'Everything not saved to your Vault is deleted${widget.repo.syncEnabled ? ' from this device and, as it syncs, from your other devices' : ''}. This can\'t be undone.',
             style: RelicTheme.sans(
@@ -2506,7 +2534,7 @@ class _SettingsViewState extends State<SettingsView>
               onPressed: () => Navigator.pop(dctx, true),
               child: Text('Delete history',
                   style: RelicTheme.sans(
-                      size: 13.5, weight: FontWeight.w600, color: c.danger)),
+                      size: 13.5, weight: FontWeight.w600, color: c.dangerText)),
             ),
           ],
         ),
@@ -2540,8 +2568,7 @@ class _SettingsViewState extends State<SettingsView>
             side: BorderSide(color: c.borderStrong),
           ),
           title: Text('Disconnect this computer?',
-              style:
-                  RelicTheme.sans(size: 17, weight: FontWeight.w600, color: c.text)),
+              style: RelicTheme.headline(size: 18, color: c.text)),
           content: Text(
             'Sync stops and the vault key is removed from this computer. To reconnect you will need your vault passphrase or your recovery kit. Your local history stays on this computer.',
             style:
@@ -2557,7 +2584,7 @@ class _SettingsViewState extends State<SettingsView>
               onPressed: () => Navigator.pop(dctx, true),
               child: Text('Disconnect',
                   style: RelicTheme.sans(
-                      size: 13.5, weight: FontWeight.w600, color: c.danger)),
+                      size: 13.5, weight: FontWeight.w600, color: c.dangerText)),
             ),
           ],
         ),
@@ -2583,8 +2610,7 @@ class _SettingsViewState extends State<SettingsView>
             side: BorderSide(color: c.borderStrong),
           ),
           title: Text('Switch account?',
-              style: RelicTheme.sans(
-                  size: 17, weight: FontWeight.w600, color: c.text)),
+              style: RelicTheme.headline(size: 18, color: c.text)),
           content: Text(
             'Sync stops and the vault key is removed from this computer, then you sign in to another account. To reconnect this one you will need its vault passphrase or recovery kit. Your local history stays on this computer.',
             style: RelicTheme.sans(size: 13.5, color: c.textSecondary, height: 1.5),
@@ -2599,7 +2625,9 @@ class _SettingsViewState extends State<SettingsView>
               onPressed: () => Navigator.pop(dctx, true),
               child: Text('Switch account',
                   style: RelicTheme.sans(
-                      size: 13.5, weight: FontWeight.w600, color: c.accent)),
+                      size: 13.5,
+                      weight: FontWeight.w600,
+                      color: c.accentMuted)),
             ),
           ],
         ),
@@ -2696,8 +2724,7 @@ class _SettingsViewState extends State<SettingsView>
             side: BorderSide(color: c.borderStrong),
           ),
           title: Text('Upload ${_fmtCount(n)} items?',
-              style: RelicTheme.sans(
-                  size: 17, weight: FontWeight.w600, color: c.text)),
+              style: RelicTheme.headline(size: 18, color: c.text)),
           content: Text(
             'The tucked-away items come back into your history and upload to '
             '$who, counting against its storage. If they belong to someone '
@@ -2715,7 +2742,9 @@ class _SettingsViewState extends State<SettingsView>
               onPressed: () => Navigator.pop(dctx, true),
               child: Text('Upload',
                   style: RelicTheme.sans(
-                      size: 13.5, weight: FontWeight.w600, color: c.accent)),
+                      size: 13.5,
+                      weight: FontWeight.w600,
+                      color: c.accentMuted)),
             ),
           ],
         ),
@@ -2744,8 +2773,7 @@ class _SettingsViewState extends State<SettingsView>
             side: BorderSide(color: c.borderStrong),
           ),
           title: Text('Delete ${_fmtCount(n)} items from this device?',
-              style: RelicTheme.sans(
-                  size: 17, weight: FontWeight.w600, color: c.text)),
+              style: RelicTheme.headline(size: 18, color: c.text)),
           content: Text(
             'These items are erased from this computer. They are not touched '
             'on the account they came from, so any device still signed into '
@@ -2763,7 +2791,7 @@ class _SettingsViewState extends State<SettingsView>
               onPressed: () => Navigator.pop(dctx, true),
               child: Text('Delete',
                   style: RelicTheme.sans(
-                      size: 13.5, weight: FontWeight.w600, color: c.danger)),
+                      size: 13.5, weight: FontWeight.w600, color: c.dangerText)),
             ),
           ],
         ),
@@ -2855,24 +2883,23 @@ class _SettingsViewState extends State<SettingsView>
             children: [
               for (final t in blocked)
                 Container(
-                  padding: const EdgeInsets.fromLTRB(9, 4, 6, 4),
+                  padding: const EdgeInsets.fromLTRB(10, 4, 7, 4),
                   decoration: BoxDecoration(
-                    color: c.surface,
-                    borderRadius: BorderRadius.circular(Radii.chip),
-                    border: c.isDark ? null : Border.all(color: c.border),
+                    color: c.tagBg,
+                    borderRadius: BorderRadius.circular(Radii.tag),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(t,
-                          style: RelicTheme.mono(size: 11.5, color: c.text)),
+                          style: RelicTheme.mono(size: 11, color: c.tagText)),
                       const SizedBox(width: 5),
                       Hoverable(
                         onTap: () => widget.repo.removeCaptureBlock(t),
                         builder: (context, hovered) => Icon(
                           LucideIcons.x,
                           size: 12,
-                          color: hovered ? c.dangerText : c.textMuted,
+                          color: hovered ? c.dangerText : c.tagText,
                         ),
                       ),
                     ],
@@ -2886,10 +2913,10 @@ class _SettingsViewState extends State<SettingsView>
           if (_blockPickerOpen) ...[
             const SizedBox(height: 10),
             Container(
-              padding: const EdgeInsets.all(10),
+              padding: const EdgeInsets.all(Insets.md),
               decoration: BoxDecoration(
-                color: c.surface,
-                borderRadius: BorderRadius.circular(Radii.input),
+                color: c.panel,
+                borderRadius: BorderRadius.circular(Radii.card),
                 border: Border.all(color: c.border),
               ),
               child: Column(
@@ -3014,23 +3041,31 @@ class _SettingsViewState extends State<SettingsView>
         style: RelicTheme.sans(size: 13, color: c.text),
         cursorColor: c.accent,
         maxLines: 1,
-        decoration: const InputDecoration(
-            isCollapsed: true, border: InputBorder.none),
+        decoration: kBareField,
         onSubmitted: widget.repo.setDeviceName,
       ),
     ),
   );
 
+  /// The pane's own title. Headline face: this is the biggest type on the
+  /// screen and the thing that tells you which section you are looking at.
+  Widget _paneTitle(RelicColors c, String t) => Padding(
+    padding: const EdgeInsets.fromLTRB(0, Insets.md, 0, Insets.sm),
+    child: Text(t, style: RelicTheme.headline(size: 22, color: c.text)),
+  );
+
+  /// A group heading *inside* a pane — the system's small uppercase kicker,
+  /// quiet enough that it never competes with the pane title above it.
   Widget _sectionLabel(RelicColors c, String t) => Padding(
-    padding: const EdgeInsets.fromLTRB(0, 18, 0, 2),
+    padding: const EdgeInsets.fromLTRB(0, Insets.xxl, 0, Insets.xs),
     child: Text(
       t.toUpperCase(),
-      style: RelicTheme.mono(size: 10, color: c.accentDeep, letterSpacing: 1.2),
+      style: RelicTheme.kicker(c.accentMuted, size: 10),
     ),
   );
 
   Widget _row(RelicColors c, Widget child, {bool last = false}) => Container(
-    padding: const EdgeInsets.symmetric(vertical: 13),
+    padding: const EdgeInsets.symmetric(vertical: Insets.lg),
     decoration: BoxDecoration(
       border: last ? null : Border(bottom: BorderSide(color: c.border)),
     ),
@@ -3081,19 +3116,16 @@ class _SettingsViewState extends State<SettingsView>
                       const SizedBox(width: 8),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 7,
+                          horizontal: Insets.sm,
                           vertical: 2,
                         ),
                         decoration: BoxDecoration(
-                          color: c.secretBg,
-                          borderRadius: BorderRadius.circular(5),
-                          border: Border.all(
-                            color: c.secret.withValues(alpha: 0.35),
-                          ),
+                          color: c.tagBg,
+                          borderRadius: BorderRadius.circular(Radii.tag),
                         ),
                         child: Text(
                           'recommended',
-                          style: RelicTheme.mono(size: 9, color: c.secret),
+                          style: RelicTheme.mono(size: 9.5, color: c.tagText),
                         ),
                       ),
                     ],
@@ -3124,7 +3156,7 @@ class _SettingsViewState extends State<SettingsView>
     final trusted = _axTrusted;
     final (status, tone) = switch (trusted) {
       null => ('Checking…', c.textMuted),
-      true => ('Allowed', c.accent),
+      true => ('Allowed', c.accentMuted),
       false => ('Not allowed yet', c.warning),
     };
     return Column(
@@ -3158,7 +3190,7 @@ class _SettingsViewState extends State<SettingsView>
                 'macOS asks permission before any app can press keys for you. '
                 'Relic uses it to paste the item you pick straight into the app '
                 'you were just in, and to grab your selection when you press '
-                'the save & annotate hotkey.',
+                'the save and annotate hotkey.',
                 style: RelicTheme.sans(
                   size: 11.5,
                   color: c.textMuted,
@@ -3230,7 +3262,7 @@ class _SettingsViewState extends State<SettingsView>
         ),
         _HotkeyRow(
           repo: repo,
-          title: 'Save & annotate shortcut',
+          title: 'Save and annotate shortcut',
           sub: 'Capture the selection or clipboard to your Vault and label it.',
           binding: repo.captureHotkey,
           onChanged: repo.setCaptureHotkey,
@@ -3271,9 +3303,9 @@ class _SettingsViewState extends State<SettingsView>
       SiftStatus.off => ('Off', c.textMuted),
       SiftStatus.downloading => (
         'Downloading models (~750 MB, one-time)…',
-        c.accent,
+        c.accentMuted,
       ),
-      SiftStatus.stageA => ('Basic tags now · loading ML models…', c.accent),
+      SiftStatus.stageA => ('Basic tags now · loading ML models…', c.accentMuted),
       SiftStatus.keywordOnly => (
         'Ready: semantic search off (embeddings disabled)',
         c.textMuted,
@@ -3313,7 +3345,7 @@ class _SettingsViewState extends State<SettingsView>
                       const SizedBox(height: 3),
                       Text(
                         'tagging ${_fmtCount(repo.enrichBacklog)} items…',
-                        style: RelicTheme.mono(size: 10, color: c.accent),
+                        style: RelicTheme.mono(size: 10, color: c.accentMuted),
                       ),
                     ],
                   ],
@@ -3407,9 +3439,10 @@ class _SettingsViewState extends State<SettingsView>
                     cursor: SystemMouseCursors.click,
                     child: Text(
                       _personalCleared ? 'Cleared' : 'Clear learned ranking',
-                      style: RelicTheme.mono(
-                        size: 11,
-                        color: _personalCleared ? c.successDim : c.accent,
+                      style: RelicTheme.sans(
+                        size: 11.5,
+                        weight: FontWeight.w500,
+                        color: _personalCleared ? c.success : c.accentMuted,
                       ),
                     ),
                   ),
@@ -3453,8 +3486,7 @@ class _SettingsViewState extends State<SettingsView>
                 if (_modelsMsg.isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Text(_modelsMsg,
-                      style:
-                          RelicTheme.mono(size: 10.5, color: c.successDim)),
+                      style: RelicTheme.mono(size: 10.5, color: c.success)),
                 ],
               ],
             ),
@@ -3654,19 +3686,31 @@ class _SettingsViewState extends State<SettingsView>
 
   Widget _vaultFullBanner(RelicColors c) => _row(
     c,
-    Row(
-      children: [
-        Icon(LucideIcons.triangleAlert, size: 16, color: c.secret),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            'Vault is full. Free up space or upgrade to keep saving items.',
-            style: RelicTheme.sans(size: 12, color: c.text),
+    Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: Insets.md,
+        vertical: Insets.md,
+      ),
+      decoration: BoxDecoration(
+        // A real banner, not a bare row: the warning tint is what makes it
+        // read as a state to act on rather than one more setting.
+        color: c.warningBg,
+        borderRadius: BorderRadius.circular(Radii.card),
+      ),
+      child: Row(
+        children: [
+          Icon(LucideIcons.triangleAlert, size: 16, color: c.warning),
+          const SizedBox(width: Insets.md),
+          Expanded(
+            child: Text(
+              'Vault is full. Free up space or upgrade to keep saving items.',
+              style: RelicTheme.sans(size: 12.5, color: c.text, height: 1.4),
+            ),
           ),
-        ),
-        const SizedBox(width: 12),
-        _btn(c, 'Dismiss', LucideIcons.x, onTap: widget.repo.clearVaultFull),
-      ],
+          const SizedBox(width: Insets.md),
+          _btn(c, 'Dismiss', LucideIcons.x, onTap: widget.repo.clearVaultFull),
+        ],
+      ),
     ),
   );
 
@@ -3745,7 +3789,10 @@ class _Toggle extends StatelessWidget {
           height: 23,
           padding: const EdgeInsets.all(2),
           decoration: BoxDecoration(
-            color: on ? c.accent : c.track,
+            // Gold is a fill colour: the on-track is the system's gradient,
+            // not a flat accent. No glow — that belongs to the one CTA.
+            color: on ? null : c.track,
+            gradient: on ? Gradients.gold : null,
             borderRadius: BorderRadius.circular(Radii.pill),
           ),
           alignment: on ? Alignment.centerRight : Alignment.centerLeft,
@@ -3791,22 +3838,20 @@ class _Segmented extends StatelessWidget {
                 cursor: SystemMouseCursors.click,
                 child: Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 5,
+                    horizontal: Insets.md,
+                    vertical: 6,
                   ),
                   decoration: BoxDecoration(
                     color: i == selected ? c.selected : const Color(0x00000000),
                     borderRadius: BorderRadius.circular(Radii.chip),
-                    boxShadow: i == selected && !c.isDark
-                        ? [BoxShadow(color: c.shadowSoft, blurRadius: 6)]
-                        : null,
                   ),
                   child: Text(
                     options[i],
-                    style: RelicTheme.sans(
-                      size: 11.5,
+                    style: RelicTheme.mono(
+                      size: 11,
                       weight: FontWeight.w600,
-                      color: i == selected ? c.accent : c.textMuted,
+                      color: i == selected ? c.textOnSelected : c.textMuted,
+                      letterSpacing: 0.4,
                     ),
                   ),
                 ),
@@ -3860,9 +3905,10 @@ class _SizeSlider extends StatelessWidget {
                     widthFactor: frac,
                     child: Container(
                       height: 4,
-                      decoration: BoxDecoration(
-                        color: c.accent,
-                        borderRadius: BorderRadius.circular(Radii.pill),
+                      decoration: const BoxDecoration(
+                        gradient: Gradients.gold,
+                        borderRadius:
+                            BorderRadius.all(Radius.circular(Radii.pill)),
                       ),
                     ),
                   ),
@@ -3872,7 +3918,7 @@ class _SizeSlider extends StatelessWidget {
                       width: 15,
                       height: 15,
                       decoration: BoxDecoration(
-                        color: c.accent,
+                        gradient: Gradients.gold,
                         shape: BoxShape.circle,
                         border: Border.all(color: c.base, width: 2),
                       ),
@@ -3969,7 +4015,7 @@ class _HotkeyRowState extends State<_HotkeyRow> {
   Widget build(BuildContext context) {
     final c = RelicTheme.of(context);
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 13),
+      padding: const EdgeInsets.symmetric(vertical: Insets.lg),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: c.border)),
       ),
@@ -4010,19 +4056,16 @@ class _HotkeyRowState extends State<_HotkeyRow> {
                   cursor: SystemMouseCursors.click,
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
+                      horizontal: Insets.md,
                       vertical: 7,
                     ),
                     decoration: BoxDecoration(
-                      color: c.selected,
+                      color: c.tagBg,
                       borderRadius: BorderRadius.circular(Radii.chip),
-                      border: Border.all(
-                        color: c.accent.withValues(alpha: 0.6),
-                      ),
                     ),
                     child: Text(
                       'Press a shortcut…  (Esc to cancel)',
-                      style: RelicTheme.mono(size: 11, color: c.accent),
+                      style: RelicTheme.mono(size: 11, color: c.tagText),
                     ),
                   ),
                 ),
@@ -4031,10 +4074,13 @@ class _HotkeyRowState extends State<_HotkeyRow> {
           else ...[
             for (final cap in widget.binding.chips) ...[
               Container(
-                margin: const EdgeInsets.only(left: 4),
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                margin: const EdgeInsets.only(left: Insets.xs),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 9,
+                  vertical: 5,
+                ),
                 decoration: BoxDecoration(
-                  color: c.isDark ? c.inset : c.surface,
+                  color: c.inset,
                   borderRadius: BorderRadius.circular(Radii.chip),
                   border: Border.all(color: c.border),
                 ),

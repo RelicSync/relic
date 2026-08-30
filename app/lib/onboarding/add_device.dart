@@ -35,6 +35,10 @@ Widget _drillRow(
   Color? titleColor,
   Widget? badge,
   String? subtitle,
+
+  /// The subtitle is a machine fact (platform · last seen · version), so it is
+  /// set in mono rather than the prose face.
+  bool subtitleMono = false,
   Widget? trailing,
   VoidCallback? onTap,
   bool last = false,
@@ -47,17 +51,18 @@ Widget _drillRow(
         ),
         child: Container(
           margin: const EdgeInsets.symmetric(vertical: 2),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 11),
+          padding: const EdgeInsets.symmetric(
+              horizontal: Insets.sm, vertical: Insets.md),
           decoration: BoxDecoration(
             color: hovered && onTap != null
                 ? c.surfaceHover
                 : const Color(0x00000000),
-            borderRadius: BorderRadius.circular(7),
+            borderRadius: BorderRadius.circular(Radii.tile),
           ),
           child: Row(
             children: [
               Icon(icon, size: 16, color: iconColor ?? c.textSecondary),
-              const SizedBox(width: 10),
+              const SizedBox(width: Insets.md),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -75,7 +80,7 @@ Widget _drillRow(
                           ),
                         ),
                         if (badge != null) ...[
-                          const SizedBox(width: 8),
+                          const SizedBox(width: Insets.sm),
                           badge,
                         ],
                       ],
@@ -84,18 +89,24 @@ Widget _drillRow(
                       const SizedBox(height: 2),
                       Text(
                         subtitle,
-                        style: RelicTheme.sans(
-                          size: 11.5,
-                          color: c.textMuted,
-                          height: 1.35,
-                        ),
+                        style: subtitleMono
+                            ? RelicTheme.mono(
+                                size: 10.5,
+                                color: c.textMuted,
+                                height: 1.4,
+                              )
+                            : RelicTheme.sans(
+                                size: 11.5,
+                                color: c.textMuted,
+                                height: 1.35,
+                              ),
                       ),
                     ],
                   ],
                 ),
               ),
               if (trailing != null) ...[
-                const SizedBox(width: 8),
+                const SizedBox(width: Insets.sm),
                 trailing,
               ],
             ],
@@ -251,47 +262,71 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
       case _Phase.waiting:
         return Column(mainAxisSize: MainAxisSize.min, children: [
           Text('Scan this with your other device',
-              style: RelicTheme.sans(
-                  size: 16, weight: FontWeight.w600, color: c.text)),
-          const SizedBox(height: 8),
+              style: RelicTheme.headline(size: 17, color: c.text)),
+          const SizedBox(height: Insets.sm),
           Text('On the new device: open Relic, choose Add this device, then Scan a QR.',
               textAlign: TextAlign.center,
               style: RelicTheme.sans(
-                  size: 13, color: c.textMuted, height: 1.45)),
-          const SizedBox(height: 24),
+                  size: 13, color: c.textSecondary, height: 1.5)),
+          const SizedBox(height: Insets.xxl),
+          // The code sits on a real card, not a bare white block: the panel
+          // carries the card's radius, hairline and resting shadow, and the
+          // QR keeps its own white tile inside so it stays scannable on dark.
           Container(
-            padding: const EdgeInsets.all(16),
-            // Deliberately white in both themes so the QR stays scannable.
+            padding: const EdgeInsets.all(Insets.lg),
             decoration: BoxDecoration(
-                color: Colors.white, borderRadius: BorderRadius.circular(16)),
-            child: QrImageView(data: _qr!, size: 240, version: QrVersions.auto),
+              color: c.panel,
+              borderRadius: BorderRadius.circular(Radii.cardLarge),
+              border: Border.all(color: c.border),
+              boxShadow: Shadows.card(c),
+            ),
+            child: Container(
+              padding: const EdgeInsets.all(Insets.md),
+              // Deliberately white in both themes so the QR stays scannable.
+              decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(Radii.card)),
+              child:
+                  QrImageView(data: _qr!, size: 240, version: QrVersions.auto),
+            ),
           ),
           if (_code != null) ...[
-            const SizedBox(height: 22),
+            const SizedBox(height: Insets.xxl),
             Row(children: [
               Expanded(child: Container(height: 1, color: c.border)),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+                padding: const EdgeInsets.symmetric(horizontal: Insets.md),
                 child: Text('or',
                     style: RelicTheme.sans(size: 12, color: c.textMuted)),
               ),
               Expanded(child: Container(height: 1, color: c.border)),
             ]),
-            const SizedBox(height: 12),
+            const SizedBox(height: Insets.md),
             Text('No camera on the other device? Type this code instead:',
                 textAlign: TextAlign.center,
                 style: RelicTheme.sans(
                     size: 12.5, color: c.textMuted, height: 1.45)),
-            const SizedBox(height: 10),
-            SelectableText(_code!,
-                textAlign: TextAlign.center,
-                style: RelicTheme.mono(
-                    size: 18,
-                    weight: FontWeight.w600,
-                    color: c.accent,
-                    letterSpacing: 2)),
+            const SizedBox(height: Insets.md),
+            // A pairing code is a machine fact: mono, in a recessed well.
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(
+                  horizontal: Insets.lg, vertical: Insets.md),
+              decoration: BoxDecoration(
+                color: c.inset,
+                borderRadius: BorderRadius.circular(Radii.input),
+                border: Border.all(color: c.isDark ? c.selected : c.border),
+              ),
+              child: SelectableText(_code!,
+                  textAlign: TextAlign.center,
+                  style: RelicTheme.mono(
+                      size: 18,
+                      weight: FontWeight.w600,
+                      color: c.accentDeep,
+                      letterSpacing: 2)),
+            ),
           ],
-          const SizedBox(height: 22),
+          const SizedBox(height: Insets.xxl),
           Text('Waiting for the other device…',
               style: RelicTheme.sans(size: 12.5, color: c.textMuted)),
         ]);
@@ -299,21 +334,32 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
       case _Phase.delivering:
         return Column(mainAxisSize: MainAxisSize.min, children: [
           Text('Do the codes match?',
-              style: RelicTheme.sans(
-                  size: 16, weight: FontWeight.w600, color: c.text)),
-          const SizedBox(height: 8),
+              style: RelicTheme.headline(size: 17, color: c.text)),
+          const SizedBox(height: Insets.sm),
           Text('This 4-digit code should be identical on both devices.',
               textAlign: TextAlign.center,
               style: RelicTheme.sans(
-                  size: 13, color: c.textMuted, height: 1.45)),
-          const SizedBox(height: 24),
-          Text(_sas ?? '----',
-              style: RelicTheme.mono(
-                  size: 52,
-                  weight: FontWeight.w700,
-                  color: c.accent,
-                  letterSpacing: 12)),
-          const SizedBox(height: 28),
+                  size: 13, color: c.textSecondary, height: 1.5)),
+          const SizedBox(height: Insets.xxl),
+          // The verification code is a machine fact: mono, in a recessed well.
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(
+                horizontal: Insets.lg, vertical: Insets.xl),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: c.inset,
+              borderRadius: BorderRadius.circular(Radii.input),
+              border: Border.all(color: c.isDark ? c.selected : c.border),
+            ),
+            child: Text(_sas ?? '----',
+                style: RelicTheme.mono(
+                    size: 46,
+                    weight: FontWeight.w700,
+                    color: c.accentDeep,
+                    letterSpacing: 12)),
+          ),
+          const SizedBox(height: Insets.xxl),
           if (_phase == _Phase.delivering)
             CircularProgressIndicator(color: c.accent)
           else ...[
@@ -322,7 +368,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
               height: 38,
               onTap: _approve,
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: Insets.md),
             GhostButton(
               label: 'No, cancel',
               size: 34,
@@ -333,16 +379,15 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
       case _Phase.done:
         return Column(mainAxisSize: MainAxisSize.min, children: [
           Icon(LucideIcons.circleCheck, color: c.accent, size: 48),
-          const SizedBox(height: 16),
+          const SizedBox(height: Insets.lg),
           Text('Device added',
-              style: RelicTheme.sans(
-                  size: 16, weight: FontWeight.w600, color: c.text)),
-          const SizedBox(height: 8),
+              style: RelicTheme.headline(size: 17, color: c.text)),
+          const SizedBox(height: Insets.sm),
           Text('Your other device is now connected to your vault.',
               textAlign: TextAlign.center,
               style: RelicTheme.sans(
-                  size: 13, color: c.textMuted, height: 1.45)),
-          const SizedBox(height: 24),
+                  size: 13, color: c.textSecondary, height: 1.5)),
+          const SizedBox(height: Insets.xxl),
           PrimaryButton(
             label: 'Done',
             height: 34,
@@ -352,13 +397,13 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
       case _Phase.error:
         return Column(mainAxisSize: MainAxisSize.min, children: [
           Icon(LucideIcons.circleAlert, color: c.dangerText, size: 44),
-          const SizedBox(height: 16),
+          const SizedBox(height: Insets.lg),
           Text(_error ?? 'Something went wrong.',
               textAlign: TextAlign.center,
-              style: RelicTheme.sans(size: 13, color: c.text, height: 1.45)),
-          const SizedBox(height: 22),
+              style: RelicTheme.sans(size: 13, color: c.text, height: 1.5)),
+          const SizedBox(height: Insets.xxl),
           PrimaryButton(label: 'Try again', height: 36, onTap: _restart),
-          const SizedBox(height: 8),
+          const SizedBox(height: Insets.sm),
           GhostButton(
             label: 'Close',
             size: 32,
@@ -503,42 +548,48 @@ class _RecoveryKitScreenState extends State<RecoveryKitScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('Save your recovery kit',
-              style: RelicTheme.sans(
-                  size: 16, weight: FontWeight.w600, color: c.text)),
-          const SizedBox(height: 4),
-          Text('RELIC KEEPS NO COPY · STORE IT OFFLINE',
-              style: RelicTheme.mono(
-                  size: 10.5, color: c.accentMuted, letterSpacing: 0.4)),
-          const SizedBox(height: 12),
+              style: RelicTheme.headline(size: 17, color: c.text)),
+          const SizedBox(height: Insets.sm),
+          // Gold as text, so it takes the tag tint under it: the system's
+          // chip, never a bare gold line on the card.
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: Insets.sm, vertical: 3),
+            decoration: BoxDecoration(
+              color: c.tagBg,
+              borderRadius: BorderRadius.circular(Radii.tag),
+            ),
+            child: Text('RELIC KEEPS NO COPY · STORE IT OFFLINE',
+                style: RelicTheme.kicker(c.tagText, size: 10)),
+          ),
+          const SizedBox(height: Insets.md),
           Text(
               'The only way back into your data if you forget your vault passphrase. We cannot recover it for you. Print it or store it in a password manager.',
               style: RelicTheme.sans(
                   size: 13, color: c.textSecondary, height: 1.5)),
-          const SizedBox(height: 16),
+          const SizedBox(height: Insets.lg),
+          // The kit itself is the machine fact: mono, in a recessed well.
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+            padding: const EdgeInsets.all(Insets.lg),
             decoration: BoxDecoration(
                 color: c.inset,
-                borderRadius: BorderRadius.circular(Radii.row),
+                borderRadius: BorderRadius.circular(Radii.input),
                 border: Border.all(color: c.isDark ? c.selected : c.border)),
             child: Stack(children: [
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text('RECOVERY KIT',
-                      style: RelicTheme.mono(
-                          size: 10,
-                          color: c.textFaintest,
-                          letterSpacing: 1)),
-                  const SizedBox(height: 10),
+                      style: RelicTheme.kicker(c.textFaintest)),
+                  const SizedBox(height: Insets.md),
                   Padding(
-                    // keep the kit text clear of the copy chip
-                    padding: const EdgeInsets.only(right: 76),
+                    // keep the kit text clear of the copy button
+                    padding: const EdgeInsets.only(right: 96),
                     child: SelectableText(widget.kitText,
                         style: RelicTheme.mono(
                             size: 13,
-                            color: c.accentBright,
+                            color: c.accentDeep,
                             height: 1.7,
                             letterSpacing: 0.6)),
                   ),
@@ -547,28 +598,18 @@ class _RecoveryKitScreenState extends State<RecoveryKitScreen> {
               Positioned(
                 top: 0,
                 right: 0,
-                child: Hoverable(
+                child: GhostButton(
+                  icon: _copied ? LucideIcons.check : LucideIcons.copy,
+                  label: _copied ? 'Copied' : 'Copy',
+                  size: 26,
+                  iconSize: 13,
+                  fontSize: 11.5,
                   onTap: _copy,
-                  builder: (context, hovered) => Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                        color: hovered ? c.surfaceHover : c.surface,
-                        borderRadius: BorderRadius.circular(7),
-                        border: Border.all(color: c.borderStrong)),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(_copied ? LucideIcons.check : LucideIcons.copy,
-                          size: 13, color: c.accent),
-                      const SizedBox(width: 6),
-                      Text(_copied ? 'Copied' : 'Copy',
-                          style: RelicTheme.mono(size: 11, color: c.accent)),
-                    ]),
-                  ),
                 ),
               ),
             ]),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: Insets.md),
           Row(children: [
             GhostButton(
               icon: LucideIcons.download,
@@ -577,26 +618,26 @@ class _RecoveryKitScreenState extends State<RecoveryKitScreen> {
               onTap: _download,
             ),
             if (_msg != null) ...[
-              const SizedBox(width: 10),
+              const SizedBox(width: Insets.md),
               Flexible(
                 child: Text(_msg!,
                     style: RelicTheme.sans(
                         size: 11.5,
-                        color: _msgError ? c.dangerText : c.accent)),
+                        color: _msgError ? c.dangerText : c.success)),
               ),
             ],
           ]),
           if (widget.requireProof && _groups.isNotEmpty) ...[
-            const SizedBox(height: 18),
+            const SizedBox(height: Insets.xl),
             Text('Confirm you saved it: re-type these two groups from your kit.',
                 style: RelicTheme.sans(
                     size: 12.5, color: c.textMuted, height: 1.45)),
-            const SizedBox(height: 12),
+            const SizedBox(height: Insets.md),
             _proofField(c, _a, 'Type group ${_picks.$1 + 1}'),
-            const SizedBox(height: 10),
+            const SizedBox(height: Insets.md),
             _proofField(c, _b, 'Type group ${_picks.$2 + 1}'),
           ],
-          const SizedBox(height: 16),
+          const SizedBox(height: Insets.xl),
           Row(children: [
             PrimaryButton(
               label: 'Continue',
@@ -609,26 +650,26 @@ class _RecoveryKitScreenState extends State<RecoveryKitScreen> {
     );
   }
 
+  /// Re-typing a kit group is a machine fact too: mono, on the recessed well.
   Widget _proofField(RelicColors c, TextEditingController ctrl, String hint) =>
       TextField(
         controller: ctrl,
         onChanged: (_) => setState(() {}),
         autocorrect: false,
         enableSuggestions: false,
-        style: TextStyle(
-            color: c.text, fontFamily: 'JetBrainsMono', letterSpacing: 2),
+        style: RelicTheme.mono(size: 13, color: c.text, letterSpacing: 2),
         textCapitalization: TextCapitalization.characters,
         decoration: InputDecoration(
           hintText: hint,
-          hintStyle: TextStyle(color: c.textMuted, letterSpacing: 0),
+          hintStyle: RelicTheme.sans(size: 12.5, color: c.textFaintest),
           filled: true,
-          fillColor: c.surface,
+          fillColor: c.inset,
           enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(Radii.input),
               borderSide: BorderSide(color: c.borderStrong)),
           focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(Radii.input),
-              borderSide: BorderSide(color: c.accent)),
+              borderSide: BorderSide(color: c.accent, width: 1.5)),
         ),
       );
 }
@@ -743,18 +784,27 @@ class _SecurityScreenState extends State<SecurityScreen> {
         data: materialThemeFor(c),
         child: AlertDialog(
           backgroundColor: c.panel,
-          title: Text('Sign out everywhere?', style: TextStyle(color: c.text)),
+          title: Text('Sign out everywhere?',
+              style: RelicTheme.headline(size: 17, color: c.text)),
           content: Text(
               'Every device signs out of your Relic account. Other devices lose access right away; this device stays connected until its session next refreshes. Your vault and recovery kit are unaffected.',
-              style: TextStyle(color: c.textMuted)),
+              style: RelicTheme.sans(
+                  size: 13, color: c.textSecondary, height: 1.5)),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(dc, false),
-                child: Text('Cancel', style: TextStyle(color: c.textMuted))),
+                child: Text('Cancel',
+                    style: RelicTheme.sans(
+                        size: 13,
+                        weight: FontWeight.w500,
+                        color: c.textMuted))),
             TextButton(
                 onPressed: () => Navigator.pop(dc, true),
                 child: Text('Sign out all',
-                    style: TextStyle(color: c.dangerText))),
+                    style: RelicTheme.sans(
+                        size: 13,
+                        weight: FontWeight.w600,
+                        color: c.dangerText))),
           ],
         ),
       ),
@@ -783,18 +833,25 @@ class _SecurityScreenState extends State<SecurityScreen> {
           child: AlertDialog(
             backgroundColor: c.panel,
             title: Text('Signed out everywhere',
-                style: TextStyle(color: c.text)),
+                style: RelicTheme.headline(size: 17, color: c.text)),
             content: Text('Also disconnect this device now?',
-                style: TextStyle(color: c.textMuted)),
+                style: RelicTheme.sans(
+                    size: 13, color: c.textSecondary, height: 1.5)),
             actions: [
               TextButton(
                   onPressed: () => Navigator.pop(dc, false),
                   child: Text('Not now',
-                      style: TextStyle(color: c.textMuted))),
+                      style: RelicTheme.sans(
+                          size: 13,
+                          weight: FontWeight.w500,
+                          color: c.textMuted))),
               TextButton(
                   onPressed: () => Navigator.pop(dc, true),
                   child: Text('Disconnect',
-                      style: TextStyle(color: c.dangerText))),
+                      style: RelicTheme.sans(
+                          size: 13,
+                          weight: FontWeight.w600,
+                          color: c.dangerText))),
             ],
           ),
         ),
@@ -916,7 +973,8 @@ class _SecurityScreenState extends State<SecurityScreen> {
           ),
           if (_changing)
             Padding(
-              padding: const EdgeInsets.fromLTRB(8, 14, 8, 16),
+              padding: const EdgeInsets.fromLTRB(
+                  Insets.sm, Insets.lg, Insets.sm, Insets.xl),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -928,10 +986,10 @@ class _SecurityScreenState extends State<SecurityScreen> {
                   _box(TextField(
                     controller: _confirm,
                     obscureText: true,
-                    style: TextStyle(color: c.text),
+                    style: RelicTheme.sans(size: 13.5, color: c.text),
                     decoration: _dec(c, 'Repeat the vault passphrase'),
                   )),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: Insets.md),
                   Row(children: [
                     PrimaryButton(
                       label: 'Change passphrase',
@@ -959,7 +1017,8 @@ class _SecurityScreenState extends State<SecurityScreen> {
             ),
             if (_changingEmail)
               Padding(
-                padding: const EdgeInsets.fromLTRB(8, 14, 8, 16),
+                padding: const EdgeInsets.fromLTRB(
+                    Insets.sm, Insets.lg, Insets.sm, Insets.xl),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -967,10 +1026,10 @@ class _SecurityScreenState extends State<SecurityScreen> {
                       controller: _email,
                       keyboardType: TextInputType.emailAddress,
                       autocorrect: false,
-                      style: TextStyle(color: c.text),
+                      style: RelicTheme.sans(size: 13.5, color: c.text),
                       decoration: _dec(c, 'New account email'),
                     )),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: Insets.md),
                     Row(children: [
                       PrimaryButton(
                         label: 'Send confirmation links',
@@ -993,7 +1052,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
               onTap: _busy ? null : _signOutEverywhere,
             ),
           if (widget.onDeleteAccount != null) ...[
-            const SizedBox(height: 24),
+            const SizedBox(height: Insets.xxl),
             _drillRow(
               c,
               icon: LucideIcons.trash2,
@@ -1008,15 +1067,17 @@ class _SecurityScreenState extends State<SecurityScreen> {
           ],
           if (_error != null)
             Padding(
-              padding: const EdgeInsets.only(top: 12),
+              padding: const EdgeInsets.only(top: Insets.md),
               child: Text(_error!,
-                  style: RelicTheme.sans(size: 12, color: c.dangerText)),
+                  style: RelicTheme.sans(
+                      size: 12, color: c.dangerText, height: 1.45)),
             ),
           if (_ok != null)
             Padding(
-              padding: const EdgeInsets.only(top: 12),
+              padding: const EdgeInsets.only(top: Insets.md),
               child: Text(_ok!,
-                  style: RelicTheme.sans(size: 12, color: c.accent)),
+                  style: RelicTheme.sans(
+                      size: 12, color: c.success, height: 1.45)),
             ),
         ],
       ),
@@ -1027,7 +1088,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
 
   InputDecoration _dec(RelicColors c, String hint) => InputDecoration(
         hintText: hint,
-        hintStyle: TextStyle(color: c.textMuted),
+        hintStyle: RelicTheme.sans(size: 13.5, color: c.textFaintest),
         filled: true,
         fillColor: c.surface,
         enabledBorder: OutlineInputBorder(
@@ -1035,7 +1096,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
             borderSide: BorderSide(color: c.borderStrong)),
         focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(Radii.input),
-            borderSide: BorderSide(color: c.accent)),
+            borderSide: BorderSide(color: c.accent, width: 1.5)),
       );
 }
 
@@ -1067,7 +1128,8 @@ class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
       data: materialThemeFor(c),
       child: AlertDialog(
         backgroundColor: c.panel,
-        title: Text('Delete account?', style: TextStyle(color: c.text)),
+        title: Text('Delete account?',
+            style: RelicTheme.headline(size: 17, color: c.text)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1083,21 +1145,22 @@ class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
                         'on our servers. Local history on your devices is not '
                         'deleted. If you have an active subscription, cancel '
                         'it first in Manage plan.',
-                style: TextStyle(color: c.textMuted, height: 1.4)),
-            const SizedBox(height: 16),
+                style: RelicTheme.sans(
+                    size: 13, color: c.textSecondary, height: 1.5)),
+            const SizedBox(height: Insets.lg),
             Text('Type your email to confirm:',
-                style: TextStyle(color: c.textMuted, fontSize: 12)),
-            const SizedBox(height: 8),
+                style: RelicTheme.label(c.textMuted)),
+            const SizedBox(height: Insets.sm),
             TextField(
               controller: _email,
               autocorrect: false,
               enableSuggestions: false,
               keyboardType: TextInputType.emailAddress,
               onChanged: (_) => setState(() {}),
-              style: TextStyle(color: c.text),
+              style: RelicTheme.sans(size: 13.5, color: c.text),
               decoration: InputDecoration(
                 hintText: widget.accountEmail,
-                hintStyle: TextStyle(color: c.textMuted),
+                hintStyle: RelicTheme.sans(size: 13.5, color: c.textFaintest),
                 filled: true,
                 fillColor: c.surface,
                 enabledBorder: OutlineInputBorder(
@@ -1105,7 +1168,7 @@ class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
                     borderSide: BorderSide(color: c.borderStrong)),
                 focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(Radii.input),
-                    borderSide: BorderSide(color: c.accent)),
+                    borderSide: BorderSide(color: c.accent, width: 1.5)),
               ),
             ),
           ],
@@ -1113,12 +1176,16 @@ class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: Text('Cancel', style: TextStyle(color: c.textMuted))),
+              child: Text('Cancel',
+                  style: RelicTheme.sans(
+                      size: 13, weight: FontWeight.w500, color: c.textMuted))),
           TextButton(
               onPressed: matches ? () => Navigator.pop(context, true) : null,
               child: Text('Delete account',
-                  style: TextStyle(
-                      color: matches ? c.danger : c.textMuted))),
+                  style: RelicTheme.sans(
+                      size: 13,
+                      weight: FontWeight.w600,
+                      color: matches ? c.danger : c.textFaintest))),
         ],
       ),
     );
@@ -1236,17 +1303,25 @@ class _DevicesScreenState extends State<DevicesScreen> {
       context: context,
       builder: (dc) => AlertDialog(
         backgroundColor: c.panel,
-        title: Text('Remove device?', style: TextStyle(color: c.text)),
+        title: Text('Remove device?',
+            style: RelicTheme.headline(size: 17, color: c.text)),
         content: Text(
             'Remove "${d.label}"? It will lose access to your vault on its next sync.',
-            style: TextStyle(color: c.textMuted)),
+            style: RelicTheme.sans(
+                size: 13, color: c.textSecondary, height: 1.5)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(dc, false),
-              child: Text('Cancel', style: TextStyle(color: c.textMuted))),
+              child: Text('Cancel',
+                  style: RelicTheme.sans(
+                      size: 13, weight: FontWeight.w500, color: c.textMuted))),
           TextButton(
               onPressed: () => Navigator.pop(dc, true),
-              child: Text('Remove', style: TextStyle(color: c.dangerText))),
+              child: Text('Remove',
+                  style: RelicTheme.sans(
+                      size: 13,
+                      weight: FontWeight.w600,
+                      color: c.dangerText))),
         ],
       ),
     );
@@ -1268,14 +1343,15 @@ class _DevicesScreenState extends State<DevicesScreen> {
         data: materialThemeFor(c),
         child: AlertDialog(
           backgroundColor: c.panel,
-          title: Text('Rename device', style: TextStyle(color: c.text)),
+          title: Text('Rename device',
+              style: RelicTheme.headline(size: 17, color: c.text)),
           content: TextField(
             controller: controller,
             autofocus: true,
-            style: TextStyle(color: c.text),
+            style: RelicTheme.sans(size: 13.5, color: c.text),
             decoration: InputDecoration(
               hintText: 'Device name',
-              hintStyle: TextStyle(color: c.textMuted),
+              hintStyle: RelicTheme.sans(size: 13.5, color: c.textFaintest),
               filled: true,
               fillColor: c.surface,
               enabledBorder: OutlineInputBorder(
@@ -1283,17 +1359,25 @@ class _DevicesScreenState extends State<DevicesScreen> {
                   borderSide: BorderSide(color: c.borderStrong)),
               focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(Radii.input),
-                  borderSide: BorderSide(color: c.accent)),
+                  borderSide: BorderSide(color: c.accent, width: 1.5)),
             ),
             onSubmitted: (v) => Navigator.pop(dc, v.trim()),
           ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(dc, null),
-                child: Text('Cancel', style: TextStyle(color: c.textMuted))),
+                child: Text('Cancel',
+                    style: RelicTheme.sans(
+                        size: 13,
+                        weight: FontWeight.w500,
+                        color: c.textMuted))),
             TextButton(
                 onPressed: () => Navigator.pop(dc, controller.text.trim()),
-                child: Text('Save', style: TextStyle(color: c.accent))),
+                // Not gold: gold as text belongs on a tag tint, and a bare
+                // dialog action has none under it.
+                child: Text('Save',
+                    style: RelicTheme.sans(
+                        size: 13, weight: FontWeight.w600, color: c.text))),
           ],
         ),
       ),
@@ -1335,13 +1419,13 @@ class _DevicesScreenState extends State<DevicesScreen> {
       ],
       child: _error != null
           ? Padding(
-              padding: const EdgeInsets.only(top: 24),
+              padding: const EdgeInsets.only(top: Insets.xxl),
               child: Text(_error!,
                   style: RelicTheme.sans(size: 12.5, color: c.textMuted)),
             )
           : _devices == null
               ? Padding(
-                  padding: const EdgeInsets.only(top: 48),
+                  padding: const EdgeInsets.only(top: Insets.section),
                   child:
                       Center(child: CircularProgressIndicator(color: c.accent)),
                 )
@@ -1350,7 +1434,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                   children: [
                     if (_actionError != null)
                       Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.only(bottom: Insets.sm),
                         child: Text(_actionError!,
                             style: RelicTheme.sans(
                                 size: 11.5, color: c.dangerText)),
@@ -1364,23 +1448,24 @@ class _DevicesScreenState extends State<DevicesScreen> {
                             ? Tooltip(
                                 message:
                                     'Running v${_devices![i].appVersion}. This device runs v$_myVersion. Update it from relic.space/download.',
+                                // The system's meta chip: tag tint, deep-gold
+                                // mono, no hairline.
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 7, vertical: 2),
+                                      horizontal: Insets.sm, vertical: 2),
                                   decoration: BoxDecoration(
-                                    color: c.accent.withValues(alpha: 0.14),
-                                    borderRadius: BorderRadius.circular(999),
-                                    border: Border.all(
-                                        color:
-                                            c.accent.withValues(alpha: 0.5)),
+                                    color: c.tagBg,
+                                    borderRadius:
+                                        BorderRadius.circular(Radii.tag),
                                   ),
                                   child: Text('outdated',
                                       style: RelicTheme.mono(
-                                          size: 9.5, color: c.accent)),
+                                          size: 9.5, color: c.tagText)),
                                 ),
                               )
                             : null,
                         subtitle: _deviceMeta(_devices![i]),
+                        subtitleMono: true,
                         onTap: () => _rename(_devices![i]),
                         last: i == _devices!.length - 1,
                         trailing: Row(
@@ -1534,22 +1619,22 @@ class _DeviceCapDialogState extends State<_DeviceCapDialog> {
       data: materialThemeFor(c),
       child: Dialog(
         backgroundColor: c.base,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+        insetPadding: const EdgeInsets.symmetric(
+            horizontal: Insets.xxl, vertical: Insets.section),
         shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: BorderSide(color: c.borderStrong)),
+            borderRadius: BorderRadius.circular(Radii.card),
+            side: BorderSide(color: c.border)),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 460),
           child: Padding(
-            padding: const EdgeInsets.all(22),
+            padding: const EdgeInsets.all(Insets.xxl),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text('Device limit reached',
-                    style: TextStyle(
-                        color: c.text, fontSize: 20, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 8),
+                    style: RelicTheme.headline(size: 20, color: c.text)),
+                const SizedBox(height: Insets.sm),
                 // The "or upgrade" clause follows the action: with no upgrade
                 // affordance (store-safe iOS builds pass onUpgrade: null) the
                 // copy must not steer either (App Store 3.1.1).
@@ -1557,40 +1642,44 @@ class _DeviceCapDialogState extends State<_DeviceCapDialog> {
                     widget.onUpgrade != null
                         ? 'Your plan is full. Remove a device to connect this one, or upgrade your plan for more devices.'
                         : 'Your plan is full. Remove a device to connect this one.',
-                    style: TextStyle(color: c.textMuted, height: 1.4)),
-                const SizedBox(height: 16),
+                    style: RelicTheme.sans(
+                        size: 13, color: c.textSecondary, height: 1.5)),
+                const SizedBox(height: Insets.xl),
                 Flexible(
                   child: ListView(
                     shrinkWrap: true,
                     children: [
                       for (final d in _devices)
                         Container(
-                          margin: const EdgeInsets.only(bottom: 8),
+                          margin: const EdgeInsets.only(bottom: Insets.sm),
                           decoration: BoxDecoration(
                               color: c.panel,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: c.borderStrong)),
+                              borderRadius: BorderRadius.circular(Radii.row),
+                              border: Border.all(color: c.border)),
                           child: ListTile(
                             leading:
                                 Icon(_platformIcon(d.platform), color: c.accent),
                             title: Text(d.label,
-                                style: TextStyle(color: c.text)),
+                                style:
+                                    RelicTheme.sans(size: 13, color: c.text)),
+                            // The platform is a machine fact, so it is mono.
                             subtitle: Text(d.platform,
-                                style: TextStyle(
-                                    color: c.textMuted, fontSize: 12)),
+                                style: RelicTheme.mono(
+                                    size: 11, color: c.textMuted)),
                             trailing: _busyId == d.deviceId
                                 ? SizedBox(
                                     width: 20,
                                     height: 20,
                                     child: CircularProgressIndicator(
                                         strokeWidth: 2, color: c.accent))
-                                : TextButton(
-                                    onPressed: _busyId == null
+                                : GhostButton(
+                                    label: 'Remove',
+                                    size: 28,
+                                    fontSize: 12,
+                                    style: GhostStyle.danger,
+                                    onTap: _busyId == null
                                         ? () => _removeAndRetry(d)
                                         : null,
-                                    child: Text('Remove',
-                                        style: TextStyle(
-                                            color: c.dangerText)),
                                   ),
                           ),
                         ),
@@ -1599,39 +1688,47 @@ class _DeviceCapDialogState extends State<_DeviceCapDialog> {
                 ),
                 if (_error != null)
                   Padding(
-                    padding: const EdgeInsets.only(top: 4, bottom: 4),
+                    padding: const EdgeInsets.only(
+                        top: Insets.xs, bottom: Insets.xs),
                     child: Text(_error!,
-                        style: TextStyle(color: c.dangerText)),
+                        style: RelicTheme.sans(
+                            size: 12.5, color: c.dangerText, height: 1.45)),
                   ),
                 if (widget.onUpgrade != null) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: Insets.sm),
+                  // The dialog's one gold CTA. While checkout opens the label
+                  // holds and the leading glyph becomes the spinner.
                   SizedBox(
                     width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: _upgrading ? null : _upgrade,
-                      icon: _upgrading
-                          ? SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: c.accent))
-                          : Icon(LucideIcons.zap, size: 18, color: c.accent),
-                      label: Text(widget.upgradeLabel,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: c.accent)),
-                      style: OutlinedButton.styleFrom(
-                          side: BorderSide(color: c.borderStrong),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12))),
+                    child: GhostButton(
+                      label: widget.upgradeLabel,
+                      size: 40,
+                      fontSize: 13.5,
+                      iconSize: 16,
+                      style: GhostStyle.filled,
+                      icon: _upgrading ? null : LucideIcons.zap,
+                      iconBuilder: _upgrading
+                          ? (size, color) => SizedBox(
+                                width: size,
+                                height: size,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: color),
+                              )
+                          : null,
+                      onTap: _upgrading ? null : _upgrade,
                     ),
                   ),
                 ],
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed:
-                      _busyId == null ? () => Navigator.of(context).pop(false) : null,
-                  style: TextButton.styleFrom(foregroundColor: c.textMuted),
-                  child: const Text('Not now'),
+                const SizedBox(height: Insets.sm),
+                Center(
+                  child: GhostButton(
+                    label: 'Not now',
+                    size: 34,
+                    fontSize: 12.5,
+                    onTap: _busyId == null
+                        ? () => Navigator.of(context).pop(false)
+                        : null,
+                  ),
                 ),
               ],
             ),

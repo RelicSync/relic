@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:local_notifier/local_notifier.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:screen_retriever/screen_retriever.dart';
 import 'package:super_clipboard/super_clipboard.dart';
@@ -47,6 +48,7 @@ import 'ui/actionable_notification.dart';
 import 'ui/popup.dart';
 import 'ui/settings.dart';
 import 'platform/popup_placement.dart';
+import 'widgets/controls.dart';
 import 'widgets/result_row.dart' show MiniResultRow;
 
 /// Your deployed Worker, pre-filled into the connect form. The device token is
@@ -75,14 +77,30 @@ Future<void> runRealApp(List<String> args) async {
   await localNotifier.setup(appName: 'Relic'); // native tray notifications
   await hotKeyManager.unregisterAll();
 
-  const options = WindowOptions(
-    size: Size(460, 560),
+  // Opaque background: a transparent window forces Flutter's Windows
+  // layered-window present path, which never clears the prior frame — causing
+  // ghost/double text and frozen animations (flutter/flutter#71735).
+  //
+  // This is the one colour in the app that cannot come from
+  // RelicTheme.of(context): WindowOptions is handed to the native window before
+  // runApp, so there is no element tree yet. It is instead resolved from the
+  // same stored preference the app will resolve a moment later, read straight
+  // off disk — otherwise the window paints one palette's base while the user
+  // runs the other, and every summon opens with a flash of the wrong colour.
+  final booted = bootAppearance();
+  final bootDark = switch (booted) {
+    Appearance.dark => true,
+    Appearance.light => false,
+    Appearance.system =>
+      WidgetsBinding.instance.platformDispatcher.platformBrightness ==
+          Brightness.dark,
+  };
+  final options = WindowOptions(
+    size: const Size(460, 560),
     center: true,
     skipTaskbar: true,
-    // Opaque background: a transparent window forces Flutter's Windows
-    // layered-window present path, which never clears the prior frame —
-    // causing ghost/double text and frozen animations (flutter/flutter#71735).
-    backgroundColor: Color(0xFF16130E), // RelicColors.dark.base
+    backgroundColor:
+        bootDark ? RelicColors.dark.base : RelicColors.light.base,
     titleBarStyle: TitleBarStyle.hidden,
     alwaysOnTop: true,
   );
@@ -1774,7 +1792,7 @@ class _RealAppState extends State<RealApp>
       globalShortcuts: [
         (widget.repo.historyHotkey.display, 'open your history'),
         (widget.repo.miniHotkey.display, 'open the mini picker'),
-        (widget.repo.captureHotkey.display, 'save & annotate the selection'),
+        (widget.repo.captureHotkey.display, 'save and annotate the selection'),
         (widget.repo.promoteHotkey.display, 'promote the last capture'),
         (
           '${widget.repo.quickPasteHotkeys.first.display} … ${widget.repo.quickPasteHotkeys.last.label}',
@@ -1834,49 +1852,78 @@ class _RealAppState extends State<RealApp>
     );
   }
 
+  /// Stock SnackBars are the last raw Material surface in the shell. Dress them
+  /// in the floating-chrome language (raised surface, hairline, card radius,
+  /// sans label) so a resend confirmation doesn't land as a grey slab in the
+  /// middle of a parchment popup.
+  SnackBar _snack(RelicColors c, String text) => SnackBar(
+        content: Text(text, style: RelicTheme.sans(size: 13, color: c.text)),
+        backgroundColor: c.surfaceRaised,
+        behavior: SnackBarBehavior.floating,
+        elevation: 0,
+        margin: const EdgeInsets.all(Insets.md),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(Radii.card),
+          side: BorderSide(color: c.border, width: 1),
+        ),
+      );
+
   /// Verify-to-sync banner (worker VERIFY_GATE 403 email_unverified). Local use
   /// is unaffected; offer a resend and a session-only dismiss.
+  ///
+  /// A banner is chrome stacked on top of the popup, not a card: panel ground
+  /// plus a bottom hairline is what separates it from the header underneath,
+  /// and both of its controls are ghosts — the popup's own "+" is the one
+  /// filled CTA in this window.
   Widget _verifyBanner() {
     final c = _useDark ? RelicColors.dark : RelicColors.light;
     return Material(
-      color: c.surface,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
-        child: Row(children: [
-          Icon(Icons.mark_email_unread_outlined, color: c.accent, size: 18),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-                'Confirm your email to start syncing. Local use is unaffected.',
-                style: RelicTheme.sans(size: 12.5, color: c.text, height: 1.35)),
-          ),
-          TextButton(
-            onPressed: () async {
-              final email = widget.repo.accountEmail;
-              if (email == null || email.isEmpty) return;
-              try {
-                await SupabaseAuth.resendSignupConfirmation(email);
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Confirmation email sent')));
+      color: c.panel,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: c.border, width: 1)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+              Insets.lg, Insets.md, Insets.sm, Insets.md),
+          child: Row(children: [
+            Icon(LucideIcons.mailWarning, color: c.accent, size: 17),
+            const SizedBox(width: Insets.md),
+            Expanded(
+              child: Text(
+                  'Confirm your email to start syncing. Local use is unaffected.',
+                  style:
+                      RelicTheme.sans(size: 12.5, color: c.text, height: 1.35)),
+            ),
+            const SizedBox(width: Insets.sm),
+            GhostButton(
+              label: 'Resend email',
+              onTap: () async {
+                final email = widget.repo.accountEmail;
+                if (email == null || email.isEmpty) return;
+                try {
+                  await SupabaseAuth.resendSignupConfirmation(email);
+                  if (mounted) {
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(_snack(c, 'Confirmation email sent'));
+                  }
+                } catch (_) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(_snack(c, 'Could not resend the email.'));
+                  }
                 }
-              } catch (_) {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                      content: Text('Could not resend the email.')));
-                }
-              }
-            },
-            child: Text('Resend email',
-                style: RelicTheme.sans(
-                    size: 13, color: c.accent, weight: FontWeight.w600)),
-          ),
-          IconButton(
-            icon: Icon(Icons.close, size: 16, color: c.textMuted),
-            tooltip: 'Dismiss',
-            onPressed: () => setState(() => _emailBannerDismissed = true),
-          ),
-        ]),
+              },
+            ),
+            const SizedBox(width: Insets.xs),
+            GhostIconButton(
+              icon: LucideIcons.x,
+              iconSize: 15,
+              tooltip: 'Dismiss',
+              onTap: () => setState(() => _emailBannerDismissed = true),
+            ),
+          ]),
+        ),
       ),
     );
   }
@@ -1886,40 +1933,48 @@ class _RealAppState extends State<RealApp>
   Widget _demoNudgeBanner() {
     final c = _useDark ? RelicColors.dark : RelicColors.light;
     return Material(
-      color: c.surface,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
-        child: Row(children: [
-          Icon(Icons.auto_awesome, color: c.accent, size: 18),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-                'This is sample data. Create your vault to keep things for real.',
-                style: RelicTheme.sans(size: 12.5, color: c.text, height: 1.35)),
-          ),
-          TextButton(
-            onPressed: () {
-              widget.repo.dismissDemoNudge();
-              _toAppMode();
-              setState(() {
-                _connecting = true;
-                _onboardStartAtSignIn = false;
-              });
-              _sizeWindow(520, 560);
-            },
-            child: Text('Create vault',
-                style: RelicTheme.sans(
-                    size: 13, color: c.accent, weight: FontWeight.w600)),
-          ),
-          IconButton(
-            icon: Icon(Icons.close, size: 16, color: c.textMuted),
-            tooltip: 'Dismiss',
-            onPressed: () {
-              widget.repo.dismissDemoNudge();
-              setState(() {});
-            },
-          ),
-        ]),
+      color: c.panel,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: c.border, width: 1)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+              Insets.lg, Insets.md, Insets.sm, Insets.md),
+          child: Row(children: [
+            Icon(LucideIcons.sparkles, color: c.accent, size: 17),
+            const SizedBox(width: Insets.md),
+            Expanded(
+              child: Text(
+                  'This is sample data. Create your vault to keep things for real.',
+                  style:
+                      RelicTheme.sans(size: 12.5, color: c.text, height: 1.35)),
+            ),
+            const SizedBox(width: Insets.sm),
+            GhostButton(
+              label: 'Create vault',
+              onTap: () {
+                widget.repo.dismissDemoNudge();
+                _toAppMode();
+                setState(() {
+                  _connecting = true;
+                  _onboardStartAtSignIn = false;
+                });
+                _sizeWindow(520, 560);
+              },
+            ),
+            const SizedBox(width: Insets.xs),
+            GhostIconButton(
+              icon: LucideIcons.x,
+              iconSize: 15,
+              tooltip: 'Dismiss',
+              onTap: () {
+                widget.repo.dismissDemoNudge();
+                setState(() {});
+              },
+            ),
+          ]),
+        ),
       ),
     );
   }
@@ -1931,6 +1986,12 @@ class _RealAppState extends State<RealApp>
       debugShowCheckedModeBanner: false,
       title: 'Relic',
       navigatorKey: _navKey,
+      // The shell had no theme at all, so every Material surface that isn't
+      // individually wrapped (pushed routes, dialog barriers, snack bars, the
+      // text-selection handles) fell back to stock Material blue-on-white in
+      // both palettes. materialThemeFor derives all of that from the active
+      // RelicColors; surfaces that already wrap themselves are unaffected.
+      theme: materialThemeFor(colors),
       // Theme above the Navigator too, so pushed routes (Devices, Security,
       // AddDevice) and dialogs can read RelicTheme.of without a re-wrap.
       builder: (context, child) => RelicTheme(

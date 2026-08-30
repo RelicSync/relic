@@ -5,6 +5,7 @@ import '../data/temporal_parser.dart';
 import '../models/relic.dart';
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
+import 'controls.dart';
 
 const _monthLabels = [
   'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August',
@@ -63,6 +64,9 @@ class _DateFilterSheetState extends State<DateFilterSheet> {
         color: c.panel,
         borderRadius: BorderRadius.circular(Radii.card),
         border: Border.all(color: c.border, width: 1),
+        // The sheet floats over the results list on a scrim; without an
+        // elevation it reads as a flat cut-out of the popup.
+        boxShadow: Shadows.window(c),
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(
@@ -70,18 +74,15 @@ class _DateFilterSheetState extends State<DateFilterSheet> {
         children: [
           // Header
           Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+            padding: const EdgeInsets.fromLTRB(
+                Insets.lg, Insets.md, Insets.md, Insets.md),
             child: Row(
               children: [
                 Icon(LucideIcons.calendar, size: m ? 18 : 15, color: c.accent),
-                const SizedBox(width: 8),
+                const SizedBox(width: Insets.sm),
                 Text(
                   _custom ? 'Custom range' : 'Filter by date',
-                  style: RelicTheme.sans(
-                    size: m ? 15 : 13,
-                    weight: FontWeight.w600,
-                    color: c.text,
-                  ),
+                  style: RelicTheme.headline(size: m ? 16 : 14, color: c.text),
                 ),
                 const Spacer(),
                 _IconBtn(
@@ -93,6 +94,7 @@ class _DateFilterSheetState extends State<DateFilterSheet> {
           ),
           Container(height: 1, color: c.border),
           if (!_custom) ...[
+            const SizedBox(height: Insets.xs),
             for (final (label, phrase) in _presets)
               _Row(
                 label: label,
@@ -103,7 +105,9 @@ class _DateFilterSheetState extends State<DateFilterSheet> {
               icon: LucideIcons.calendarRange,
               onTap: () => setState(() => _custom = true),
             ),
+            const SizedBox(height: Insets.xs),
             Container(height: 1, color: c.border),
+            const SizedBox(height: Insets.xs),
             _Row(
               label: 'Clear date filter',
               icon: LucideIcons.x,
@@ -111,10 +115,15 @@ class _DateFilterSheetState extends State<DateFilterSheet> {
               onTap: () => widget.onPick(null, null),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 4, 14, 12),
+              padding: const EdgeInsets.fromLTRB(
+                  Insets.lg, Insets.sm, Insets.lg, Insets.lg),
               child: Text(
                 'Tip: type dates in search, like “last week”, “before 2025”, “June 20”.',
-                style: RelicTheme.mono(size: m ? 11 : 9.5, color: c.textFaintest),
+                style: RelicTheme.sans(
+                  size: m ? 12 : 11,
+                  color: c.textFaint,
+                  height: 1.4,
+                ),
               ),
             ),
           ] else
@@ -147,25 +156,34 @@ class _Row extends StatelessWidget {
     final c = RelicTheme.of(context);
     final m = RelicTheme.isMobileOf(context);
     final color = muted ? c.textMuted : c.text;
-    return GestureDetector(
+    // De-boxed: nothing stands at rest, and hover paints an inset rounded
+    // tint — the same shape (and radius) the result rows use.
+    return Hoverable(
       onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: Padding(
-          padding: EdgeInsets.symmetric(horizontal: 14, vertical: m ? 13 : 10),
-          child: Row(
-            children: [
-              if (icon != null) ...[
-                Icon(icon, size: m ? 17 : 14, color: muted ? c.textMuted : c.accentMuted),
-                const SizedBox(width: 10),
-              ],
-              Text(
-                label,
-                style: RelicTheme.sans(size: m ? 14.5 : 12.5, color: color),
-              ),
+      builder: (context, hovered) => AnimatedContainer(
+        duration: Motion.selection,
+        // margin + padding add up to the header's own 16 inset, so the labels
+        // still line up with the sheet title.
+        margin: const EdgeInsets.symmetric(horizontal: Insets.sm),
+        padding: EdgeInsets.symmetric(
+          horizontal: Insets.sm,
+          vertical: m ? Insets.lg : Insets.md,
+        ),
+        decoration: BoxDecoration(
+          color: hovered ? c.surfaceHover : const Color(0x00000000),
+          borderRadius: BorderRadius.circular(Radii.row),
+        ),
+        child: Row(
+          children: [
+            if (icon != null) ...[
+              Icon(icon, size: m ? 17 : 14, color: muted ? c.textMuted : c.accent),
+              const SizedBox(width: Insets.md),
             ],
-          ),
+            Text(
+              label,
+              style: RelicTheme.sans(size: m ? 14.5 : 12.5, color: color),
+            ),
+          ],
         ),
       ),
     );
@@ -269,14 +287,18 @@ class _DateRangeCalendarState extends State<DateRangeCalendar> {
       final within = _inRange(d);
       final future = d.isAfter(today);
       final isToday = d == today;
+      // The two picked days are a gold FILL — the system's gradient, with its
+      // warm cast under it. The days between them take the gold-tint chip
+      // ground, so the band reads as one warm selection instead of a grey wash.
       Color bg = const Color(0x00000000);
+      Gradient? fill;
       Color fg = future ? c.textFaintest : c.textSecondary;
       if (endpoint) {
-        bg = c.accent;
+        fill = Gradients.gold;
         fg = c.onAccent;
       } else if (within) {
-        bg = c.selected;
-        fg = c.textOnSelected;
+        bg = c.tagBg;
+        fg = c.tagText;
       }
       return GestureDetector(
         onTap: future ? null : () => _tapDay(d),
@@ -287,11 +309,13 @@ class _DateRangeCalendarState extends State<DateRangeCalendar> {
             height: cell,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(Radii.chip),
+              color: fill == null ? bg : null,
+              gradient: fill,
+              borderRadius: BorderRadius.circular(Radii.tile),
               border: isToday && !endpoint
                   ? Border.all(color: c.borderStrong, width: 1)
                   : null,
+              boxShadow: endpoint ? Shadows.selected(c) : null,
             ),
             child: Text(
               '${d.day}',
@@ -307,7 +331,8 @@ class _DateRangeCalendarState extends State<DateRangeCalendar> {
     }
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+      padding: const EdgeInsets.fromLTRB(
+          Insets.md, Insets.sm, Insets.md, Insets.lg),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -323,11 +348,7 @@ class _DateRangeCalendarState extends State<DateRangeCalendar> {
                 child: Text(
                   '${_monthLabels[_month.month - 1]} ${_month.year}',
                   textAlign: TextAlign.center,
-                  style: RelicTheme.sans(
-                    size: m ? 14.5 : 12.5,
-                    weight: FontWeight.w600,
-                    color: c.text,
-                  ),
+                  style: RelicTheme.headline(size: m ? 15 : 13.5, color: c.text),
                 ),
               ),
               _IconBtn(
@@ -337,7 +358,7 @@ class _DateRangeCalendarState extends State<DateRangeCalendar> {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: Insets.md),
           // Weekday header
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -348,19 +369,19 @@ class _DateRangeCalendarState extends State<DateRangeCalendar> {
                   child: Text(
                     w,
                     textAlign: TextAlign.center,
-                    style: RelicTheme.mono(size: 10, color: c.textFaintest),
+                    style: RelicTheme.label(c.textFaintest),
                   ),
                 ),
             ],
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: Insets.sm),
           // Day grid
           for (var i = 0; i < cells.length; i += 7)
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [for (var j = 0; j < 7; j++) dayCell(cells[i + j])],
             ),
-          const SizedBox(height: 10),
+          const SizedBox(height: Insets.lg),
           // Footer
           Row(
             children: [
@@ -370,7 +391,7 @@ class _DateRangeCalendarState extends State<DateRangeCalendar> {
                   onTap: widget.onCancel,
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: Insets.sm),
               Expanded(
                 child: _FooterBtn(
                   label: _start == null
@@ -395,19 +416,14 @@ class _IconBtn extends StatelessWidget {
   const _IconBtn({required this.icon, required this.onTap});
   @override
   Widget build(BuildContext context) {
-    final c = RelicTheme.of(context);
     final m = RelicTheme.isMobileOf(context);
-    return GestureDetector(
+    // The shared ghost square: hover-tinted, and already finger-sized on
+    // phones (GhostButton grows icon-only controls to a 40px target).
+    return GhostIconButton(
+      icon: icon,
+      size: 26,
+      iconSize: m ? 18 : 15,
       onTap: onTap,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: Container(
-          width: m ? 34 : 26,
-          height: m ? 34 : 26,
-          alignment: Alignment.center,
-          child: Icon(icon, size: m ? 18 : 15, color: c.textSecondary),
-        ),
-      ),
     );
   }
 }
@@ -425,35 +441,16 @@ class _FooterBtn extends StatelessWidget {
   });
   @override
   Widget build(BuildContext context) {
-    final c = RelicTheme.of(context);
     final m = RelicTheme.isMobileOf(context);
-    final on = enabled;
-    final bg = primary ? (on ? c.accent : c.surface) : c.surface;
-    final fg = primary
-        ? (on ? c.onAccent : c.textFaintest)
-        : c.textSecondary;
-    return GestureDetector(
-      onTap: on ? onTap : null,
-      child: MouseRegion(
-        cursor: on ? SystemMouseCursors.click : MouseCursor.defer,
-        child: Container(
-          height: m ? 42 : 34,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(Radii.input),
-            border: Border.all(color: c.border, width: 1),
-          ),
-          child: Text(
-            label,
-            style: RelicTheme.mono(
-              size: m ? 13 : 11.5,
-              weight: FontWeight.w600,
-              color: fg,
-            ),
-          ),
-        ),
-      ),
+    // Apply is the one filled CTA in the sheet (gold gradient + its glow);
+    // Cancel is a plain ghost pill beside it. Both stretch because the footer
+    // hands each an Expanded slot.
+    return GhostButton(
+      label: label,
+      size: m ? 42 : 34,
+      fontSize: m ? 13.5 : 12.5,
+      style: primary ? GhostStyle.filled : GhostStyle.ghost,
+      onTap: enabled ? onTap : null,
     );
   }
 }

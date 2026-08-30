@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../platform/app_install.dart';
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
+import '../widgets/controls.dart';
 
 /// The step before onboarding for anyone running Relic out of the disk image
 /// (or the read-only shadow copy macOS makes of it). Offers to move the app
@@ -70,7 +72,7 @@ class _InstallOfferViewState extends State<InstallOfferView> {
             behavior:
                 ScrollConfiguration.of(context).copyWith(scrollbars: false),
             child: SingleChildScrollView(
-              padding: const EdgeInsets.all(28),
+              padding: const EdgeInsets.all(Insets.xxl),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: _failed ? _manual(c) : _offer(c),
@@ -84,11 +86,11 @@ class _InstallOfferViewState extends State<InstallOfferView> {
 
   List<Widget> _offer(RelicColors c) => [
         _header(c, 'Relic runs from your Applications folder', _why),
-        _note(c, Icons.info_outline,
+        _note(c, LucideIcons.info,
             'It takes a second. Relic reopens by itself from the new spot, and you can eject the disk image after that.'),
-        const SizedBox(height: 16),
-        _primary(c, 'Install and reopen', _busy ? null : _install),
-        _secondary(c, 'Quit', _busy ? null : widget.onQuit),
+        const SizedBox(height: Insets.xl),
+        _primary('Install and reopen', _busy ? null : _install),
+        _secondary('Quit', _busy ? null : widget.onQuit),
       ];
 
   List<Widget> _manual(RelicColors c) => [
@@ -96,12 +98,12 @@ class _InstallOfferViewState extends State<InstallOfferView> {
             c,
             'Drag Relic across yourself',
             'Relic could not copy itself over, usually because your Mac wants an admin to write to that folder. Your Applications folder is open in Finder now.'),
-        _note(c, Icons.drive_file_move_outline,
+        _note(c, LucideIcons.folderInput,
             'Drag Relic.app from the disk image window into Applications, then open Relic from Applications. That second step is the one people miss.'),
-        const SizedBox(height: 16),
-        _primary(c, 'Open my Applications folder',
+        const SizedBox(height: Insets.xl),
+        _primary('Open my Applications folder',
             _busy ? null : () => widget.onReveal()),
-        _secondary(c, 'Quit', _busy ? null : widget.onQuit),
+        _secondary('Quit', _busy ? null : widget.onQuit),
       ];
 
   /// One sentence for what actually happened. Translocation is worth naming
@@ -117,65 +119,67 @@ class _InstallOfferViewState extends State<InstallOfferView> {
       };
 
   Widget _header(RelicColors c, String title, String sub) => Padding(
-        padding: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.only(bottom: Insets.xl),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title,
-              style: TextStyle(
-                  color: c.text, fontSize: 20, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 6),
-          Text(sub, style: TextStyle(color: c.textMuted, height: 1.4)),
+          Text(title, style: RelicTheme.headline(size: 21, color: c.text)),
+          const SizedBox(height: Insets.sm),
+          Text(sub,
+              style: RelicTheme.sans(
+                  size: 13, color: c.textSecondary, height: 1.5)),
         ]),
       );
 
+  /// A white card on the parchment ground — the system's resting panel, not an
+  /// outlined box.
   Widget _note(RelicColors c, IconData icon, String text) => Container(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(Insets.lg),
         decoration: BoxDecoration(
           color: c.panel,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: c.borderStrong),
+          borderRadius: BorderRadius.circular(Radii.card),
+          border: Border.all(color: c.border),
+          boxShadow: Shadows.card(c),
         ),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Icon(icon, size: 18, color: c.textMuted),
-          const SizedBox(width: 10),
+          Icon(icon, size: 16, color: c.accent),
+          const SizedBox(width: Insets.md),
           Expanded(
             child: Text(text,
-                style: TextStyle(
-                    color: c.textMuted, height: 1.4, fontSize: 12.5)),
+                style: RelicTheme.sans(
+                    size: 12.5, color: c.textSecondary, height: 1.5)),
           ),
         ]),
       );
 
-  Widget _primary(RelicColors c, String label, VoidCallback? onTap) => SizedBox(
-        height: 48,
-        child: FilledButton(
-          onPressed: onTap,
-          style: FilledButton.styleFrom(
-              backgroundColor: c.accent,
-              foregroundColor: c.onAccent,
-              disabledBackgroundColor: c.track,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12))),
-          child: _busy
-              ? SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: c.onAccent))
-              : Text(label,
-                  style: const TextStyle(
-                      fontWeight: FontWeight.w600, fontSize: 15)),
+  /// The one gold CTA on this view: a full-width filled pill carrying its own
+  /// glow. While the copy runs the label keeps its place and the leading glyph
+  /// becomes the spinner, so the button never changes shape mid-action.
+  Widget _primary(String label, VoidCallback? onTap) => SizedBox(
+        width: double.infinity,
+        child: GhostButton(
+          label: label,
+          size: 44,
+          style: GhostStyle.filled,
+          fontSize: 14,
+          iconSize: 16,
+          iconBuilder: _busy
+              ? (size, color) => SizedBox(
+                    width: size,
+                    height: size,
+                    child:
+                        CircularProgressIndicator(strokeWidth: 2, color: color),
+                  )
+              : null,
+          onTap: onTap,
         ),
       );
 
-  Widget _secondary(RelicColors c, String label, VoidCallback? onTap) =>
-      SizedBox(
-        height: 48,
-        child: TextButton(
-          onPressed: onTap,
-          style: TextButton.styleFrom(foregroundColor: c.text),
-          child: Text(label,
-              style:
-                  const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+  Widget _secondary(String label, VoidCallback? onTap) => SizedBox(
+        width: double.infinity,
+        child: GhostButton(
+          label: label,
+          size: 40,
+          fontSize: 13.5,
+          onTap: onTap,
         ),
       );
 }

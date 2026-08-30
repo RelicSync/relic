@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
+import '../widgets/controls.dart';
 
 /// One coach-mark step: a widget to spotlight (via its [GlobalKey]) plus a short
 /// explanation. If the key isn't laid out, the callout just centers.
@@ -56,7 +57,7 @@ class _CoachMarksState extends State<CoachMarks> {
       // Callout goes below the target if there's room, else above. Falls back to
       // centered when the target isn't measurable.
       const cardW = 268.0;
-      const cardH = 148.0;
+      const cardH = 156.0;
       double left, top;
       bool arrowUp; // arrow points up (callout is below the target)
       if (rect == null) {
@@ -82,7 +83,14 @@ class _CoachMarksState extends State<CoachMarks> {
               behavior: HitTestBehavior.opaque,
               onTap: () {},
               child: CustomPaint(
-                painter: _ScrimPainter(rect, const Color(0xCC0B0906), c.accent),
+                // The dim is the shadow black both palettes already use,
+                // carried up to scrim strength: parchment is too light to dim
+                // with, and ink would wash out in the dark theme.
+                painter: _ScrimPainter(
+                  rect,
+                  c.shadowStrong.withValues(alpha: c.isDark ? 0.74 : 0.58),
+                  c.accent,
+                ),
               ),
             ),
           ),
@@ -104,70 +112,62 @@ class _CoachMarksState extends State<CoachMarks> {
         color: c.panel,
         borderRadius: BorderRadius.circular(Radii.card),
         border: Border.all(color: c.border, width: 1),
-        boxShadow: const [
-          BoxShadow(color: Color(0x99140E04), blurRadius: 40, spreadRadius: -8, offset: Offset(0, 16)),
-        ],
+        // It genuinely floats over the popup, so it takes the window
+        // elevation. Deliberately not glass: the only thing behind it is a
+        // flat scrim, and a blur with nothing interesting behind it just
+        // reads as muddy.
+        boxShadow: Shadows.window(c),
       ),
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+      padding: const EdgeInsets.fromLTRB(
+        Insets.lg,
+        Insets.lg,
+        Insets.lg,
+        Insets.md,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(step.title,
-              style: RelicTheme.sans(size: 14, weight: FontWeight.w600, color: c.text)),
-          const SizedBox(height: 6),
+          Text(step.title, style: RelicTheme.headline(size: 15, color: c.text)),
+          const SizedBox(height: Insets.sm),
           Text(step.body,
-              style: RelicTheme.sans(size: 12.5, color: c.textMuted, height: 1.45)),
-          const SizedBox(height: 14),
+              style: RelicTheme.sans(
+                  size: 12.5, color: c.textSecondary, height: 1.45)),
+          const SizedBox(height: Insets.lg),
           Row(children: [
             // progress dots
             for (var k = 0; k < widget.steps.length; k++)
               Padding(
-                padding: const EdgeInsets.only(right: 5),
+                padding: const EdgeInsets.only(right: Insets.xs),
                 child: Container(
                   width: 6,
                   height: 6,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: k == _i ? c.accent : c.border,
+                    // The hairline token is an 8%-alpha line, far too faint to
+                    // read as a dot; the control track is the standing "off"
+                    // fill in both palettes.
+                    color: k == _i ? c.accent : c.track,
                   ),
                 ),
               ),
             const Spacer(),
-            if (!last)
-              _link(c, 'Skip', widget.onDone),
-            const SizedBox(width: 12),
-            _primary(c, last ? 'Got it' : 'Next', _next),
+            if (!last) ...[
+              GhostButton(label: 'Skip', size: 30, onTap: widget.onDone),
+              const SizedBox(width: Insets.sm),
+            ],
+            // The one gold CTA in the view; it carries its own glow.
+            GhostButton(
+              label: last ? 'Got it' : 'Next',
+              size: 30,
+              style: GhostStyle.filled,
+              onTap: _next,
+            ),
           ]),
         ],
       ),
     );
   }
-
-  Widget _link(RelicColors c, String label, VoidCallback onTap) => GestureDetector(
-        onTap: onTap,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: Text(label,
-              style: RelicTheme.sans(size: 12.5, weight: FontWeight.w500, color: c.textMuted)),
-        ),
-      );
-
-  Widget _primary(RelicColors c, String label, VoidCallback onTap) => GestureDetector(
-        onTap: onTap,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-            decoration: BoxDecoration(
-              color: c.accent,
-              borderRadius: BorderRadius.circular(Radii.input),
-            ),
-            child: Text(label,
-                style: RelicTheme.sans(size: 12.5, weight: FontWeight.w600, color: c.onAccent)),
-          ),
-        ),
-      );
 }
 
 class _ScrimPainter extends CustomPainter {
@@ -183,7 +183,7 @@ class _ScrimPainter extends CustomPainter {
       canvas.drawPath(full, Paint()..color = scrim);
       return;
     }
-    final rr = RRect.fromRectAndRadius(hole!, const Radius.circular(10));
+    final rr = RRect.fromRectAndRadius(hole!, const Radius.circular(Radii.tile));
     final holePath = Path()..addRRect(rr);
     canvas.drawPath(
       Path.combine(PathOperation.difference, full, holePath),

@@ -104,6 +104,30 @@ enum Appearance {
   );
 }
 
+/// The stored appearance, read straight off disk before there is an app.
+///
+/// The desktop window's opaque background colour has to be handed to the native
+/// window in [WindowOptions] before `runApp`, so there is no element tree and no
+/// [RelicTheme] to ask. Without this, the window is painted in one palette's
+/// base while the user runs the other, and every summon starts with a flash of
+/// the wrong colour before Flutter's first frame lands.
+///
+/// Deliberately does its own minimal parse rather than building a repo: this
+/// runs on the boot path, and a full [LocalDeskRepo] would open the vault.
+/// Any failure falls back to the default palette, which is what an install with
+/// no prefs.json gets anyway.
+Appearance bootAppearance() {
+  try {
+    final f = File(
+        '${appDataPath()}${Platform.pathSeparator}prefs.json');
+    if (!f.existsSync()) return Appearance.light;
+    final j = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+    return Appearance.byName(j['appearance'] as String?);
+  } catch (_) {
+    return Appearance.light;
+  }
+}
+
 /// Retention/vault caps for the active tier, mirroring the server `TIERS`
 /// (`worker/src/index.ts`). Drives the settings UI's keep-N control and the
 /// client-side vault-full pre-check.

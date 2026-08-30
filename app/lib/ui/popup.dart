@@ -444,13 +444,13 @@ class _PopupViewState extends State<PopupView> {
         ),
         CoachStep(
           targetKey: _kList,
-          title: 'Tag & describe for recall',
+          title: 'Tag and describe for recall',
           body:
               'Open any item to edit its tags and description. Relic auto-tags, but a quick tweak makes it far easier to find later.',
         ),
         CoachStep(
           targetKey: _kSettings,
-          title: 'Hotkeys & settings',
+          title: 'Hotkeys and settings',
           body:
               'Set the global hotkey to summon Relic from anywhere, plus capture preferences and more, in Settings.',
         ),
@@ -463,9 +463,11 @@ class _PopupViewState extends State<PopupView> {
           cursor: SystemMouseCursors.click,
           child: Container(
             width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(14, 8, 12, 8),
+            padding: const EdgeInsets.fromLTRB(
+                Insets.lg, Insets.sm, Insets.md, Insets.sm),
             decoration: BoxDecoration(
-              color: c.accent.withValues(alpha: 0.10),
+              // The system's gold tint, not an ad-hoc accent wash.
+              color: c.tagBg,
               border: Border(bottom: BorderSide(color: c.border, width: 1)),
             ),
             child: Row(children: [
@@ -477,12 +479,14 @@ class _PopupViewState extends State<PopupView> {
                   style: RelicTheme.sans(size: 11.5, color: c.textSecondary),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: Insets.sm),
+              // Gold as a FILL: the system's gradient pill, no glow (the glow
+              // belongs to the one true CTA).
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
                 decoration: BoxDecoration(
-                  color: c.accent,
-                  borderRadius: BorderRadius.circular(Radii.chip),
+                  gradient: Gradients.gold,
+                  borderRadius: BorderRadius.circular(Radii.pill),
                 ),
                 child: Text('Sign in',
                     style: RelicTheme.sans(
@@ -503,9 +507,10 @@ class _PopupViewState extends State<PopupView> {
           cursor: SystemMouseCursors.click,
           child: Container(
             width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(14, 8, 12, 8),
+            padding: const EdgeInsets.fromLTRB(
+                Insets.lg, Insets.sm, Insets.md, Insets.sm),
             decoration: BoxDecoration(
-              color: c.accent.withValues(alpha: 0.10),
+              color: c.tagBg,
               border: Border(bottom: BorderSide(color: c.border, width: 1)),
             ),
             child: Row(children: [
@@ -518,12 +523,12 @@ class _PopupViewState extends State<PopupView> {
                   style: RelicTheme.sans(size: 11.5, color: c.textSecondary),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: Insets.sm),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
                 decoration: BoxDecoration(
-                  color: c.accent,
-                  borderRadius: BorderRadius.circular(Radii.chip),
+                  gradient: Gradients.gold,
+                  borderRadius: BorderRadius.circular(Radii.pill),
                 ),
                 child: Text('Review',
                     style: RelicTheme.sans(
@@ -550,13 +555,14 @@ class _PopupViewState extends State<PopupView> {
     }
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(14, 7, 12, 7),
+      padding: const EdgeInsets.fromLTRB(
+          Insets.lg, Insets.sm, Insets.md, Insets.sm),
       decoration: BoxDecoration(
-        color: c.warningDim.withValues(alpha: 0.10),
+        color: c.warningBg,
         border: Border(bottom: BorderSide(color: c.border, width: 1)),
       ),
       child: Row(children: [
-        Icon(LucideIcons.pause, size: 13, color: c.warningDim),
+        Icon(LucideIcons.pause, size: 13, color: c.warning),
         const SizedBox(width: 9),
         Expanded(
           child: Text(
@@ -564,7 +570,7 @@ class _PopupViewState extends State<PopupView> {
             style: RelicTheme.sans(size: 11.5, color: c.textSecondary),
           ),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: Insets.sm),
         if (widget.onResumeCapture != null)
           GhostButton(
             label: 'Resume',
@@ -579,14 +585,17 @@ class _PopupViewState extends State<PopupView> {
   /// A fake example tile shown behind the coach marks when the vault is empty,
   /// so the "tag & describe" step has a real target to spotlight.
   Widget _coachSampleTile(RelicColors c) => Padding(
-        padding: const EdgeInsets.all(8),
+        padding: const EdgeInsets.all(Insets.md),
         child: Container(
           key: _kList,
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(Insets.md),
           decoration: BoxDecoration(
-            color: c.surface,
-            borderRadius: BorderRadius.circular(Radii.tile),
+            // A stand-in for a result row: the same white card, row radius and
+            // resting elevation the real rows use.
+            color: c.panel,
+            borderRadius: BorderRadius.circular(Radii.row),
             border: Border.all(color: c.border, width: 1),
+            boxShadow: Shadows.card(c),
           ),
           child: Row(children: [
             Icon(LucideIcons.image, size: 18, color: c.accent),
@@ -599,7 +608,7 @@ class _PopupViewState extends State<PopupView> {
                       style: RelicTheme.sans(
                           size: 13, weight: FontWeight.w500, color: c.text)),
                   const SizedBox(height: 3),
-                  Text('Example item. Open it to edit its tags & description.',
+                  Text('Example item. Open it to edit its tags and description.',
                       style: RelicTheme.sans(size: 11.5, color: c.textMuted)),
                   const SizedBox(height: 7),
                   Row(children: [
@@ -616,13 +625,14 @@ class _PopupViewState extends State<PopupView> {
         ),
       );
 
+  /// The system's tag chip: gold-tint ground, deep-gold mono text, no border.
   Widget _sampleChip(RelicColors c, String t) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
         decoration: BoxDecoration(
-          color: c.accent.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(Radii.chip),
+          color: c.tagBg,
+          borderRadius: BorderRadius.circular(Radii.tag),
         ),
-        child: Text('#$t', style: RelicTheme.mono(size: 10, color: c.accentMuted)),
+        child: Text('#$t', style: RelicTheme.mono(size: 10, color: c.tagText)),
       );
 
   /// Recompute the present collection facets (cheap COUNT per candidate tag).
@@ -834,8 +844,9 @@ class _PopupViewState extends State<PopupView> {
           height: MiniResultRow.height,
           child: Center(
             child: Text(
+              // Read, not a hint — so the darkened faint, per the palette note.
               searching ? 'No matches' : 'Nothing here yet',
-              style: RelicTheme.sans(size: 12, color: c.textFaintest),
+              style: RelicTheme.sans(size: 12, color: c.textFaint),
             ),
           ),
         ),
@@ -1377,20 +1388,22 @@ class _PopupViewState extends State<PopupView> {
 
   /// Slim action bar shown above the list while a multi-selection exists.
   Widget _bulkBar(RelicColors c) => Container(
-        padding: const EdgeInsets.fromLTRB(14, 7, 14, 7),
+        padding: const EdgeInsets.fromLTRB(
+            Insets.lg, Insets.sm, Insets.lg, Insets.sm),
         decoration: BoxDecoration(
           color: c.panel,
           border: Border(bottom: BorderSide(color: c.border, width: 1)),
         ),
         child: Row(
           children: [
-            Icon(LucideIcons.copyCheck, size: 13, color: c.accentMuted),
+            // A glyph, so the FILL gold — not the deep gold reserved for text.
+            Icon(LucideIcons.copyCheck, size: 13, color: c.accent),
             const SizedBox(width: 7),
             Text(
               '${_multiSel.length} selected',
               style: RelicTheme.mono(size: 11, color: c.textSecondary),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: Insets.md),
             // Overflow-safe: the action cluster scrolls horizontally (anchored
             // right) so it never overflows the narrow popup, even at Mini width
             // with the extra Combine controls on.
@@ -1434,17 +1447,18 @@ class _PopupViewState extends State<PopupView> {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
             decoration: BoxDecoration(
-              color: c.panel,
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: c.border),
+              // A meta chip, not an outlined control: tint ground, mono text,
+              // no hairline.
+              color: c.tagBg,
+              borderRadius: BorderRadius.circular(Radii.tag),
             ),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               Icon(LucideIcons.separatorHorizontal,
-                  size: 11, color: c.textFaintest),
+                  size: 11, color: c.tagText),
               const SizedBox(width: 5),
               Text(
                 _combineSepLabel,
-                style: RelicTheme.mono(size: 10, color: c.textSecondary),
+                style: RelicTheme.mono(size: 10, color: c.tagText),
               ),
             ]),
           ),
@@ -1642,17 +1656,14 @@ class _PopupViewState extends State<PopupView> {
                   width: w,
                   child: Container(
                     padding: const EdgeInsets.symmetric(vertical: pad),
+                    // Clipped so a full-bleed row hover can't square off the
+                    // panel's corners.
+                    clipBehavior: Clip.antiAlias,
                     decoration: BoxDecoration(
                       color: c.panel,
-                      borderRadius: BorderRadius.circular(Radii.input),
-                      border: Border.all(color: c.borderStrong, width: 1),
-                      boxShadow: [
-                        BoxShadow(
-                          color: c.shadowSoft,
-                          blurRadius: 16,
-                          offset: const Offset(0, 6),
-                        ),
-                      ],
+                      borderRadius: BorderRadius.circular(Radii.card),
+                      border: Border.all(color: c.border, width: 1),
+                      boxShadow: Shadows.card(c),
                     ),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
@@ -1666,11 +1677,8 @@ class _PopupViewState extends State<PopupView> {
                                 alignment: Alignment.centerLeft,
                                 child: Text(
                                   'COPY AS',
-                                  style: RelicTheme.mono(
-                                    size: 9,
-                                    color: c.textFaintest,
-                                    letterSpacing: 1.2,
-                                  ),
+                                  style: RelicTheme.kicker(c.textFaintest,
+                                      size: 9),
                                 ),
                               ),
                               _MenuRow(
@@ -1733,8 +1741,9 @@ class _PopupViewState extends State<PopupView> {
             final a = anchor;
             final left = a.left.clamp(6.0, box.maxWidth - w - 6);
             // Height varies with the hint line; measure loosely and flip
-            // above when the badge sits near the bottom edge.
-            final estH = hint == null ? 96.0 : 116.0;
+            // above when the badge sits near the bottom edge. Re-measured
+            // after the popover's spacing was opened up a step.
+            final estH = hint == null ? 108.0 : 128.0;
             var top = a.bottom + 4;
             if (top + estH > box.maxHeight - 6) top = a.top - estH - 4;
             return Stack(children: [
@@ -1743,18 +1752,13 @@ class _PopupViewState extends State<PopupView> {
                 top: top,
                 width: w,
                 child: Container(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                  padding: const EdgeInsets.fromLTRB(
+                      Insets.md, Insets.md, Insets.md, Insets.sm),
                   decoration: BoxDecoration(
                     color: c.panel,
-                    borderRadius: BorderRadius.circular(Radii.input),
-                    border: Border.all(color: c.borderStrong, width: 1),
-                    boxShadow: [
-                      BoxShadow(
-                        color: c.shadowSoft,
-                        blurRadius: 16,
-                        offset: const Offset(0, 6),
-                      ),
-                    ],
+                    borderRadius: BorderRadius.circular(Radii.card),
+                    border: Border.all(color: c.border, width: 1),
+                    boxShadow: Shadows.card(c),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1762,29 +1766,27 @@ class _PopupViewState extends State<PopupView> {
                     children: [
                       Row(children: [
                         Icon(LucideIcons.triangleAlert,
-                            size: 12, color: c.warningDim),
+                            size: 12, color: c.warning),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(reason,
-                              style: RelicTheme.sans(
-                                  size: 11.5,
-                                  weight: FontWeight.w600,
-                                  color: c.text)),
+                              style: RelicTheme.headline(
+                                  size: 12.5, color: c.text)),
                         ),
                       ]),
                       if (hint != null) ...[
-                        const SizedBox(height: 4),
+                        const SizedBox(height: Insets.sm),
                         Text(hint,
                             style: RelicTheme.sans(
-                                size: 10.5, color: c.textSecondary)),
+                                size: 11, color: c.textSecondary)),
                       ],
-                      const SizedBox(height: 4),
+                      const SizedBox(height: Insets.sm),
                       Text(
                         'refused ${relativeAge(rej.rejectedAt, _now)}'
                         '${rej.rejectedAt > _now - 3 * 86400 ? ' ago' : ''}',
-                        style: RelicTheme.mono(size: 9.5, color: c.textFaintest),
+                        style: RelicTheme.mono(size: 10, color: c.textFaintest),
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: Insets.sm),
                       Align(
                         alignment: Alignment.centerLeft,
                         child: GhostButton(
@@ -2025,9 +2027,9 @@ class _PopupViewState extends State<PopupView> {
     if (present.isEmpty) return const SizedBox.shrink();
     return Container(
       height: 32,
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: Insets.md),
       child: _collectionsList(present,
-          padding: const EdgeInsets.symmetric(horizontal: 14)),
+          padding: const EdgeInsets.symmetric(horizontal: Insets.lg)),
     );
   }
 
@@ -2044,13 +2046,13 @@ class _PopupViewState extends State<PopupView> {
       // emitted separately in build() (after the active-tags strip) so the
       // vertical order is unchanged.
       return Padding(
-        padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+        padding: const EdgeInsets.fromLTRB(Insets.lg, 0, Insets.lg, Insets.md),
         child: Row(
           children: [
             Expanded(child: _scopeBar()),
-            const SizedBox(width: 8),
+            const SizedBox(width: Insets.sm),
             _dateButton(c),
-            const SizedBox(width: 8),
+            const SizedBox(width: Insets.sm),
             _sortButton(c),
           ],
         ),
@@ -2058,7 +2060,7 @@ class _PopupViewState extends State<PopupView> {
     }
     final present = _presentCollections;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+      padding: const EdgeInsets.fromLTRB(Insets.lg, 0, Insets.lg, Insets.md),
       child: SizedBox(
         height: 32,
         child: LayoutBuilder(
@@ -2070,7 +2072,7 @@ class _PopupViewState extends State<PopupView> {
             return Row(
               children: [
                 ScopeBar(scope: _scope, onChanged: _onScopeChanged, compact: true),
-                const SizedBox(width: 10),
+                const SizedBox(width: Insets.md),
                 Expanded(
                   child: (searching || present.isEmpty)
                       ? const SizedBox.shrink()
@@ -2080,6 +2082,9 @@ class _PopupViewState extends State<PopupView> {
                             // edge, expressed as fractions of the actual width.
                             final f =
                                 (12.0 / rect.width).clamp(0.0, 0.5).toDouble();
+                            // An ALPHA RAMP for BlendMode.dstIn, not palette
+                            // colour: opaque black keeps a pixel, transparent
+                            // erases it. There is no token for a mask.
                             return LinearGradient(
                               begin: Alignment.centerLeft,
                               end: Alignment.centerRight,
@@ -2095,12 +2100,12 @@ class _PopupViewState extends State<PopupView> {
                           blendMode: BlendMode.dstIn,
                           child: _collectionsList(
                             present,
-                            padding:
-                                const EdgeInsets.symmetric(horizontal: 12),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: Insets.md),
                           ),
                         ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: Insets.sm),
                 _dateButton(c),
                 const SizedBox(width: 2),
                 _sortButton(c, showLabel: showSortLabel),
@@ -2232,12 +2237,12 @@ class _PopupViewState extends State<PopupView> {
   Widget _activeTagsStrip(RelicColors c) {
     return Container(
       width: double.infinity, // else the popup Column centers it
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      margin: const EdgeInsets.only(bottom: Insets.md),
+      padding: const EdgeInsets.symmetric(horizontal: Insets.lg),
       child: Wrap(
         alignment: WrapAlignment.start,
-        spacing: 6,
-        runSpacing: 6,
+        spacing: Insets.sm,
+        runSpacing: Insets.sm,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           if (_dateChipLabel != null)
@@ -2316,10 +2321,14 @@ class _PopupViewState extends State<PopupView> {
                 child: Container(
                   height: 32,
                   alignment: Alignment.center,
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: Insets.sm),
                   child: Text(
+                    // A control label, so sans — and legible, not faint.
                     'Clear',
-                    style: RelicTheme.mono(size: 10.5, color: c.textFaintest),
+                    style: RelicTheme.sans(
+                        size: 11.5,
+                        weight: FontWeight.w500,
+                        color: c.textSecondary),
                   ),
                 ),
               ),
@@ -2523,14 +2532,7 @@ class _PopupViewState extends State<PopupView> {
           color: c.base,
           borderRadius: BorderRadius.circular(Radii.popup),
           border: Border.all(color: c.border, width: 1),
-          boxShadow: [
-            BoxShadow(
-              color: c.shadowStrong,
-              blurRadius: 80,
-              spreadRadius: -24,
-              offset: const Offset(0, 40),
-            ),
-          ],
+          boxShadow: Shadows.window(c),
         ),
         clipBehavior: Clip.antiAlias,
         child: Stack(
@@ -2717,11 +2719,17 @@ class _PopupViewState extends State<PopupView> {
                 child: GestureDetector(
                   onTap: () => _setDialog(null),
                   child: Container(
-                    color: const Color(0x99000000),
+                    // The modal dim. Tokenized, so the light palette gets a
+                    // parchment-appropriate scrim instead of a flat 60% black.
+                    color: c.shadowModal,
                     alignment: Alignment.center,
                     padding: EdgeInsets.symmetric(
-                      horizontal: RelicTheme.isMobileOf(context) ? 8 : 18,
-                      vertical: RelicTheme.isMobileOf(context) ? 24 : 18,
+                      horizontal: RelicTheme.isMobileOf(context)
+                          ? Insets.sm
+                          : Insets.xl,
+                      vertical: RelicTheme.isMobileOf(context)
+                          ? Insets.xxl
+                          : Insets.xl,
                     ),
                     child: GestureDetector(onTap: () {}, child: _dialog),
                   ),
@@ -2815,7 +2823,7 @@ class _Empty extends StatelessWidget {
     final c = RelicTheme.of(context);
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(30),
+        padding: const EdgeInsets.all(Insets.xxxl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -2826,20 +2834,17 @@ class _Empty extends StatelessWidget {
                 color: c.panel,
                 borderRadius: BorderRadius.circular(Radii.card),
                 border: Border.all(color: c.border, width: 1),
+                boxShadow: Shadows.card(c),
               ),
               alignment: Alignment.center,
               child: Icon(LucideIcons.inbox, size: 28, color: c.textFaintest),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: Insets.xl),
             Text(
               'Nothing here yet',
-              style: RelicTheme.sans(
-                size: 15,
-                weight: FontWeight.w500,
-                color: c.text,
-              ),
+              style: RelicTheme.headline(size: 17, color: c.text),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: Insets.sm),
             SizedBox(
               width: 240,
               child: Text(
@@ -2852,24 +2857,24 @@ class _Empty extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: Insets.xxl),
+            // The outlined-gold chip is dead: a gold-tint pill with deep-gold
+            // mono text carries the hint instead.
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: Insets.md, vertical: Insets.sm),
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(Radii.tile),
-                border: Border.all(
-                  color: c.accent.withValues(alpha: 0.4),
-                  width: 1.5,
-                ),
+                color: c.tagBg,
+                borderRadius: BorderRadius.circular(Radii.pill),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(LucideIcons.upload, size: 14, color: c.accent),
-                  const SizedBox(width: 8),
+                  Icon(LucideIcons.upload, size: 13, color: c.tagText),
+                  const SizedBox(width: 7),
                   Text(
                     'Or drop files to keep them',
-                    style: RelicTheme.mono(size: 11, color: c.accentMuted),
+                    style: RelicTheme.mono(size: 11, color: c.tagText),
                   ),
                 ],
               ),
@@ -2953,32 +2958,35 @@ class _CollectionChip extends StatelessWidget {
     final c = RelicTheme.of(context);
     return Hoverable(
       onTap: onTap,
-      builder: (context, hovered) => AnimatedContainer(
-        duration: Motion.selection,
-        height: 32,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        decoration: BoxDecoration(
-          // De-boxed: transparent at rest, a ghost-hover fill on hover.
-          color: hovered ? c.ghostHover : const Color(0x00000000),
-          borderRadius: BorderRadius.circular(Radii.pill),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 13, color: c.accentMuted),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: RelicTheme.sans(size: 12, color: c.textSecondary),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              '$count',
-              style: RelicTheme.mono(size: 10.5, color: c.textFaintest),
-            ),
-          ],
-        ),
-      ),
+      builder: (context, hovered) {
+        // Exactly the ghost button's mapping: quiet at rest, ink on a
+        // ghost-hover fill. The old deep-gold glyph was the TEXT gold used as
+        // a fill, and twenty of them in a strip fought the one gold CTA.
+        final fg = hovered ? c.text : c.textSecondary;
+        return AnimatedContainer(
+          duration: Motion.selection,
+          height: 32,
+          padding: const EdgeInsets.symmetric(horizontal: Insets.md),
+          decoration: BoxDecoration(
+            // De-boxed: transparent at rest, a ghost-hover fill on hover.
+            color: hovered ? c.ghostHover : const Color(0x00000000),
+            borderRadius: BorderRadius.circular(Radii.pill),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 13, color: fg),
+              const SizedBox(width: 6),
+              Text(label, style: RelicTheme.sans(size: 12, color: fg)),
+              const SizedBox(width: 6),
+              Text(
+                '$count',
+                style: RelicTheme.mono(size: 10.5, color: c.textFaintest),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -3008,46 +3016,55 @@ class _SyncIssuesSheetState extends State<_SyncIssuesSheet> {
     return Container(
       width: 400,
       constraints: const BoxConstraints(maxHeight: 420),
+      // The modal shell the rest of the app's dialogs use.
       decoration: BoxDecoration(
         color: c.panel,
         borderRadius: BorderRadius.circular(Radii.card),
-        border: Border.all(color: c.borderStrong, width: 1),
+        border: Border.all(color: c.border, width: 1),
+        boxShadow: Shadows.window(c),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 10, 8),
+          Container(
+            padding: const EdgeInsets.fromLTRB(
+                Insets.xl, Insets.lg, Insets.md, Insets.lg),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: c.border, width: 1)),
+            ),
             child: Row(
               children: [
-                Icon(LucideIcons.triangleAlert, size: 15, color: c.warningDim),
-                const SizedBox(width: 8),
+                Icon(LucideIcons.triangleAlert, size: 15, color: c.warning),
+                const SizedBox(width: Insets.md),
                 Expanded(
                   child: Text(
                     'Not synced',
-                    style: RelicTheme.sans(
-                        size: 14, weight: FontWeight.w600, color: c.text),
+                    style: RelicTheme.headline(size: 15, color: c.text),
                   ),
                 ),
                 GhostIconButton(
-                    icon: LucideIcons.x, size: 24, onTap: widget.onClose),
+                    icon: LucideIcons.x,
+                    size: 28,
+                    iconSize: 15,
+                    onTap: widget.onClose),
               ],
             ),
           ),
           if (items.isEmpty)
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
+              padding: const EdgeInsets.fromLTRB(
+                  Insets.xl, Insets.lg, Insets.xl, Insets.xl),
               child: Text(
                 'Everything synced. These items cleared up on their own.',
-                style: RelicTheme.sans(size: 12, color: c.textMuted),
+                style: RelicTheme.sans(size: 12.5, color: c.textMuted),
               ),
             )
           else ...[
             Flexible(
               child: ListView.builder(
                 shrinkWrap: true,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
+                padding: const EdgeInsets.symmetric(horizontal: Insets.md),
                 itemCount: items.length,
                 itemBuilder: (_, i) {
                   final it = items[i];
@@ -3057,7 +3074,7 @@ class _SyncIssuesSheetState extends State<_SyncIssuesSheet> {
                       : r.displayTitle;
                   return Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 7),
+                        horizontal: Insets.sm, vertical: Insets.md),
                     decoration: BoxDecoration(
                       border: i == 0
                           ? null
@@ -3085,7 +3102,7 @@ class _SyncIssuesSheetState extends State<_SyncIssuesSheet> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: RelicTheme.mono(
-                                    size: 10, color: c.warningDim),
+                                    size: 10, color: c.warning),
                               ),
                             ],
                           ),
@@ -3107,7 +3124,8 @@ class _SyncIssuesSheetState extends State<_SyncIssuesSheet> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+              padding: const EdgeInsets.fromLTRB(
+                  Insets.lg, Insets.md, Insets.lg, Insets.lg),
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: GhostButton(
@@ -3176,21 +3194,24 @@ class _HelpSheet extends StatelessWidget {
     Widget section(String title, List<(String, String)> rows) => Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title,
-                style: RelicTheme.mono(
-                    size: 9.5, color: c.textFaintest, letterSpacing: 1.2)),
-            const SizedBox(height: 6),
+            Text(title, style: RelicTheme.kicker(c.textFaintest)),
+            const SizedBox(height: Insets.sm),
             for (final (k, v) in rows)
               Padding(
-                padding: const EdgeInsets.only(bottom: 5),
+                padding: const EdgeInsets.only(bottom: 6),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Operators and keycaps are machine facts: mono, in ink.
+                    // Deep gold on a bare white panel is the one thing this
+                    // palette must never do.
                     SizedBox(
                       width: 128,
                       child: Text(k,
-                          style:
-                              RelicTheme.mono(size: 11, color: c.accentMuted)),
+                          style: RelicTheme.mono(
+                              size: 11,
+                              weight: FontWeight.w500,
+                              color: c.text)),
                     ),
                     Expanded(
                       child: Text(v,
@@ -3200,7 +3221,7 @@ class _HelpSheet extends StatelessWidget {
                   ],
                 ),
               ),
-            const SizedBox(height: 10),
+            const SizedBox(height: Insets.md),
           ],
         );
     return Container(
@@ -3209,32 +3230,40 @@ class _HelpSheet extends StatelessWidget {
       decoration: BoxDecoration(
         color: c.panel,
         borderRadius: BorderRadius.circular(Radii.card),
-        border: Border.all(color: c.borderStrong, width: 1),
+        border: Border.all(color: c.border, width: 1),
+        boxShadow: Shadows.window(c),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 10, 6),
+          Container(
+            padding: const EdgeInsets.fromLTRB(
+                Insets.xl, Insets.lg, Insets.md, Insets.lg),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: c.border, width: 1)),
+            ),
             child: Row(
               children: [
-                Icon(LucideIcons.circleHelp, size: 15, color: c.accentMuted),
-                const SizedBox(width: 8),
+                Icon(LucideIcons.circleHelp, size: 15, color: c.accent),
+                const SizedBox(width: Insets.md),
                 Expanded(
                   child: Text(
-                    'Search & shortcuts',
-                    style: RelicTheme.sans(
-                        size: 14, weight: FontWeight.w600, color: c.text),
+                    'Search and shortcuts',
+                    style: RelicTheme.headline(size: 15, color: c.text),
                   ),
                 ),
                 GhostIconButton(
-                    icon: LucideIcons.x, size: 24, onTap: onClose),
+                    icon: LucideIcons.x,
+                    size: 28,
+                    iconSize: 15,
+                    onTap: onClose),
               ],
             ),
           ),
           Flexible(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(16, 6, 16, 14),
+              padding: const EdgeInsets.fromLTRB(
+                  Insets.xl, Insets.lg, Insets.xl, Insets.lg),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -3262,7 +3291,7 @@ class _NoMatches extends StatelessWidget {
     final c = RelicTheme.of(context);
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(30),
+        padding: const EdgeInsets.all(Insets.xxxl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -3273,21 +3302,18 @@ class _NoMatches extends StatelessWidget {
                 color: c.panel,
                 borderRadius: BorderRadius.circular(Radii.card),
                 border: Border.all(color: c.border, width: 1),
+                boxShadow: Shadows.card(c),
               ),
               alignment: Alignment.center,
               child: Icon(LucideIcons.searchX, size: 28, color: c.textFaintest),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: Insets.lg),
             Text(
               'No results for “$query”',
               textAlign: TextAlign.center,
-              style: RelicTheme.sans(
-                size: 15,
-                weight: FontWeight.w500,
-                color: c.text,
-              ),
+              style: RelicTheme.headline(size: 17, color: c.text),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: Insets.sm),
             SizedBox(
               width: 250,
               child: Text(
@@ -3300,7 +3326,7 @@ class _NoMatches extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: Insets.md),
             SizedBox(
               width: 260,
               child: Text(
@@ -3337,7 +3363,8 @@ class _LoadMore extends StatelessWidget {
     final c = RelicTheme.of(context);
     final m = RelicTheme.isMobileOf(context);
     return Padding(
-      padding: EdgeInsets.fromLTRB(8, 6, 8, m ? 22 : 12),
+      padding: EdgeInsets.fromLTRB(
+          Insets.sm, Insets.sm, Insets.sm, m ? Insets.xxl : Insets.md),
       child: GestureDetector(
         onTap: onTap,
         child: MouseRegion(
@@ -3345,8 +3372,9 @@ class _LoadMore extends StatelessWidget {
           child: Container(
             height: m ? 48 : 38,
             decoration: BoxDecoration(
+              // Sits at the foot of the list, so it takes the rows' shape.
               color: c.surface,
-              borderRadius: BorderRadius.circular(Radii.chip),
+              borderRadius: BorderRadius.circular(Radii.row),
               border: Border.all(color: c.border, width: 1),
             ),
             alignment: Alignment.center,
@@ -3390,13 +3418,14 @@ class _DragOverlay extends StatelessWidget {
     final c = RelicTheme.of(context);
     return Positioned.fill(
       child: Padding(
-        padding: const EdgeInsets.all(10),
+        padding: const EdgeInsets.all(Insets.md),
         child: DottedBorderBox(
           color: c.accent,
           child: Container(
             decoration: BoxDecoration(
               color: c.selected.withValues(alpha: 0.55),
-              borderRadius: BorderRadius.circular(11),
+              // Must stay in step with _DashPainter's corner.
+              borderRadius: BorderRadius.circular(Radii.cardLarge),
             ),
             alignment: Alignment.center,
             child: Column(
@@ -3406,19 +3435,18 @@ class _DragOverlay extends StatelessWidget {
                   width: 74,
                   height: 74,
                   decoration: BoxDecoration(
-                    color: c.selected,
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: c.accent.withValues(alpha: 0.4)),
+                    // A gold-tint tile, not a gold hairline.
+                    color: c.tagBg,
+                    borderRadius: BorderRadius.circular(Radii.card),
                   ),
                   alignment: Alignment.center,
                   child: Icon(LucideIcons.upload, size: 32, color: c.accent),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: Insets.lg),
                 Text(
                   'Drop to add to your Vault',
-                  style: RelicTheme.sans(
-                    size: 16,
-                    weight: FontWeight.w600,
+                  style: RelicTheme.headline(
+                    size: 17,
                     color: c.textOnSelected,
                   ),
                 ),
@@ -3450,9 +3478,11 @@ class _DashPainter extends CustomPainter {
       ..color = color
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2;
+    // Matches the drop overlay's own corner (Radii.cardLarge) so the dashes
+    // trace the filled box exactly.
     final r = RRect.fromRectAndRadius(
       Offset.zero & size,
-      const Radius.circular(11),
+      const Radius.circular(Radii.cardLarge),
     );
     final path = Path()..addRRect(r);
     const dash = 7.0, gap = 5.0;

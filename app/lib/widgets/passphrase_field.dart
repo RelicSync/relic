@@ -1,19 +1,40 @@
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../data/passphrase_strength.dart';
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
+import 'controls.dart';
 
 // Colors come from the active RelicColors (read via RelicTheme.of in build and
 // threaded to helpers), so this widget renders on-palette in both light and dark
 // wherever it drops in (onboarding, desktop_onboarding, add_device / security).
+
+/// The meter bar's FILL for a band — gold is a fill color, so the okay band
+/// takes the bright accent here.
 Color _bandColor(RelicColors c, PassphraseBand b) => switch (b) {
       PassphraseBand.weak => c.dangerText,
       PassphraseBand.okay => c.accent,
       PassphraseBand.strong => c.successDim,
       PassphraseBand.excellent => c.success,
+    };
+
+/// The band's rating chip: a tint ground and a text-weight color. The label is
+/// never the bar's own fill — gold as text is the deep gold on a gold tint, and
+/// the other bands follow the same shape so the row reads as one control.
+(Color, Color) _bandChip(RelicColors c, PassphraseBand b) => switch (b) {
+      PassphraseBand.weak => (c.dangerBg, c.dangerText),
+      PassphraseBand.okay => (c.tagBg, c.tagText),
+      PassphraseBand.strong => (
+          c.success.withValues(alpha: c.isDark ? 0.18 : 0.12),
+          c.success,
+        ),
+      PassphraseBand.excellent => (
+          c.success.withValues(alpha: c.isDark ? 0.18 : 0.12),
+          c.success,
+        ),
     };
 
 /// A vault-passphrase entry field with a live strength meter and a "Suggest a
@@ -79,17 +100,23 @@ class _VaultPassphraseFieldState extends State<VaultPassphraseField> {
           obscureText: _obscure,
           autocorrect: false,
           enableSuggestions: false,
-          style: TextStyle(color: c.text),
+          // A passphrase is a secret, not prose: mono, like every other secret
+          // value in the app.
+          style: RelicTheme.mono(size: 13.5, color: c.text),
           decoration: InputDecoration(
             hintText: widget.hint,
-            hintStyle: TextStyle(color: c.textMuted),
+            hintStyle: RelicTheme.sans(size: 13, color: c.textFaintest),
             filled: true,
             fillColor: c.surface,
-            suffixIcon: IconButton(
-              icon: Icon(_obscure ? Icons.visibility_off : Icons.visibility,
-                  color: c.textMuted, size: 20),
-              tooltip: _obscure ? 'Show' : 'Hide',
-              onPressed: () => setState(() => _obscure = !_obscure),
+            suffixIcon: Padding(
+              padding: const EdgeInsets.only(right: Insets.sm),
+              child: GhostButton(
+                icon: _obscure ? LucideIcons.eye : LucideIcons.eyeOff,
+                size: 28,
+                iconSize: 16,
+                tooltip: _obscure ? 'Show' : 'Hide',
+                onTap: () => setState(() => _obscure = !_obscure),
+              ),
             ),
             enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(Radii.input),
@@ -99,56 +126,71 @@ class _VaultPassphraseFieldState extends State<VaultPassphraseField> {
                 borderSide: BorderSide(color: c.accent)),
           ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: Insets.md),
         Row(
           children: [
             if (text.isNotEmpty) Expanded(child: _meter(c, strength)),
-            if (text.isNotEmpty) const SizedBox(width: 12),
+            if (text.isNotEmpty) const SizedBox(width: Insets.md),
             if (text.isEmpty) const Spacer(),
-            TextButton.icon(
-              onPressed: _suggest,
-              style: TextButton.styleFrom(
-                  foregroundColor: c.accent,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  minimumSize: const Size(0, 0),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-              icon: const Icon(Icons.autorenew, size: 16),
-              label: const Text('Suggest a passphrase',
-                  style: TextStyle(fontSize: 12.5)),
+            GhostButton(
+              icon: LucideIcons.refreshCw,
+              label: 'Suggest a passphrase',
+              size: 30,
+              iconSize: 14,
+              onTap: _suggest,
             ),
           ],
         ),
         if (text.isNotEmpty && strength.needsNudge) ...[
-          const SizedBox(height: 6),
+          const SizedBox(height: Insets.sm),
           Text(
             'Short passphrases are the weakest link in your vault. Try the suggestion.',
-            style: TextStyle(color: c.textMuted, fontSize: 12, height: 1.35),
+            style: RelicTheme.sans(size: 12, color: c.textMuted, height: 1.35),
           ),
         ],
-        const SizedBox(height: 12),
+        const SizedBox(height: Insets.md),
       ],
     );
   }
 
   Widget _meter(RelicColors c, PassphraseStrength s) {
     final color = _bandColor(c, s.band);
+    final (chipBg, chipFg) = _bandChip(c, s.band);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         ClipRRect(
-          borderRadius: BorderRadius.circular(3),
+          borderRadius: BorderRadius.circular(Radii.pill),
           child: Stack(children: [
-            Container(height: 5, color: c.track),
+            Container(height: 6, color: c.track),
             FractionallySizedBox(
               widthFactor: s.fraction == 0 ? 0.04 : s.fraction,
-              child: Container(height: 5, color: color),
+              child: Container(height: 6, color: color),
             ),
           ]),
         ),
-        const SizedBox(height: 4),
-        Text(s.label,
-            style: TextStyle(
-                color: color, fontSize: 11.5, fontWeight: FontWeight.w600)),
+        const SizedBox(height: Insets.sm),
+        // The rating rides a tint chip rather than sitting bare on the card —
+        // the same chip shape the tag/meta language uses. Aligned rather than
+        // stretched so the chip hugs its word.
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(
+              color: chipBg,
+              borderRadius: BorderRadius.circular(Radii.tag),
+            ),
+            child: Text(
+              s.label,
+              style: RelicTheme.mono(
+                size: 10,
+                weight: FontWeight.w600,
+                color: chipFg,
+              ),
+            ),
+          ),
+        ),
       ],
     );
   }

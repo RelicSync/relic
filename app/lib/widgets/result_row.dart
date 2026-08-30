@@ -1302,14 +1302,16 @@ class _MiniResultRowState extends State<MiniResultRow> {
         child: inner,
       );
 
+  // Same chip language as [_MetaChip]: a gold-tint ground carries the deep
+  // gold, so the label never sits as bare gold on white. No hairline.
   Widget _snippetPill(RelicColors c) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: c.accent.withValues(alpha: 0.45)),
+          color: c.tagBg,
+          borderRadius: BorderRadius.circular(Radii.tag),
         ),
         child: Text('snippet',
-            style: RelicTheme.mono(size: 8.5, color: c.accent, letterSpacing: 0.7)),
+            style: RelicTheme.mono(size: 8.5, color: c.tagText, letterSpacing: 0.7)),
       );
 }
 
@@ -1317,19 +1319,20 @@ class _SecretBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = RelicTheme.of(context);
+    // A meta chip like any other: gold-tint ground, deep-gold mono, no
+    // hairline. The old outlined-gold badge is what the 2026 system retired.
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: c.secretBg,
-        borderRadius: BorderRadius.circular(Radii.chip),
-        border: Border.all(color: c.secretBorder, width: 1),
+        color: c.tagBg,
+        borderRadius: BorderRadius.circular(Radii.tag),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(LucideIcons.lock, size: 10, color: c.secret),
+          Icon(LucideIcons.lock, size: 10, color: c.tagText),
           const SizedBox(width: 4),
-          Text('Secret', style: RelicTheme.mono(size: 9, color: c.secret)),
+          Text('Secret', style: RelicTheme.mono(size: 9, color: c.tagText)),
         ],
       ),
     );

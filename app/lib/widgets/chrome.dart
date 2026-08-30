@@ -1,12 +1,12 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter/material.dart'
-    show CircularProgressIndicator, TextField, InputDecoration, InputBorder,
-        Tooltip;
+    show CircularProgressIndicator, TextField, Tooltip;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
 import 'controls.dart';
+import 'fields.dart';
 import 'relic_mark.dart';
 
 enum Scope { all, vault }
@@ -354,9 +354,7 @@ class SearchField extends StatelessWidget {
                   cursorColor: c.accent,
                   cursorWidth: 2,
                   maxLines: 1,
-                  decoration: InputDecoration(
-                    isCollapsed: true,
-                    border: InputBorder.none,
+                  decoration: kBareField.copyWith(
                     hintText: 'Search relics…',
                     hintStyle: RelicTheme.mono(
                       size: m ? 16 : 14,
@@ -384,7 +382,7 @@ class SearchField extends StatelessWidget {
                 if (onHelp != null) ...[
                   const SizedBox(width: 8),
                   Tooltip(
-                    message: 'Search operators & shortcuts',
+                    message: 'Search operators and shortcuts',
                     waitDuration: const Duration(milliseconds: 500),
                     textStyle: RelicTheme.mono(size: 10, color: c.text),
                     decoration: BoxDecoration(

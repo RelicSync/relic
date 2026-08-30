@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../data/supabase_auth.dart';
+import '../theme/relic_theme.dart';
+import '../theme/tokens.dart';
 import 'relic_mark.dart';
 
 /// The full Relic logo: the gold shard + the "Relic" wordmark, matching the
@@ -12,32 +14,38 @@ import 'relic_mark.dart';
 class RelicWordmark extends StatelessWidget {
   /// Height of the mark, and the wordmark's font size.
   final double markSize;
-  final Color color;
+
+  /// Ink for the wordmark. Null takes the palette's primary text, so the
+  /// lockup reads correctly in both themes instead of defaulting to light-mode
+  /// ink on a dark ground.
+  final Color? color;
   const RelicWordmark({
     super.key,
     this.markSize = 26,
-    this.color = const Color(0xFF111110),
+    this.color,
   });
 
   @override
-  Widget build(BuildContext context) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          RelicIcon(size: markSize),
-          SizedBox(width: markSize * 0.33),
-          Text(
-            'Relic',
-            style: TextStyle(
-              fontFamily: 'StackSansHeadline',
-              fontWeight: FontWeight.w400,
-              fontSize: markSize,
-              letterSpacing: markSize * -0.02,
-              height: 1,
-              color: color,
-            ),
+  Widget build(BuildContext context) {
+    final c = RelicTheme.of(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        RelicIcon(size: markSize),
+        SizedBox(width: markSize * 0.33),
+        Text(
+          'Relic',
+          style: RelicTheme.headline(
+            size: markSize,
+            weight: FontWeight.w400,
+            color: color ?? c.text,
+            height: 1,
+            letterSpacing: markSize * -0.02,
           ),
-        ],
-      );
+        ),
+      ],
+    );
+  }
 }
 
 /// A real, branded "Continue with ..." button (official Google/GitHub/Apple
@@ -83,9 +91,9 @@ class OAuthButton extends StatelessWidget {
           foregroundColor: fg,
           disabledBackgroundColor: bg.withValues(alpha: 0.45),
           elevation: 0,
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.symmetric(horizontal: Insets.lg),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(Radii.input),
             side: BorderSide(color: border),
           ),
         ),
@@ -93,9 +101,9 @@ class OAuthButton extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             SvgPicture.asset(asset, width: 20, height: 20),
-            const SizedBox(width: 12),
+            const SizedBox(width: Insets.md),
             Text(label,
-                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                style: RelicTheme.sans(size: 15, weight: FontWeight.w600)),
           ],
         ),
       ),
