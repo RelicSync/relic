@@ -1,4 +1,19 @@
 #!/usr/bin/env bash
+
+# SUPERSEDED — DO NOT RUN AS-IS (2026-08-30).
+#
+# This script predates the 2026 design system and is stale three times over:
+#   * SRC is assets/beautiful-icon.png, which was deleted with the old gem.
+#   * BASE is #16130E, the retired dark base.
+#   * It composites the faceted diamond, which is no longer the mark.
+#
+# The single source of truth for every app icon is now tool/make_app_icon.py,
+# which renders the shard path straight from the same geometry
+# lib/widgets/relic_mark.dart paints, so the icon cannot drift from the mark.
+# Extend that script with the macOS sizes and delete this file. Apple's
+# margin grid and the rounded-corner requirement below are still correct and
+# worth carrying over: macOS does NOT mask an app icon, so the corners must
+# be baked in and the art inset (824/1024 at the largest size).
 # Regenerate the macOS app icon set from the master Relic art.
 #
 #   app/scripts/make_macos_icon.sh
