@@ -997,13 +997,14 @@ class _EditDialogState extends State<EditDialog> {
     // (the header X and system back already dismiss).
     final mobile = RelicTheme.isMobileOf(context);
     final gap = SizedBox(width: mobile ? 4 : Insets.sm);
+    final ico = _footerIcon;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: Insets.xl, vertical: Insets.md),
       decoration: BoxDecoration(border: Border(top: BorderSide(color: c.border, width: 1))),
       child: Row(children: [
         GhostButton(
             icon: LucideIcons.trash2,
-            size: 30,
+            size: ico,
             style: GhostStyle.danger,
             tooltip: 'Delete',
             onTap: widget.onDelete),
@@ -1022,7 +1023,7 @@ class _EditDialogState extends State<EditDialog> {
           if (widget.onShare != null) ...[
             GhostIconButton(
                 icon: LucideIcons.share2,
-                size: 30,
+                size: ico,
                 iconSize: 14,
                 tooltip: 'Share',
                 onTap: widget.onShare),
@@ -1031,7 +1032,7 @@ class _EditDialogState extends State<EditDialog> {
           if (r.kind == Kind.string && r.firstUrl != null) ...[
             GhostIconButton(
                 icon: LucideIcons.externalLink,
-                size: 30,
+                size: ico,
                 iconSize: 14,
                 tooltip: 'Open link',
                 onTap: () => _openLink(r.firstUrl!)),
@@ -1047,7 +1048,7 @@ class _EditDialogState extends State<EditDialog> {
           ],
           GhostIconButton(
               icon: LucideIcons.copy,
-              size: 30,
+              size: ico,
               iconSize: 14,
               tooltip: 'Copy',
               onTap: widget.onCopy),
@@ -1069,6 +1070,13 @@ class _EditDialogState extends State<EditDialog> {
     );
   }
 
+  /// Footer icon buttons. `GhostButton` widens an icon-only button on phones to
+  /// `(size * 1.4).clamp(40, 64)`, so 30 becomes 42 and an image relic's six
+  /// actions overflow the 360dp footer by ~1px, slicing the Save pill. 28 lands
+  /// on exactly the 40px minimum target, which buys back 2px a button without
+  /// going under the touch floor. Desktop keeps 30 and is unchanged.
+  double get _footerIcon => RelicTheme.isMobileOf(context) ? 28 : 30;
+
   /// Save-to-device icon with the ported state colors (warning on error,
   /// success when saved, faint while saving).
   Widget _saveIconAction(RelicColors c) {
@@ -1086,13 +1094,13 @@ class _EditDialogState extends State<EditDialog> {
     return color != null
         ? GhostButton(
             iconBuilder: (s, _) => Icon(icon, size: s, color: color),
-            size: 30,
+            size: _footerIcon,
             iconSize: 14,
             tooltip: tip,
             onTap: _save)
         : GhostIconButton(
             icon: icon,
-            size: 30,
+            size: _footerIcon,
             iconSize: 14,
             tooltip: tip,
             onTap: _save);
@@ -1103,13 +1111,13 @@ class _EditDialogState extends State<EditDialog> {
     return color != null
         ? GhostButton(
             iconBuilder: (s, _) => Icon(LucideIcons.externalLink, size: s, color: color),
-            size: 30,
+            size: _footerIcon,
             iconSize: 14,
             tooltip: 'Open file',
             onTap: _open)
         : GhostIconButton(
             icon: LucideIcons.externalLink,
-            size: 30,
+            size: _footerIcon,
             iconSize: 14,
             tooltip: 'Open file',
             onTap: _open);

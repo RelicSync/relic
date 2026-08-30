@@ -89,39 +89,56 @@ void main() {
           )),
     };
 
-    for (final dark in [true, false]) {
-      final c = dark ? RelicColors.dark : RelicColors.light;
-      for (final entry in shots.entries) {
-        await tester.pumpWidget(
-          // Plain MaterialApp theme, matching the real mobile shell — the
-          // dialogs' custom fields must not pick up an InputDecorationTheme.
-          MaterialApp(
-            key: ValueKey('${entry.key}-$dark'),
-            debugShowCheckedModeBanner: false,
-            home: RelicTheme(
-              colors: c,
-              isMobile: true,
-              child: RepaintBoundary(
-                key: key,
-                child: Scaffold(
-                  backgroundColor: c.base,
-                  body: entry.value(c),
-                ),
-              ),
+    /// Mounts a surface and gives it real event-loop time. `Image.file` only
+    /// decodes off a real loop (fake async never delivers it), and each mount
+    /// site uses a different cache key — `cacheWidth` wraps the provider in a
+    /// `ResizeImage`, so the well, the row thumb and the attachment tile are
+    /// three separate entries. Nothing generic can pre-resolve them all, so the
+    /// surface itself is what warms them.
+    Future<void> mount(Widget Function(RelicColors) build, RelicColors c,
+        String tag) async {
+      await tester.pumpWidget(
+        // Plain MaterialApp theme, matching the real mobile shell — the
+        // dialogs' custom fields must not pick up an InputDecorationTheme.
+        MaterialApp(
+          key: ValueKey(tag),
+          debugShowCheckedModeBanner: false,
+          home: RelicTheme(
+            colors: c,
+            isMobile: true,
+            child: RepaintBoundary(
+              key: key,
+              child: Scaffold(backgroundColor: c.base, body: build(c)),
             ),
           ),
-        );
-        for (var i = 0; i < 8; i++) {
-          await tester.pump(const Duration(milliseconds: 120));
-        }
-        // Real event-loop window so Image.file decodes (fake async never
-        // delivers it), then paint the decoded frames.
+        ),
+      );
+      for (var i = 0; i < 8; i++) {
+        await tester.pump(const Duration(milliseconds: 120));
+      }
+      // Real event-loop windows so the decodes land, then paint the frames.
+      for (var i = 0; i < 3; i++) {
         await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 80)),
         );
-        for (var i = 0; i < 3; i++) {
-          await tester.pump(const Duration(milliseconds: 60));
-        }
+        await tester.pump(const Duration(milliseconds: 60));
+      }
+    }
+
+    // Warm-up pass: mount every surface once and throw the frames away. The
+    // capture loop below then finds a populated image cache on its very first
+    // surface. Without this the photo thumbnail rendered blank in whichever
+    // palette ran first (dark), and filled in the second — the cache was doing
+    // the work, not the harness.
+    for (final entry in shots.entries) {
+      await mount(entry.value, RelicColors.light, 'warm-${entry.key}');
+      tester.takeException();
+    }
+
+    for (final dark in [true, false]) {
+      final c = dark ? RelicColors.dark : RelicColors.light;
+      for (final entry in shots.entries) {
+        await mount(entry.value, c, '${entry.key}-$dark');
         final e = tester.takeException();
         if (e != null && e is! MissingPluginException) {
           debugDisableShadows = true;
