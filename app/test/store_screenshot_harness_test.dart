@@ -155,14 +155,22 @@ void main() {
     Widget popup(RelicColors c) =>
         PopupView(repo: repo, onClose: () {}, onSettings: () {});
 
-    // Warm-up render (discarded): primes the image cache so the photo row's
+    // Warm-up renders (discarded): prime the image cache so the photo row's
     // thumbnail is decoded by the time the first kept shot paints.
-    await renderShot(
-      name: 'warmup-discard',
-      c: RelicColors.dark,
-      build: popup,
-      physical: phone,
-    );
+    //
+    // Twice, deliberately. One pass was not enough: the 900x1260 store photo
+    // finished decoding after that pass had already captured, so the cache was
+    // only populated in time for the SECOND kept shot. popup-dark, the hero,
+    // shipped with an empty thumbnail tile while every later shot had the
+    // receipt. A second discarded pass costs a second and removes the race.
+    for (var warm = 0; warm < 2; warm++) {
+      await renderShot(
+        name: 'warmup-discard',
+        c: RelicColors.dark,
+        build: popup,
+        physical: phone,
+      );
+    }
     File('$outDir/warmup-discard.png').deleteSync();
 
     // 1. Main timeline, dark (hero) + light.
@@ -187,6 +195,16 @@ void main() {
       build: popup,
       physical: pixelXl,
     );
+    // Dark twin of the above. The Play listing ships this one rather than the
+    // 360-wide popup-dark, for the same reason the search shot below moved:
+    // 448 logical points let the selected row's title read whole, which is
+    // what the App Store set already gets from the 6.9" iPhone's 440.
+    await renderShot(
+      name: 'popup-dark-pixel',
+      c: RelicColors.dark,
+      build: popup,
+      physical: pixelXl,
+    );
 
     // 2. Search active (dark). Type into the search field; the popup's 140ms
     // debounce is covered by the settle() pumps.
@@ -207,6 +225,17 @@ void main() {
     await renderShot(
       name: 'popup-search-light-pixel',
       c: RelicColors.light,
+      build: popup,
+      physical: pixelXl,
+      interact: () async {
+        await tester.enterText(find.byType(TextField).first, 'business');
+        await tester.pump(const Duration(milliseconds: 200));
+      },
+    );
+    // Dark twin, for the Play listing's search comp.
+    await renderShot(
+      name: 'popup-search-dark-pixel',
+      c: RelicColors.dark,
       build: popup,
       physical: pixelXl,
       interact: () async {
@@ -251,6 +280,46 @@ void main() {
         ),
       ),
       physical: phone,
+    );
+
+    // 3b/4b. The same two dialogs at the large-Pixel viewport. The Play
+    // listing composes all five of its comps from pixelXl raws so that every
+    // phone in the carousel is the same size on the canvas; mixing 360- and
+    // 448-wide captures makes the device visibly shrink between slides,
+    // because the composer scales each one to a fixed height band.
+    await renderShot(
+      name: 'edit-text-dark-pixel',
+      c: RelicColors.dark,
+      build: (c) => _dialogHost(
+        c,
+        EditDialog(
+          relic: textRelic,
+          repo: repo,
+          onCancel: () {},
+          onCopy: () {},
+          onDelete: () {},
+          onShare: () {},
+          onSave: (t, n, u, m, c2, a, rm) async {},
+        ),
+      ),
+      physical: pixelXl,
+    );
+    await renderShot(
+      name: 'edit-image-dark-pixel',
+      c: RelicColors.dark,
+      build: (c) => _dialogHost(
+        c,
+        EditDialog(
+          relic: photoRelic,
+          repo: repo,
+          onCancel: () {},
+          onCopy: () {},
+          onDelete: () {},
+          onShare: () {},
+          onSave: (t, n, u, m, c2, a, rm) async {},
+        ),
+      ),
+      physical: pixelXl,
     );
 
     // 5. Tablet-proportioned timeline (dark) — dropped later if it looks off.
