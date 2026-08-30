@@ -103,6 +103,7 @@ flutter:
 
   assets:
     - assets/tray_icon.ico
+    - assets/tray_icon.png # Linux appindicator, same shard (tool/make_app_icon.py)
     - assets/tray_icon_template.png # macOS menu-bar template (tool/make_tray_template.dart)
     - assets/app_icon.png
     - assets/sounds/relic-sound.wav

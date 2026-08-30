@@ -14,6 +14,7 @@ Outputs, relative to `app/`:
   shared
     assets/app_icon.png                       1024, in-app brand raster
     assets/tray_icon.ico                      tray, BARE shard (16..64)
+    assets/tray_icon.png                      tray, BARE shard (64, Linux)
 
   windows
     windows/runner/resources/app_icon.ico     Windows app icon (16..256)
@@ -277,10 +278,18 @@ def emit_shared(out) -> None:
     render_icon(1024).save(out("assets", "app_icon.png"))
     print("assets/app_icon.png")
 
+    # The same bare shard in the two containers the trays can read: an .ico for
+    # the Windows notification area, and a single PNG for Linux appindicators,
+    # which take one file and scale it to whatever the panel is. Rendered once
+    # so the two can never drift; 64 is the .ico's own top size, so the PNG is
+    # exactly the frame Windows already ships. macOS is not here — its menu bar
+    # wants a monochrome template, which tool/make_tray_template.dart writes.
     tray = [16, 20, 24, 32, 48, 64]
-    render_bare(64, TRAY_MARK).save(
-        out("assets", "tray_icon.ico"), sizes=[(s, s) for s in tray])
+    shard = render_bare(64, TRAY_MARK)
+    shard.save(out("assets", "tray_icon.ico"), sizes=[(s, s) for s in tray])
     print("assets/tray_icon.ico", tray, "(bare shard)")
+    shard.save(out("assets", "tray_icon.png"))
+    print("assets/tray_icon.png", 64, "(bare shard)")
 
 
 def emit_windows(out) -> None:

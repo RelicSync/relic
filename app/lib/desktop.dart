@@ -423,15 +423,17 @@ class _RealAppState extends State<RealApp>
 
   Future<void> _initTray() async {
     try {
-      // .ico is Windows-only; the menu-bar item on macOS wants a template PNG
-      // (monochrome + alpha) so it adapts to light/dark menu bars. Linux
-      // appindicators render the PNG as-is — the template art (black on
-      // transparent) all but vanishes on dark themes, so use the colored icon.
+      // One shard, three containers. .ico is Windows-only; the menu-bar item on
+      // macOS wants a template PNG (monochrome + alpha) so it adapts to
+      // light/dark menu bars; Linux appindicators render a PNG as-is, so the
+      // template art (black on transparent) would all but vanish on a dark
+      // panel and Linux takes the colored shard instead. All three are the bare
+      // mark, never the cream tile: the tile costs ~40% of a 16-32px canvas.
       await trayManager.setIcon(
         Platform.isWindows
             ? 'assets/tray_icon.ico'
             : Platform.isLinux
-                ? 'assets/app_icon.png'
+                ? 'assets/tray_icon.png'
                 : 'assets/tray_icon_template.png',
         isTemplate: true, // ignored off-macOS
       );
