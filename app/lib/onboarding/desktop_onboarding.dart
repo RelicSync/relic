@@ -650,10 +650,25 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
               Icon(LucideIcons.info, size: 16, color: c.accent),
               const SizedBox(width: Insets.md),
               Expanded(
-                child: Text(
-                    'Skipping is fine. Relic still keeps everything you copy, and picking an item still copies it. You just press ⌘V yourself.',
+                // The keycap has to be mono, and not only because the type
+                // roles say a machine fact is mono: none of the bundled sans
+                // faces carries U+2318, so a ⌘ set in sans renders as a tofu
+                // box on the one platform that ever sees this step. JetBrains
+                // Mono has the glyph.
+                child: Text.rich(TextSpan(
                     style: RelicTheme.sans(
-                        size: 12.5, color: c.textSecondary, height: 1.5)),
+                        size: 12.5, color: c.textSecondary, height: 1.5),
+                    children: [
+                      const TextSpan(
+                          text: 'Skipping is fine. Relic still keeps everything '
+                              'you copy, and picking an item still copies it. '
+                              'You just press '),
+                      TextSpan(
+                          text: '⌘V',
+                          style: RelicTheme.mono(
+                              size: 11.5, color: c.textSecondary, height: 1.5)),
+                      const TextSpan(text: ' yourself.'),
+                    ])),
               ),
             ]),
           ),

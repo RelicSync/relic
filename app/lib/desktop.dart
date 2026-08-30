@@ -95,17 +95,30 @@ Future<void> runRealApp(List<String> args) async {
       WidgetsBinding.instance.platformDispatcher.platformBrightness ==
           Brightness.dark,
   };
+  final bootBg = bootDark ? RelicColors.dark.base : RelicColors.light.base;
   final options = WindowOptions(
     size: const Size(460, 560),
     center: true,
     skipTaskbar: true,
-    backgroundColor:
-        bootDark ? RelicColors.dark.base : RelicColors.light.base,
+    backgroundColor: bootBg,
     titleBarStyle: TitleBarStyle.hidden,
+    // macOS only (Windows and Linux ignore it): the popup draws its own
+    // header, so the traffic lights must not land on top of the lockup.
+    // Saying so here is the declaration; window_manager's default is `true`,
+    // which un-hides them a moment before setAsFrameless hides the whole
+    // title bar again.
+    windowButtonVisibility: false,
     alwaysOnTop: true,
   );
   await windowManager.waitUntilReadyToShow(options, () async {
     await windowManager.setAsFrameless();
+    // macOS only: setAsFrameless ends with `backgroundColor = NSColor.clear`
+    // (window_manager's WindowManager.swift), throwing away the base colour
+    // WindowOptions set one call earlier - so a Mac would ignore the stored
+    // appearance entirely and every summon could flash before the first
+    // Flutter frame. The Windows and Linux implementations leave the window
+    // background alone, which is why only macOS has to re-assert it here.
+    if (Platform.isMacOS) await windowManager.setBackgroundColor(bootBg);
     await windowManager.hide(); // start in the tray, summon with the hotkey
   });
 

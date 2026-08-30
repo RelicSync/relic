@@ -3198,13 +3198,26 @@ class _SettingsViewState extends State<SettingsView>
                 ),
               ),
               const SizedBox(height: 4),
-              Text(
-                'Everything else works without it. Picking an item still copies '
-                'it, you just press ⌘V yourself.',
-                style: RelicTheme.sans(
-                  size: 11.5,
-                  color: c.textMuted,
-                  height: 1.45,
+              // ⌘ is only in JetBrains Mono: no bundled sans face carries
+              // U+2318, so setting the keycap in prose type would print a tofu
+              // box on the one platform this whole section exists for.
+              Text.rich(
+                TextSpan(
+                  style: RelicTheme.sans(
+                    size: 11.5,
+                    color: c.textMuted,
+                    height: 1.45,
+                  ),
+                  children: [
+                    const TextSpan(
+                        text: 'Everything else works without it. Picking an '
+                            'item still copies it, you just press '),
+                    TextSpan(
+                        text: '⌘V',
+                        style: RelicTheme.mono(
+                            size: 10.5, color: c.textMuted, height: 1.45)),
+                    const TextSpan(text: ' yourself.'),
+                  ],
                 ),
               ),
               const SizedBox(height: 10),
