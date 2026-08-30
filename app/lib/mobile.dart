@@ -267,7 +267,27 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   /// if boot is slow enough that a bare colour would look broken. A normal
   /// launch never reaches it.
   bool _showBootLogo = false;
-  WorkerRepo? _repo;
+
+  WorkerRepo? __repo;
+
+  /// The bound repo. Assigning moves the change subscription with it, so
+  /// whatever a pull brings in repaints even when no poll tick is due — the
+  /// doorbell can land a desktop's OCR or generated title while the poll is on
+  /// its wide 20s cadence, and the item is very likely open on screen at that
+  /// moment because opening it is what makes the wait noticeable.
+  WorkerRepo? get _repo => __repo;
+
+  set _repo(WorkerRepo? r) {
+    if (identical(__repo, r)) return;
+    __repo?.changes.removeListener(_onRepoChanged);
+    __repo = r;
+    r?.changes.addListener(_onRepoChanged);
+  }
+
+  void _onRepoChanged() {
+    if (mounted) setState(() {});
+  }
+
   bool _popupModal = false; // a popup dialog is up (hides the compose FAB)
 
   // Onboarding escape / reconnect state (no repo). _browseOnly shows the
@@ -285,16 +305,25 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
 
   Timer? _poll; // live refresh while the app is foregrounded
   bool _refreshing = false; // guard against overlapping loads
-  DateTime? _screenOpenedAt; // when the app last came to the foreground
+  bool _caughtUp = false; // the foreground catch-up pass has finished
 
-  /// Only show the syncing spinner during the brief catch-up sync right after
-  /// the app is opened/resumed — not on every silent background poll tick.
-  bool get _showSyncSpinner =>
-      _refreshing &&
-      _screenOpenedAt != null &&
-      DateTime.now().difference(_screenOpenedAt!) < const Duration(seconds: 2);
+  /// Only show the syncing spinner during the catch-up sync right after the app
+  /// is opened/resumed — not on every silent poll tick afterwards.
+  ///
+  /// Bounded by that pass finishing, never by the clock. The old version hid
+  /// the spinner two seconds after foregrounding, so a cold launch with a real
+  /// backlog spent the rest of its first pull showing the [SyncKind.offline]
+  /// the repo is *initialised* to: the chip read "Offline" for several seconds
+  /// with the network plainly working, then flipped to "Synced" the moment the
+  /// items landed. Nothing was wrong with the sync; the chip was describing a
+  /// state the app had never actually been in.
+  bool get _showSyncSpinner => _refreshing && !_caughtUp;
   StreamSubscription<List<SharedMediaFile>>? _shareSub;
   final List<SharedMediaFile> _pendingShares = []; // shared before connect
+  // Whether everything queued in [_pendingShares] arrived while Relic was
+  // already on screen. A launch share drags the whole batch down to false: the
+  // batch is toasted as one, so the quieter rule has to win.
+  bool _pendingSharesLive = true;
   final _appLinks = AppLinks();
   StreamSubscription<Uri>? _linkSub;
   final List<String> _pendingText = []; // captured via link before connect
@@ -375,6 +404,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     _poll?.cancel();
     _shareSub?.cancel();
     _linkSub?.cancel();
+    __repo?.changes.removeListener(_onRepoChanged);
     super.dispose();
   }
 
@@ -783,7 +813,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
 
   void _startPolling() {
     if (_repo == null) return;
-    _screenOpenedAt = DateTime.now(); // spinner only shows for this catch-up sync
+    _caughtUp = false; // spinner only shows for this catch-up sync
     _poll?.cancel();
     // Incremental re-sync while foregrounded — pulls only what changed since the
     // cursor (and flushes any queued captures). Stops entirely when backgrounded
@@ -826,6 +856,9 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
       // transient network hiccup — next tick retries
     } finally {
       _refreshing = false;
+      // However this pass ended, the catch-up is over: a failure now shows the
+      // real (offline) chip rather than spinning forever.
+      _caughtUp = true;
       if (mounted) setState(() {}); // hide spinner + reflect any new data
     }
   }
@@ -1010,19 +1043,24 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     // Content that launched the app via the share sheet.
     ReceiveSharingIntent.instance.getInitialMedia().then((files) {
       if (files.isNotEmpty) {
-        _handleShared(files);
+        _handleShared(files, live: false);
         ReceiveSharingIntent.instance.reset();
       }
     });
   }
 
-  void _handleShared(List<SharedMediaFile> files) {
+  /// [live] distinguishes a share that arrived while Relic was already on
+  /// screen from one that launched it, which decides whether an
+  /// already-captured share is worth saying anything about. See
+  /// [_captureShared].
+  void _handleShared(List<SharedMediaFile> files, {bool live = true}) {
     final repo = _repo;
     if (repo == null) {
       _pendingShares.addAll(files); // capture once connected
+      if (!live) _pendingSharesLive = false;
       return;
     }
-    _captureShared(repo, files);
+    _captureShared(repo, files, live: live);
   }
 
   void _flushPending() {
@@ -1030,8 +1068,10 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     if (repo == null) return;
     if (_pendingShares.isNotEmpty) {
       final batch = List<SharedMediaFile>.from(_pendingShares);
+      final live = _pendingSharesLive;
       _pendingShares.clear();
-      _captureShared(repo, batch);
+      _pendingSharesLive = true;
+      _captureShared(repo, batch, live: live);
     }
     if (_pendingText.isNotEmpty) {
       final batch = List<String>.from(_pendingText);
@@ -1179,7 +1219,20 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     _toast(ok ? 'Captured to Relic' : "Couldn't capture — open Relic and retry");
   }
 
-  Future<void> _captureShared(WorkerRepo repo, List<SharedMediaFile> files) async {
+  /// Capture shared content, reporting what landed.
+  ///
+  /// [live] is whether the share arrived while Relic was already on screen, and
+  /// it decides one thing only: whether "everything here was already captured"
+  /// is worth a toast. Sharing into a running Relic changes nothing on screen,
+  /// so a skip has to be spoken or the share looks lost. A share that LAUNCHED
+  /// Relic is a different situation — the vault is now in front of the user,
+  /// which is answer enough, and the launch path is also where Android's
+  /// replayed intents arrive (see MainActivity.stripStaleShare). Between a
+  /// re-delivery, which is common, and a deliberate immediate re-share of
+  /// identical bytes, which is not, the toast cannot tell; staying quiet is
+  /// wrong only in the rare case, and it is never a lie.
+  Future<void> _captureShared(WorkerRepo repo, List<SharedMediaFile> files,
+      {bool live = true}) async {
     final seen = await _Creds.shareSeen();
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     var added = 0, skipped = 0, failed = 0, tooBig = 0;
@@ -1239,7 +1292,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     if (added > 0 && mounted) {
       setState(() {});
       _toast('$added added to Relic');
-    } else if (skipped > 0 && mounted) {
+    } else if (skipped > 0 && live && mounted) {
       // The share was already captured — reassure rather than silently no-op.
       _toast(skipped == 1 ? 'Already in Relic' : 'Already in Relic ($skipped)');
     } else if (tooBig > 0 && mounted) {

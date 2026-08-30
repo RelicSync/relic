@@ -273,14 +273,26 @@ class _EditDialogState extends State<EditDialog> {
   final _tagF = FocusNode();
   final _bodyF = FocusNode();
 
+  /// What each field currently holds according to nobody but us, so "has the
+  /// user edited this?" can be answered without a flag per keystroke. Only an
+  /// untouched field is refreshed from an incoming analysis; a field the user
+  /// has changed is theirs, and a sync rewriting it mid-sentence would be a far
+  /// worse bug than the staleness this fixes. Re-seeded whenever we adopt a
+  /// value ourselves, so a second update is still allowed to land.
+  late String _seedTitle;
+  late List<String> _seedMachine;
+  late String _seedBody;
+
   @override
   void initState() {
     super.initState();
-    // Load the full text (extracted/OCR/body) for the meta line + extracted
-    // section, then update the display.
-    widget.repo.textOf(widget.relic).then((t) {
-      if (mounted) setState(() => _content = t);
-    });
+    // Eagerly, in open order: read lazily from didUpdateWidget these would
+    // "seed" from whatever the user had already typed and every field would
+    // look untouched forever.
+    _seedTitle = _title.text;
+    _seedMachine = [...widget.relic.tags];
+    _seedBody = _body.text;
+    _loadContent();
     // Kick a blob fetch when a picture/file needs its bytes to display and they
     // aren't local yet.
     final r = widget.relic;
@@ -300,6 +312,79 @@ class _EditDialogState extends State<EditDialog> {
         if (mounted) _titleF.requestFocus();
       });
     }
+  }
+
+  /// Load the full text (extracted/OCR/body) for the meta line + extracted
+  /// section. Re-run whenever the item itself changes, because for a photo or
+  /// a file this IS the analysis: it is empty until some desktop on the account
+  /// reads the image and publishes what it found.
+  void _loadContent() {
+    final uid = widget.relic.uid;
+    widget.repo.textOf(widget.relic).then((t) {
+      // A late answer for the item we were showing two items ago must not
+      // overwrite the one on screen now.
+      if (mounted && widget.relic.uid == uid) setState(() => _content = t);
+    });
+  }
+
+  /// Fold an incoming version of this item into the open editor.
+  ///
+  /// The host rebuilds this dialog from the store (see PopupView._edit), so a
+  /// pull that lands while the item is open arrives here. What may be adopted
+  /// is exactly what the user has not touched: analysis fills in blanks, it
+  /// never argues. The generated title only takes an untouched title field and
+  /// only when the field is not focused, so it cannot move the caret out from
+  /// under someone about to type.
+  @override
+  void didUpdateWidget(EditDialog old) {
+    super.didUpdateWidget(old);
+    final r = widget.relic;
+    if (r.uid != old.relic.uid) return; // a different item: not our business
+    if (r.updatedAt == old.relic.updatedAt &&
+        r.content == old.relic.content &&
+        r.title == old.relic.title &&
+        r.tags.length == old.relic.tags.length) {
+      return;
+    }
+    _loadContent();
+
+    final title = r.title;
+    if (title != null &&
+        title.isNotEmpty &&
+        title != _title.text &&
+        _title.text == _seedTitle &&
+        !_titleF.hasFocus) {
+      _title.text = title;
+      _seedTitle = title;
+    }
+    // Machine tags are wholly the labeller's. Replace them if the user has not
+    // curated the list, and never drop `secret` (the masking depends on it).
+    if (_listEq(_machine, _seedMachine) && !_listEq(_machine, r.tags)) {
+      final keepSecret = _machine.contains('secret') && !r.tags.contains('secret');
+      _machine
+        ..clear()
+        ..addAll(r.tags)
+        ..addAll(keepSecret ? const ['secret'] : const <String>[]);
+      _seedMachine = [..._machine];
+    }
+    // The body of a text relic can be rewritten by an edit on another device.
+    final body = r.content;
+    if (_bodyEditable &&
+        body != null &&
+        body != _body.text &&
+        _body.text == _seedBody &&
+        !_bodyF.hasFocus) {
+      _body.text = body;
+      _seedBody = body;
+    }
+  }
+
+  static bool _listEq(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   @override

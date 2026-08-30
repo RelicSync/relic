@@ -199,7 +199,10 @@ class _PopupViewState extends State<PopupView> {
   final List<String> _activeTags = [];
 
   final _toasts = ToastQueue();
-  Widget? _dialog;
+
+  /// The open modal, held as a builder rather than a built widget so a dialog
+  /// that shows one item can re-read it on every rebuild. See [_edit].
+  Widget Function()? _dialog;
 
   /// Anchored row overflow menu (opened from a row's ⋯ button, or via
   /// right-click — [atCursor] switches the anchoring convention): the
@@ -314,6 +317,10 @@ class _PopupViewState extends State<PopupView> {
     widget.resetSignal?.addListener(_resetSearchState);
     widget.summonSignal?.addListener(_focusSearchOnSummon);
     widget.miniSignal?.addListener(_onChange);
+    // Repaint when the store changes under us. Both hosts already listen for
+    // their own reasons, but the open editor is this widget's dialog and the
+    // late-arriving analysis it needs to show belongs to this widget to notice.
+    widget.repo.changes.addListener(_onChange);
     _toasts.addListener(_onChange);
     _scroll.addListener(_onScroll);
     // One-time housekeeping: clear stale "open in default app" temp files.
@@ -357,6 +364,10 @@ class _PopupViewState extends State<PopupView> {
       old.summonSignal?.removeListener(_focusSearchOnSummon);
       widget.summonSignal?.addListener(_focusSearchOnSummon);
     }
+    if (!identical(widget.repo, old.repo)) {
+      old.repo.changes.removeListener(_onChange);
+      widget.repo.changes.addListener(_onChange);
+    }
     final req = widget.annotate;
     if (req != null && !identical(req, old.annotate)) {
       _openAnnotate(req);
@@ -394,10 +405,14 @@ class _PopupViewState extends State<PopupView> {
   /// Route every dialog open/close through one place so the host reliably
   /// learns when a modal is up (it suspends blur-to-close while the user is
   /// mid-edit — alt-tabbing must not destroy a half-typed note).
-  void _setDialog(Widget? d) {
+  void _setDialog(Widget? d) => _setDialogBuilder(d == null ? null : () => d);
+
+  /// As [_setDialog], for a dialog whose content must be rebuilt from the store
+  /// each time rather than frozen at open time.
+  void _setDialogBuilder(Widget Function()? b) {
     if (!mounted) return;
-    setState(() => _dialog = d);
-    widget.onModalChanged?.call(d != null);
+    setState(() => _dialog = b);
+    widget.onModalChanged?.call(b != null);
   }
 
   /// Open the save & annotate editor for a just-captured relic.
@@ -652,6 +667,7 @@ class _PopupViewState extends State<PopupView> {
     widget.resetSignal?.removeListener(_resetSearchState);
     widget.summonSignal?.removeListener(_focusSearchOnSummon);
     widget.miniSignal?.removeListener(_onChange);
+    widget.repo.changes.removeListener(_onChange);
     _toasts.removeListener(_onChange);
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _scroll.dispose();
@@ -1904,33 +1920,47 @@ class _PopupViewState extends State<PopupView> {
     );
   }
 
+  /// Open the editor on one item.
+  ///
+  /// Built fresh on every rebuild, from the store, rather than closed over the
+  /// snapshot the caller happened to be holding. The changes worth seeing in
+  /// this dialog nearly all arrive AFTER it is opened: a desktop finishes
+  /// analysing the screenshot and its OCR text, generated title and tags come
+  /// down the doorbell while the user is looking straight at the item. Frozen
+  /// at open time, the only way to see any of that was to close the item and
+  /// open it again, with no cue that there was anything new to see.
+  ///
+  /// [EditDialog] keeps its own state across these rebuilds (same type, same
+  /// position, so Flutter reuses the element) and decides for itself which
+  /// fields are safe to refresh — anything the user has touched is theirs.
   void _edit(Relic r, {bool autofocus = false, String savedToast = 'Saved'}) {
-    _setDialog(
-      EditDialog(
-        relic: r,
+    _setDialogBuilder(() {
+      final live = widget.repo.byUid(r.uid) ?? r;
+      return EditDialog(
+        relic: live,
         repo: widget.repo,
         autofocus: autofocus,
         onCancel: () => _setDialog(null),
         onCopy: () {
           _setDialog(null);
-          _copy(r);
+          _copy(live);
         },
-        onShare: () => _share(r),
+        onShare: () => _share(live),
         onDelete: () {
           _setDialog(null);
-          _delete(r);
+          _delete(live);
         },
         onSave: (title, note, userTags, machineTags, content, addedFiles,
             removedAttachmentIds) async {
           // Belt-and-braces with the dialog's locked chip: editing metadata
           // must never unmask a secret by dropping its `secret` tag.
-          if (r.isSecret && !machineTags.contains('secret')) {
+          if (live.isSecret && !machineTags.contains('secret')) {
             machineTags = [...machineTags, 'secret'];
           }
           // Meta first, attachments second: both re-read the current row and
           // pending_ops upserts on (uid,'push'), so one final push goes out.
           await widget.repo.updateMeta(
-            r,
+            live,
             title: title,
             note: note,
             userTags: userTags,
@@ -1940,7 +1970,7 @@ class _PopupViewState extends State<PopupView> {
           var attachMsg = '';
           if (addedFiles.isNotEmpty || removedAttachmentIds.isNotEmpty) {
             final res = await widget.repo.updateAttachments(
-              r,
+              live,
               added: addedFiles,
               removedIds: removedAttachmentIds,
             );
@@ -1967,8 +1997,8 @@ class _PopupViewState extends State<PopupView> {
             ),
           );
         },
-      ),
-    );
+      );
+    });
   }
 
   void _openTags() {
@@ -2503,7 +2533,7 @@ class _PopupViewState extends State<PopupView> {
             : Container(
                 alignment: Alignment.center,
                 padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-                child: _dialog,
+                child: _dialog!(),
               ),
       ),
     ]);
@@ -2731,7 +2761,7 @@ class _PopupViewState extends State<PopupView> {
                           ? Insets.xxl
                           : Insets.xl,
                     ),
-                    child: GestureDetector(onTap: () {}, child: _dialog),
+                    child: GestureDetector(onTap: () {}, child: _dialog!()),
                   ),
                 ),
               ),
