@@ -217,7 +217,7 @@ describe("deleteRelic", () => {
     await put(PRO, "x", { blob_key: "blob1" });
     expect(await E.STORE.get(relicR2Key("A", "x"))).not.toBeNull();
 
-    await deleteRelic(E, "A", "x", "blob1", 12345);
+    await deleteRelic(E, "A", "x", { blob_key: "blob1", byte_size: 0, promoted: 0 }, 12345);
 
     expect(await hasMeta("x")).toBe(false);
     expect(await tombstoneOf("x")).toBe(12345);

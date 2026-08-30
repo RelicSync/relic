@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -18,6 +17,16 @@ import 'package:flutter/foundation.dart';
 /// connect fails (self-host has no Durable Object, or the device is offline) it
 /// simply leaves [connected] false and the repo stays on its faster poll cadence
 /// as the safety net.
+///
+/// The keepalive is a WebSocket protocol ping frame, not a message. The runtime
+/// on the other end answers control frames itself, so an idle device never wakes
+/// the Durable Object holding its socket. Sending a JSON `{"t":"ping"}` instead
+/// (as builds before this did) woke it every 30s to do nothing, and billed for
+/// it. The server still auto-answers that older ping for clients already out
+/// there; nothing here needs to.
+///
+/// [WebSocket.pingInterval] also doubles as dead-peer detection: if no pong comes
+/// back within the interval the socket closes, which trips our reconnect.
 class SyncSocket {
   SyncSocket({
     required this.baseUrl,
@@ -47,7 +56,6 @@ class SyncSocket {
 
   WebSocket? _ws;
   StreamSubscription<dynamic>? _sub;
-  Timer? _pingTimer;
   Timer? _reconnectTimer;
   Timer? _debounceTimer;
   Duration _backoff = const Duration(seconds: 1);
@@ -84,6 +92,7 @@ class SyncSocket {
         return;
       }
       _ws = ws;
+      ws.pingInterval = _pingEvery; // protocol ping frames, see the class doc
       _backoff = const Duration(seconds: 1);
       _setConnected(true);
       _sub = ws.listen(
@@ -92,7 +101,6 @@ class SyncSocket {
         onError: (Object _) => _onClosed(),
         cancelOnError: true,
       );
-      _startPing();
     } catch (_) {
       _setConnected(false);
       _scheduleReconnect();
@@ -113,8 +121,6 @@ class SyncSocket {
   }
 
   Future<void> _teardownSocket() async {
-    _pingTimer?.cancel();
-    _pingTimer = null;
     final sub = _sub;
     _sub = null;
     await sub?.cancel();
@@ -123,15 +129,6 @@ class SyncSocket {
     try {
       await ws?.close();
     } catch (_) {}
-  }
-
-  void _startPing() {
-    _pingTimer?.cancel();
-    _pingTimer = Timer.periodic(_pingEvery, (_) {
-      try {
-        _ws?.add(jsonEncode({'t': 'ping'}));
-      } catch (_) {}
-    });
   }
 
   void _scheduleReconnect() {

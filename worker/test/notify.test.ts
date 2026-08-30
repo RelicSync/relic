@@ -94,6 +94,7 @@ function fakeState(sockets: WebSocket[]) {
   return {
     getWebSockets: () => sockets,
     acceptWebSocket: () => {},
+    setWebSocketAutoResponse: () => {},
   } as unknown as DurableObjectState;
 }
 

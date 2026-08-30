@@ -16,6 +16,7 @@ import type { Env } from "./env";
 import type { Auth } from "./auth";
 import { TIERS } from "./tiers";
 import { err, json } from "./http";
+import { readUsage } from "./usage";
 
 /// One R2 key namespace for all blobs, single- or multi-part.
 export const blobR2Key = (acct: string, id: string) => `users/${acct}/blob/${id}`;
@@ -29,14 +30,6 @@ export const BLOB_ID = /^[A-Za-z0-9-][A-Za-z0-9.-]{7,63}$/;
 // and streams through the Worker without buffering pressure. Clients use the
 // same number as the single-shot threshold (server returns it from create).
 export const PART_SIZE = 64 * 1024 * 1024;
-
-/// Total stored bytes for an account (the `storage` cap denominator).
-export async function usageBytes(env: Env, acct: string): Promise<number> {
-  const row = await env.DB.prepare(
-    "SELECT COALESCE(SUM(byte_size), 0) AS used FROM relic_meta WHERE account_id = ?1",
-  ).bind(acct).first<{ used: number }>();
-  return row?.used ?? 0;
-}
 
 const maxParts = (tier: Auth["tier"]) => Math.ceil(TIERS[tier].item / PART_SIZE);
 
@@ -61,7 +54,7 @@ export async function sizedBody(
 async function overQuota(env: Env, auth: Auth, size: number): Promise<boolean> {
   const cap = TIERS[auth.tier].storage;
   if (cap === null) return false;
-  return (await usageBytes(env, auth.account)) + size > cap;
+  return (await readUsage(env, auth.account)).bytes + size > cap;
 }
 
 // POST /blob/mpu?id=<blobKey>  {declared_size}

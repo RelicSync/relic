@@ -46,12 +46,15 @@ const DDL = [
   `CREATE TABLE IF NOT EXISTS account_links (
      supabase_sub TEXT PRIMARY KEY, account_id TEXT NOT NULL,
      created_at INTEGER NOT NULL DEFAULT (unixepoch()))`,
+  `CREATE TABLE IF NOT EXISTS account_usage (
+     account_id TEXT PRIMARY KEY, bytes_used INTEGER NOT NULL,
+     vault_count INTEGER NOT NULL)`,
 ];
 
 const TABLES = [
   "tokens", "accounts", "subscriptions", "billing_events",
   "devices", "relic_meta", "ai_meta", "tombstones", "shares", "sweep_state",
-  "account_links",
+  "account_links", "account_usage",
 ];
 
 export async function setupSchema(db: D1Database): Promise<void> {

@@ -15,8 +15,8 @@ import {
   mpuCreate,
   mpuPart,
   sizedBody,
-  usageBytes,
 } from "./blob";
+import { readUsage, usageDelta } from "./usage";
 import { type Auth, authenticate, REV_TTL, revKey } from "./auth";
 import { CORS, err, json } from "./http";
 import { clientIp, rateLimit } from "./ratelimit";
@@ -147,12 +147,22 @@ function validEnvelope(e: unknown, uid: string): e is Envelope {
   );
 }
 
-// blobR2Key/usageBytes + the chunked-upload routes live in blob.ts.
+// blobR2Key + the chunked-upload routes live in blob.ts; the cached account
+// totals the quota checks read live in usage.ts.
 
-export async function deleteRelic(env: Env, acct: string, uid: string, blobKey: string | null, deletedAt: number) {
+/// The bits of a relic_meta row a delete needs: the blob to evict from R2, and
+/// the two numbers to subtract from the cached totals. Callers already look the
+/// row up to find blob_key, so this costs them nothing extra.
+export interface DeletedMeta {
+  blob_key: string | null;
+  byte_size: number;
+  promoted: number;
+}
+
+export async function deleteRelic(env: Env, acct: string, uid: string, meta: DeletedMeta | null, deletedAt: number) {
   await env.STORE.delete(relicKey(acct, uid));
-  if (blobKey) await env.STORE.delete(blobR2Key(acct, blobKey));
-  await env.DB.batch([
+  if (meta?.blob_key) await env.STORE.delete(blobR2Key(acct, meta.blob_key));
+  const stmts = [
     env.DB.prepare("DELETE FROM relic_meta WHERE account_id = ?1 AND uid = ?2").bind(acct, uid),
     // The AI record dies with its relic. Leaving it would strand a row no relic
     // can ever claim, and would resurrect a title if the uid were ever reused.
@@ -160,7 +170,12 @@ export async function deleteRelic(env: Env, acct: string, uid: string, blobKey: 
     env.DB.prepare(
       "INSERT OR REPLACE INTO tombstones (account_id, uid, deleted_at) VALUES (?1, ?2, ?3)",
     ).bind(acct, uid, deletedAt),
-  ]);
+  ];
+  // Same batch as the row it accounts for, so the cache cannot drift from the
+  // table. No base: a delete never needs to seed a missing row (the next read
+  // recomputes it), it only adjusts one that already exists.
+  if (meta) stmts.push(usageDelta(env, acct, -meta.byte_size, -meta.promoted, null));
+  await env.DB.batch(stmts);
 }
 
 export async function putRelic(req: Request, env: Env, auth: Auth, uid: string, ctx?: ExecutionContext): Promise<Response> {
@@ -187,34 +202,48 @@ export async function putRelic(req: Request, env: Env, auth: Auth, uid: string, 
   ).bind(auth.account, uid).first<{ updated_at: number; promoted: number; byte_size: number }>();
   if (stored && stored.updated_at >= envelope.updated_at) return json({ stale: true });
 
+  // Both caps come off one cached row. These were two separate full scans of
+  // relic_meta on every single write, which is what made D1 rows-read grow as
+  // writes x vault size (src/usage.ts has the accounting).
+  const usage = await readUsage(env, auth.account);
   // vault cap (promoted-item count) — enforced only on tiers that set it.
-  if (caps.vault !== null && envelope.promoted && !stored?.promoted) {
-    const vault = await env.DB.prepare(
-      "SELECT COUNT(*) AS n FROM relic_meta WHERE account_id = ?1 AND promoted = 1",
-    ).bind(auth.account).first<{ n: number }>();
-    if ((vault?.n ?? 0) >= caps.vault) {
-      return err(402, "vault_cap", "vault is full — upgrade to keep more");
-    }
+  if (
+    caps.vault !== null && envelope.promoted && !stored?.promoted &&
+    usage.vault >= caps.vault
+  ) {
+    return err(402, "vault_cap", "vault is full — upgrade to keep more");
   }
   // storage cap — all stored bytes, every tier.
-  if (caps.storage !== null) {
-    const used = await usageBytes(env, auth.account);
-    if (used - (stored?.byte_size ?? 0) + envelope.byte_size > caps.storage) {
-      return err(402, "storage_quota", "storage quota exceeded");
-    }
+  if (
+    caps.storage !== null &&
+    usage.bytes - (stored?.byte_size ?? 0) + envelope.byte_size > caps.storage
+  ) {
+    return err(402, "storage_quota", "storage quota exceeded");
   }
 
   await env.STORE.put(relicKey(auth.account, uid), body);
-  await env.DB.prepare(
-    `INSERT INTO relic_meta (account_id, uid, created_at, updated_at, byte_size, promoted, blob_key)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-     ON CONFLICT(account_id, uid) DO UPDATE SET
-       created_at = excluded.created_at, updated_at = excluded.updated_at,
-       byte_size = excluded.byte_size, promoted = excluded.promoted, blob_key = excluded.blob_key`,
-  ).bind(
-    auth.account, uid, envelope.created_at, envelope.updated_at,
-    envelope.byte_size, envelope.promoted ? 1 : 0, envelope.blob_key ?? null,
-  ).run();
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO relic_meta (account_id, uid, created_at, updated_at, byte_size, promoted, blob_key)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+       ON CONFLICT(account_id, uid) DO UPDATE SET
+         created_at = excluded.created_at, updated_at = excluded.updated_at,
+         byte_size = excluded.byte_size, promoted = excluded.promoted, blob_key = excluded.blob_key`,
+    ).bind(
+      auth.account, uid, envelope.created_at, envelope.updated_at,
+      envelope.byte_size, envelope.promoted ? 1 : 0, envelope.blob_key ?? null,
+    ),
+    // Atomic with the row above, so the cache cannot drift from the table.
+    // `usage` is this request's scan, which lets the INSERT arm seed a
+    // first-touch account; if the row already exists (or another request seeds
+    // it first) SQLite applies the relative delta instead.
+    usageDelta(
+      env, auth.account,
+      envelope.byte_size - (stored?.byte_size ?? 0),
+      (envelope.promoted ? 1 : 0) - (stored?.promoted ?? 0),
+      usage,
+    ),
+  ]);
 
   // history ring: lazily prune the oldest unpromoted past the tier's ring (with
   // tombstones, so other devices drop them too). Free = 500; pro/max = null
@@ -232,12 +261,13 @@ export async function putRelic(req: Request, env: Env, auth: Auth, uid: string, 
     ).bind(auth.account).first();
     if (!everBilled) {
       const over = await env.DB.prepare(
-        `SELECT uid, blob_key FROM relic_meta WHERE account_id = ?1 AND promoted = 0
+        `SELECT uid, blob_key, byte_size, promoted FROM relic_meta
+         WHERE account_id = ?1 AND promoted = 0
          ORDER BY created_at DESC LIMIT -1 OFFSET ?2`,
-      ).bind(auth.account, ring).all<{ uid: string; blob_key: string | null }>();
+      ).bind(auth.account, ring).all<{ uid: string } & DeletedMeta>();
       const now = Math.floor(Date.now() / 1000);
       for (const row of over.results) {
-        await deleteRelic(env, auth.account, row.uid, row.blob_key, now);
+        await deleteRelic(env, auth.account, row.uid, row, now);
       }
     }
   }
@@ -377,10 +407,10 @@ export default {
     if (relicMatch && req.method === "DELETE") {
       const uid = relicMatch[1];
       const meta = await env.DB.prepare(
-        "SELECT blob_key FROM relic_meta WHERE account_id = ?1 AND uid = ?2",
-      ).bind(auth.account, uid).first<{ blob_key: string | null }>();
+        "SELECT blob_key, byte_size, promoted FROM relic_meta WHERE account_id = ?1 AND uid = ?2",
+      ).bind(auth.account, uid).first<DeletedMeta>();
       const deletedAt = Number(url.searchParams.get("deleted_at")) || Math.floor(Date.now() / 1000);
-      await deleteRelic(env, auth.account, uid, meta?.blob_key ?? null, deletedAt);
+      await deleteRelic(env, auth.account, uid, meta, deletedAt);
       pokeSync(env, ctx, auth.account, auth.device); // wake the other devices
       return json({});
     }
@@ -413,7 +443,7 @@ export default {
       const body = await sizedBody(req, caps.item);
       if (body instanceof Response) return body;
       if (caps.storage !== null) {
-        const used = await usageBytes(env, auth.account);
+        const { bytes: used } = await readUsage(env, auth.account);
         if (used + body.size > caps.storage) return err(402, "storage_quota", "storage quota exceeded");
       }
       await env.STORE.put(blobR2Key(auth.account, id), body.data);
@@ -584,17 +614,12 @@ export default {
     // --- account ---
     if (path === "/account" && req.method === "GET") {
       const caps = TIERS[auth.tier];
-      const [storage, vault] = await Promise.all([
-        usageBytes(env, auth.account),
-        env.DB.prepare(
-          "SELECT COUNT(*) AS n FROM relic_meta WHERE account_id = ?1 AND promoted = 1",
-        ).bind(auth.account).first<{ n: number }>(),
-      ]);
+      const usage = await readUsage(env, auth.account);
       return json({
         tier: auth.tier,
-        storage_used: storage,
+        storage_used: usage.bytes,
         storage_quota: caps.storage,
-        vault_count: vault?.n ?? 0,
+        vault_count: usage.vault,
         vault_cap: caps.vault,
       });
     }
