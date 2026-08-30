@@ -665,7 +665,9 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
                 onPressed: () => _dismissPromo(open: true),
                 child: Text('Add',
                     style: RelicTheme.sans(
-                        size: 13, color: c.accent, weight: FontWeight.w600)),
+                        size: 13,
+                        color: c.accentMuted,
+                        weight: FontWeight.w600)),
               ),
               IconButton(
                 icon: Icon(LucideIcons.x, size: 16, color: c.textMuted),
@@ -752,7 +754,9 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
                 },
                 child: Text('Resend',
                     style: RelicTheme.sans(
-                        size: 13, color: c.accent, weight: FontWeight.w600)),
+                        size: 13,
+                        color: c.accentMuted,
+                        weight: FontWeight.w600)),
               ),
               IconButton(
                 icon: Icon(LucideIcons.x, size: 16, color: c.textMuted),
@@ -861,8 +865,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
             side: BorderSide(color: colors.borderStrong),
           ),
           title: Text('Disconnect?',
-              style: RelicTheme.sans(
-                  size: 17, weight: FontWeight.w600, color: colors.text)),
+              style: RelicTheme.headline(size: 17, color: colors.text)),
           content: Text(
             'This clears your saved connection. You will need to sign in and enter your vault passphrase (or recovery kit) to reconnect. Your relics stay safe on the server.',
             style: RelicTheme.sans(size: 13.5, color: colors.textSecondary, height: 1.5),
@@ -922,8 +925,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
             side: BorderSide(color: colors.borderStrong),
           ),
           title: Text('Switch account?',
-              style: RelicTheme.sans(
-                  size: 17, weight: FontWeight.w600, color: colors.text)),
+              style: RelicTheme.headline(size: 17, color: colors.text)),
           content: Text(
             'This clears your saved connection, then you sign in to another account. To reconnect this one you will need its vault passphrase (or recovery kit). Your relics stay safe on the server.',
             style: RelicTheme.sans(
@@ -939,7 +941,9 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
               onPressed: () => Navigator.pop(dctx, true),
               child: Text('Switch account',
                   style: RelicTheme.sans(
-                      size: 13.5, weight: FontWeight.w600, color: colors.accent)),
+                      size: 13.5,
+                      weight: FontWeight.w600,
+                      color: colors.accentMuted)),
             ),
           ],
         ),
@@ -1284,7 +1288,8 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
             child: Container(
               decoration: BoxDecoration(
                 color: colors.panel,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(Radii.card)),
               ),
               child: SafeArea(
                 top: false,
@@ -1301,7 +1306,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
                             height: 4,
                             decoration: BoxDecoration(
                               color: colors.borderStrong,
-                              borderRadius: BorderRadius.circular(2),
+                              borderRadius: BorderRadius.circular(Radii.pill),
                             ),
                           ),
                         ),
@@ -1311,10 +1316,8 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
                       child: Row(
                         children: [
                           Text('Settings',
-                              style: RelicTheme.sans(
-                                  size: 17,
-                                  weight: FontWeight.w600,
-                                  color: colors.text)),
+                              style: RelicTheme.headline(
+                                  size: 17, color: colors.text)),
                           const Spacer(),
                           IconButton(
                             icon: Icon(LucideIcons.x, size: 20, color: colors.textMuted),
@@ -1597,8 +1600,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
             side: BorderSide(color: colors.borderStrong),
           ),
           title: Text('Delete $n history item${n == 1 ? '' : 's'}?',
-              style: RelicTheme.sans(
-                  size: 17, weight: FontWeight.w600, color: colors.text)),
+              style: RelicTheme.headline(size: 17, color: colors.text)),
           content: Text(
             "Everything not saved to your Vault is deleted from your account and all devices. This can't be undone.",
             style: RelicTheme.sans(
@@ -1675,7 +1677,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
             side: BorderSide(color: colors.borderStrong),
           ),
           title: Text('Startup',
-              style: RelicTheme.sans(size: 15, color: colors.text)),
+              style: RelicTheme.headline(size: 17, color: colors.text)),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1703,7 +1705,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
                 _snack('Startup timings copied');
               },
               child: Text('Copy',
-                  style: RelicTheme.sans(size: 13, color: colors.accent)),
+                  style: RelicTheme.sans(size: 13, color: colors.accentMuted)),
             ),
             TextButton(
               onPressed: () => Navigator.pop(dctx),
@@ -1727,8 +1729,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
 
   Widget _settingLabel(RelicColors c, String t) => Padding(
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
-        child: Text(t,
-            style: RelicTheme.mono(size: 10, color: c.textMuted, letterSpacing: 0.8)),
+        child: Text(t, style: RelicTheme.kicker(c.textMuted)),
       );
 
   /// Account identity line: the signed-in email. Sits above the storage line so
@@ -1927,7 +1928,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
         child: AlertDialog(
           backgroundColor: colors.panel,
           title: Text('Device name',
-              style: RelicTheme.sans(size: 16, weight: FontWeight.w600, color: colors.text)),
+              style: RelicTheme.headline(size: 17, color: colors.text)),
           content: TextField(
             controller: ctl,
             autofocus: true,
@@ -1945,7 +1946,9 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
               onPressed: () => Navigator.pop(dctx, ctl.text.trim()),
               child: Text('Save',
                   style: RelicTheme.sans(
-                      size: 13.5, weight: FontWeight.w600, color: colors.accent)),
+                      size: 13.5,
+                      weight: FontWeight.w600,
+                      color: colors.accentMuted)),
             ),
           ],
         ),
