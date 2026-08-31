@@ -10,7 +10,7 @@ forever. On your devices, sealed before it leaves them.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](./LICENSE)
 [![Crypto: Apache-2.0](https://img.shields.io/badge/crypto-Apache--2.0-blue)](./crypto/LICENSE)
-[![Platforms: Windows | Android](https://img.shields.io/badge/platforms-Windows%20%7C%20Android-lightgrey)](#install)
+[![Platforms: Windows | macOS | Linux | Android | iPhone](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android%20%7C%20iPhone-lightgrey)](#install)
 
 </div>
 
@@ -39,7 +39,7 @@ https://github.com/user-attachments/assets/dd760eac-36f3-4a22-94fb-3b88d15181a9
 | **macOS** | [signed download](https://relic.space/download/macos) (Apple Silicon) |
 | **Linux** | [tarball](https://relic.space/download/linux) or [AppImage](https://relic.space/download/linux/appimage) (x86_64) — built for X11, see [`docs/linux.md`](./docs/linux.md) |
 | **Android** | [Google Play](https://play.google.com/store/apps/details?id=relic.space.app) |
-| **iPhone** | Coming soon |
+| **iPhone** | [App Store](https://apps.apple.com/us/app/relic-clipboard-vault/id6800556025) |
 | **From source** | [`BUILD.md`](./BUILD.md) — every component builds from a clean checkout with no secret of ours |
 
 This repo is also a Scoop bucket:
@@ -106,7 +106,7 @@ The contract they both implement is
 flowchart LR
   subgraph device["Your device"]
     direction TB
-    app["Relic app<br/>(Flutter: Windows, Android)"]
+    app["Relic app<br/>(Flutter: Windows, macOS, Linux, Android, iPhone)"]
     db[("Local SQLite<br/>plaintext + FTS index")]
     sift["relic-sift<br/>on-device AI sidecar"]
     cli["relic-cli<br/>agent access"]
@@ -136,7 +136,7 @@ the server needs to order and page them, listed field by field in
 ## What's in this repo
 
 ```
-app/            Flutter client: Windows, Android, macOS in progress
+app/            Flutter client: Windows, macOS, Linux, Android, iPhone
 relic-sift/     on-device AI: classification, OCR, labeling, embeddings
 worker/         Cloudflare Worker sync server (this is what Relic Cloud runs)
 selfhost/       the same worker on plain Node + SQLite + local disk

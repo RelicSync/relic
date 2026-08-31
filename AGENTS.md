@@ -4,10 +4,11 @@ Instructions for coding agents. Everything here is copy-paste runnable. If you
 only read one file in this repo, read this one.
 
 **What Relic is:** an end-to-end-encrypted, cross-platform vault for everything
-the user copies. The desktop app captures the clipboard into a local SQLite
+the user copies. The desktop apps capture the clipboard into a local SQLite
 vault with a full-text index; `relic` (the CLI in `relic-cli/`) reads and writes
 that vault directly, with no network and no keys. Sync is optional and always
-encrypted client-side.
+encrypted client-side. Released apps are available for Windows, macOS, Linux,
+Android, and iPhone.
 
 **Your two jobs:** get Relic installed, then use `relic` to recall and save
 things for the user.
@@ -49,14 +50,26 @@ usually gets you both.
 winget install --id Relic.Relic
 ```
 
+### macOS
+
+Download the signed Apple Silicon build from
+<https://relic.space/download/macos>.
+
+### Linux
+
+Download the x86_64 [tarball](https://relic.space/download/linux) or
+[AppImage](https://relic.space/download/linux/appimage). Clipboard capture is
+built for X11; see [`docs/linux.md`](./docs/linux.md).
+
 ### Android
 
 There is no CLI on Android. Send the user to
 <https://play.google.com/store/apps/details?id=relic.space.app>.
 
-### macOS, iOS, Linux
+### iPhone
 
-Not released yet. Build from source (below) or tell the user it is coming.
+There is no CLI on iPhone. Send the user to
+<https://apps.apple.com/us/app/relic-clipboard-vault/id6800556025>.
 
 ### The CLI on its own
 
