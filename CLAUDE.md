@@ -17,7 +17,7 @@ mirror them here later; that creates drift.
 
 | Dir | What | Test command |
 | --- | --- | --- |
-| `app/` | Flutter app (Windows + Android; iOS in progress) | `flutter analyze && flutter test` |
+| `app/` | Flutter app (Windows, macOS, Linux, Android, iPhone) | `flutter analyze && flutter test` |
 | `worker/` | Cloudflare Worker sync API | `npm test` |
 | `selfhost/` | Self-hostable server (same worker, local adapters) | `npm run smoke` |
 | `crypto/` | Dart crypto package (Apache-2.0) | `dart test` |
