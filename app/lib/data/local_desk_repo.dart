@@ -1257,6 +1257,14 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   /// Look an item up by uid (for the reminder toast's summon + copy).
   Relic? relicByUid(String uid) => _db?.getByUid(uid);
 
+  /// This repo already notifies on every mutation, so it is its own change
+  /// signal — see [RelicRepo.changes].
+  @override
+  Listenable get changes => this;
+
+  @override
+  Relic? byUid(String uid) => _db?.getByUid(uid);
+
   /// Schedule a reminder; returns the row id (or null if the DB is unavailable).
   @override
   int? addReminder(String uid, int remindAtMs, {String? note}) =>

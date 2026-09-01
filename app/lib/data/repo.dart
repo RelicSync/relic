@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../platform/clipboard_bridge.dart';
@@ -128,12 +129,46 @@ class ShareException implements Exception {
   String toString() => message;
 }
 
+/// A [Listenable] that never fires: the default for [RelicRepo.changes].
+/// Adding and removing listeners is a no-op, so a surface can subscribe
+/// unconditionally without asking what kind of repo it has.
+class _Inert implements Listenable {
+  const _Inert();
+  @override
+  void addListener(VoidCallback listener) {}
+  @override
+  void removeListener(VoidCallback listener) {}
+}
+
 /// What the popup needs from a backend, independent of how it's implemented.
 abstract class RelicRepo {
   Future<void> load();
   List<Relic> get all;
   SyncState get sync;
   AccountInfo? get account;
+
+  /// Fires whenever the stored items change underneath the UI: a pull landed, a
+  /// delete arrived from another device, a desktop's analysis of an item
+  /// finished and its title / tags / OCR text came down the wire.
+  ///
+  /// Surfaces that hold ONE relic rather than reading the list — the edit
+  /// dialog — need this. Rebuilding on a timer is not enough for them: with the
+  /// live-sync doorbell up, the poll deliberately widens to 20s, so an item
+  /// open on screen could sit unchanged for most of a minute after its analysis
+  /// had already arrived and been stored.
+  ///
+  /// Defaults to a listenable that never fires, for repos whose contents cannot
+  /// change without the UI having asked.
+  Listenable get changes => const _Inert();
+
+  /// The stored relic with this uid, or null if it is gone. Used to re-read an
+  /// item that a surface is holding by value after [changes] fires.
+  Relic? byUid(String uid) {
+    for (final r in all) {
+      if (r.uid == uid) return r;
+    }
+    return null;
+  }
 
   bool get promotionSound => false;
   bool get vaultAnimation => true;
@@ -489,6 +524,16 @@ class MemoryRepo implements RelicRepo {
   final Set<String> _custom =
       {}; // user-created reusable tags (not yet applied)
   late final QueryWindow _qw = QueryWindow(() => _items);
+  @override
+  Listenable get changes => const _Inert(); // nothing writes here but the UI
+  @override
+  Relic? byUid(String uid) {
+    for (final r in _items) {
+      if (r.uid == uid) return r;
+    }
+    return null;
+  }
+
   @override
   double? uploadFraction(Relic r) => null;
   @override

@@ -123,7 +123,7 @@ class WorkerRepo implements RelicRepo {
   bool _supabaseMode = false;
   String? _refreshToken;
   int _accessExpiry = 0; // epoch seconds
-  bool _refreshing = false;
+  Future<void>? _refreshInFlight; // the token refresh others must wait on
   String? supabaseUserId;
   String? accountEmail;
   String? get refreshToken => _refreshToken;
@@ -445,6 +445,25 @@ class WorkerRepo implements RelicRepo {
 
   @override
   List<Relic> get all => List.unmodifiable(_items);
+
+  /// Bumped when a pull actually changed something. This class is deliberately
+  /// not a [ChangeNotifier] (the mobile host drives its own repaints off the
+  /// poll timer), so the doorbell needed a way to say "new data" to whatever is
+  /// on screen. Without it a wake updated the store and nothing repainted until
+  /// the next tick, which with the socket up is 20 seconds away.
+  ///
+  /// A counter rather than a bare notifier only because `notifyListeners` is
+  /// protected and this is a field, not a superclass.
+  final ValueNotifier<int> _changes = ValueNotifier(0);
+
+  @override
+  Listenable get changes => _changes;
+
+  @override
+  Relic? byUid(String uid) {
+    final i = _items.indexWhere((x) => x.uid == uid);
+    return i < 0 ? null : _items[i];
+  }
   /// Whether the index can answer a query right now.
   ///
   /// NOT just `_index != null`: during the deferred launch build the field is
@@ -881,12 +900,27 @@ class WorkerRepo implements RelicRepo {
   /// [syncDelta]; forced by [deleteAccount] to satisfy the worker's fresh-token
   /// requirement on destructive routes.
   Future<void> _maybeRefresh({bool force = false}) async {
-    if (!_supabaseMode || _refreshing) return;
+    if (!_supabaseMode) return;
+    // A refresh already running: WAIT for it. Sailing on was the old behaviour
+    // and it meant the second caller carried the very token the first was in
+    // the middle of replacing — straight to a 401 on `/relics`, which this
+    // class reads as "offline".
+    final running = _refreshInFlight;
+    if (running != null) return running;
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     if (!force && now < _accessExpiry - 120) return;
     final rt = _refreshToken;
     if (rt == null) return;
-    _refreshing = true;
+    final f = _refresh(rt);
+    _refreshInFlight = f;
+    try {
+      await f;
+    } finally {
+      _refreshInFlight = null;
+    }
+  }
+
+  Future<void> _refresh(String rt) async {
     try {
       final s = await SupabaseAuth.refresh(rt);
       token = s.accessToken;
@@ -897,8 +931,6 @@ class WorkerRepo implements RelicRepo {
       }
     } catch (_) {
       _sync = const SyncState(SyncKind.offline);
-    } finally {
-      _refreshing = false;
     }
   }
 
@@ -957,7 +989,40 @@ class WorkerRepo implements RelicRepo {
     _syncSocket!.start();
   }
 
-  Future<void> syncDelta() async {
+  /// Coalesces concurrent callers onto one pass.
+  ///
+  /// Two things call this on a cadence of their own — the foreground poll timer
+  /// and the doorbell's [SyncSocket.onWake] — so overlapping passes were normal,
+  /// not exotic. Two passes share `_cursor`, `_items` and `_sync`, so whichever
+  /// one hit a transient error published [SyncKind.offline] over the top of the
+  /// other, which was at that moment busy pulling items into the list. That is
+  /// the chip reading "Offline" while items visibly arrive.
+  ///
+  /// A caller arriving mid-pass joins the running one instead of starting a
+  /// second, but a wake is not simply dropped: it may be announcing a write
+  /// this pass has already read past, so it schedules exactly one more pass to
+  /// run after this one. Further wakes during THAT pass collapse into the same
+  /// single follow-up, so a burst of writes can never fan out into a queue.
+  Future<void> syncDelta() {
+    final running = _syncInFlight;
+    if (running != null) {
+      _syncAgain = true;
+      return running;
+    }
+    final f = _syncOnce().whenComplete(() {
+      _syncInFlight = null;
+      if (_syncAgain) {
+        _syncAgain = false;
+        unawaited(syncDelta());
+      }
+    });
+    return _syncInFlight = f;
+  }
+
+  Future<void>? _syncInFlight;
+  bool _syncAgain = false;
+
+  Future<void> _syncOnce() async {
     // Refresh BEFORE opening the socket. The launch now binds with an
     // already-expired access token (that's what keeps the network off the cold
     // path), so starting the socket first would hand it an empty bearer,
@@ -1059,6 +1124,7 @@ class WorkerRepo implements RelicRepo {
       if (changed) {
         _items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
         _refreshWindow(); // reflect pulled items in the active view
+        _changes.value++; // wake anything holding one of these items
       }
       _sync = SyncState(
         // A queued blob with no queued relic op still means "not fully synced".
