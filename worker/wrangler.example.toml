@@ -116,3 +116,12 @@ name = "RL_SHARE_VIEW"
 type = "ratelimit"
 namespace_id = "1007"
 simple = { limit = 30, period = 60 }
+
+# The encrypted-sync data plane (per-account). An abuse ceiling, not traffic
+# shaping: ~15 rps is far above a fresh-device full sync or a bulk import, and
+# far below what a stolen token could otherwise fan out to D1 and R2.
+[[unsafe.bindings]]
+name = "RL_SYNC"
+type = "ratelimit"
+namespace_id = "1008"
+simple = { limit = 900, period = 60 }

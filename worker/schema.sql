@@ -19,10 +19,14 @@ CREATE INDEX IF NOT EXISTS idx_tokens_account ON tokens(account_id);
 -- native-auth account id. `tier` is the hot-path cache the Stripe webhook keeps
 -- current and authenticate() reads on every request.
 CREATE TABLE IF NOT EXISTS accounts (
-    account_id TEXT PRIMARY KEY,
-    email      TEXT,
-    tier       TEXT NOT NULL DEFAULT 'free' CHECK (tier IN ('free','pro','max')),
-    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    account_id    TEXT PRIMARY KEY,
+    email         TEXT,
+    tier          TEXT NOT NULL DEFAULT 'free' CHECK (tier IN ('free','pro','max')),
+    created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+    -- Session-revocation watermark (migrations/0009). Supabase access tokens
+    -- with iat < this are rejected; 0 = never revoked. Listed last to match the
+    -- column order an ALTER TABLE ADD COLUMN leaves on a migrated database.
+    min_valid_iat INTEGER NOT NULL DEFAULT 0
 );
 
 -- A Supabase identity bound to a pre-existing account (vaults that predate
@@ -142,6 +146,21 @@ CREATE TABLE IF NOT EXISTS shares (
 );
 CREATE INDEX IF NOT EXISTS idx_shares_account ON shares(account_id, expires_at);
 CREATE INDEX IF NOT EXISTS idx_shares_expiry  ON shares(expires_at);
+
+-- In-flight R2 multipart uploads (migrations/0010_mpu_state.sql has the
+-- rationale). Two jobs: reserve declared_size so parallel creates cannot each
+-- spend the whole quota, and give the janitor something to find. Abandoned
+-- multipart uploads are invisible to STORE.list(), so without this row nothing
+-- can ever reclaim them.
+CREATE TABLE IF NOT EXISTS mpu_state (
+    account_id    TEXT NOT NULL,
+    blob_id       TEXT NOT NULL,
+    upload_id     TEXT NOT NULL,
+    declared_size INTEGER NOT NULL,
+    created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (account_id, blob_id, upload_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mpu_created ON mpu_state(created_at);
 
 -- Janitorial-sweep bookkeeping (src/sweep.ts): the resumable R2 list cursor
 -- for the orphan-blob sweep, plus room for future sweeps.

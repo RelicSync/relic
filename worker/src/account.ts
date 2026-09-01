@@ -135,6 +135,10 @@ export async function deleteAccount(env: Env, auth: Auth): Promise<Response> {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM relic_meta WHERE account_id = ?1").bind(acct),
     env.DB.prepare("DELETE FROM account_usage WHERE account_id = ?1").bind(acct),
+    // purgeR2Prefix above cannot see in-flight multipart parts (list() does not
+    // return them), so the reservations have to be dropped here explicitly or
+    // they would outlive the account they belong to.
+    env.DB.prepare("DELETE FROM mpu_state WHERE account_id = ?1").bind(acct),
     env.DB.prepare("DELETE FROM ai_meta WHERE account_id = ?1").bind(acct),
     env.DB.prepare("DELETE FROM tombstones WHERE account_id = ?1").bind(acct),
     env.DB.prepare("DELETE FROM devices WHERE account_id = ?1").bind(acct),

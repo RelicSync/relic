@@ -17,7 +17,7 @@
 // device did the work.
 import type { Env } from "./env";
 import type { Auth } from "./auth";
-import { err, json } from "./http";
+import { clampLimit, err, json } from "./http";
 import { pokeSync } from "./notify";
 
 // A lease is deliberately short. It only has to outlast one item's model pass
@@ -266,7 +266,7 @@ export async function putAi(
 /// updated_at ordering the vault's "recent" views depend on.
 export async function listAi(url: URL, env: Env, auth: Auth): Promise<Response> {
   const since = Number(url.searchParams.get("since") ?? 0);
-  const limit = Math.min(Number(url.searchParams.get("limit") ?? 500), 500);
+  const limit = clampLimit(url.searchParams.get("limit"));
   const cursor = url.searchParams.get("cursor");
 
   let sql =
@@ -279,7 +279,8 @@ export async function listAi(url: URL, env: Env, auth: Auth): Promise<Response> 
     binds.push(Number(cursor.slice(0, sep)), Number(cursor.slice(0, sep)), cursor.slice(sep + 1));
     sql += " AND (ai_at > ?3 OR (ai_at = ?4 AND uid > ?5))";
   }
-  sql += ` ORDER BY ai_at, uid LIMIT ${limit}`;
+  binds.push(limit);
+  sql += ` ORDER BY ai_at, uid LIMIT ?${binds.length}`;
 
   const rows = await env.DB.prepare(sql).bind(...binds).all<{
     uid: string; ai_at: number; ai_level: number | null;

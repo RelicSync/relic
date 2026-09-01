@@ -9,7 +9,8 @@ const DDL = [
      created_at INTEGER NOT NULL DEFAULT (unixepoch()))`,
   `CREATE TABLE IF NOT EXISTS accounts (
      account_id TEXT PRIMARY KEY, email TEXT,
-     tier TEXT NOT NULL DEFAULT 'free', created_at INTEGER NOT NULL DEFAULT (unixepoch()))`,
+     tier TEXT NOT NULL DEFAULT 'free', created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+     min_valid_iat INTEGER NOT NULL DEFAULT 0)`,
   `CREATE TABLE IF NOT EXISTS subscriptions (
      account_id TEXT PRIMARY KEY, stripe_customer_id TEXT, stripe_subscription_id TEXT,
      tier TEXT NOT NULL DEFAULT 'free', status TEXT NOT NULL DEFAULT 'none',
@@ -49,12 +50,17 @@ const DDL = [
   `CREATE TABLE IF NOT EXISTS account_usage (
      account_id TEXT PRIMARY KEY, bytes_used INTEGER NOT NULL,
      vault_count INTEGER NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS mpu_state (
+     account_id TEXT NOT NULL, blob_id TEXT NOT NULL, upload_id TEXT NOT NULL,
+     declared_size INTEGER NOT NULL,
+     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+     PRIMARY KEY (account_id, blob_id, upload_id))`,
 ];
 
 const TABLES = [
   "tokens", "accounts", "subscriptions", "billing_events",
   "devices", "relic_meta", "ai_meta", "tombstones", "shares", "sweep_state",
-  "account_links", "account_usage",
+  "account_links", "account_usage", "mpu_state",
 ];
 
 export async function setupSchema(db: D1Database): Promise<void> {

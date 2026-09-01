@@ -18,7 +18,7 @@ import {
 } from "./blob";
 import { readUsage, usageDelta } from "./usage";
 import { type Auth, authenticate, REV_TTL, revKey } from "./auth";
-import { CORS, err, json } from "./http";
+import { clampLimit, CORS, err, json } from "./http";
 import { clientIp, rateLimit } from "./ratelimit";
 import { deleteAccount } from "./account";
 import {
@@ -38,7 +38,7 @@ import {
   reconcile,
   stripeWebhook,
 } from "./stripe";
-import { sweepOrphanBlobs, sweepTombstones } from "./sweep";
+import { sweepAbandonedMpus, sweepOrphanBlobs, sweepTombstones } from "./sweep";
 import { claimAi, listAi, putAi, releaseAi } from "./ai";
 import { pokeSync, SyncSocket } from "./notify";
 
@@ -128,6 +128,14 @@ const isSyncWrite = (method: string, path: string): boolean =>
   (method === "POST" && path === "/blob") ||
   (method === "POST" && /^\/blob\/mpu(\/.*)?$/.test(path)); // create + complete
 
+// The encrypted-sync data plane, for the RL_SYNC gate below. /sync/socket is
+// deliberately absent: the DO's own MAX_SOCKETS cap governs that, and a
+// long-lived upgrade is not a request-rate problem.
+const isDataPlane = (path: string): boolean =>
+  path === "/relics" || path === "/tombstones" || path === "/keyparams" ||
+  path === "/ai" || path.startsWith("/relic/") || path.startsWith("/blob") ||
+  path.startsWith("/ai/");
+
 function syncWriteGate(env: Env, auth: Auth, method: string, path: string): Response | null {
   if (env.VERIFY_GATE !== "on") return null;
   if (!auth.supabase) return null; // legacy device token — grandfathered
@@ -141,7 +149,13 @@ function validEnvelope(e: unknown, uid: string): e is Envelope {
   return (
     !!env && env.v === 1 && env.uid === uid &&
     Number.isFinite(env.created_at) && Number.isFinite(env.updated_at) &&
-    Number.isFinite(env.byte_size) && typeof env.promoted === "boolean" &&
+    // byte_size is client-declared and feeds the account_usage counters, so it
+    // has to be a whole non-negative number. Number.isFinite let a negative
+    // through, and one negative push permanently zeroed an account's cached
+    // storage total (usage.ts floors it at 0), which removed the only
+    // backpressure the data plane has.
+    Number.isInteger(env.byte_size) && env.byte_size >= 0 &&
+    typeof env.promoted === "boolean" &&
     typeof env.n === "string" && typeof env.ct === "string" &&
     (env.blob_key === undefined || typeof env.blob_key === "string")
   );
@@ -190,6 +204,16 @@ export async function putRelic(req: Request, env: Env, auth: Auth, uid: string, 
   }
   if (!validEnvelope(envelope, uid)) return err(400, "invalid_envelope", "bad shape or uid mismatch");
   if (envelope.byte_size > caps.item) return err(413, "too_large", "byte_size exceeds tier cap");
+  // Plausibility floor on the other direction: byte_size is what the quota is
+  // charged against, so UNDER-declaring it buys free storage. We cannot demand
+  // exact agreement, because shipped clients compute byte_size from plaintext
+  // utf8 length or from bundle length and both legitimately diverge from the
+  // base64 body (real bodies run ~1.34x byte_size plus a few hundred bytes).
+  // 4x plus 16 KiB leaves roughly 3x headroom over the worst real client, so
+  // nothing in the wild trips it while under-declaration stays bounded.
+  if (body.length > envelope.byte_size * 4 + 16384) {
+    return err(400, "invalid_envelope", "byte_size is implausible for this body");
+  }
 
   // deletion wins over late pushes from offline devices
   const tomb = await env.DB.prepare(
@@ -280,7 +304,7 @@ export async function putRelic(req: Request, env: Env, auth: Auth, uid: string, 
 
 export async function listRelics(url: URL, env: Env, auth: Auth): Promise<Response> {
   const since = Number(url.searchParams.get("since") ?? 0);
-  const limit = Math.min(Number(url.searchParams.get("limit") ?? 500), 500);
+  const limit = clampLimit(url.searchParams.get("limit"));
   const cursor = url.searchParams.get("cursor");
 
   let sql =
@@ -292,7 +316,8 @@ export async function listRelics(url: URL, env: Env, auth: Auth): Promise<Respon
     binds.push(Number(cursor.slice(0, sep)), Number(cursor.slice(0, sep)), cursor.slice(sep + 1));
     sql += " AND (updated_at > ?3 OR (updated_at = ?4 AND uid > ?5))";
   }
-  sql += ` ORDER BY updated_at, uid LIMIT ${limit}`;
+  binds.push(limit);
+  sql += ` ORDER BY updated_at, uid LIMIT ?${binds.length}`;
 
   const rows = await env.DB.prepare(sql).bind(...binds).all<{ uid: string; updated_at: number }>();
   const items = (
@@ -356,6 +381,25 @@ export default {
     // sync write surface; everything else falls through untouched.
     const gated = syncWriteGate(env, auth, req.method, path);
     if (gated) return gated;
+
+    // Data-plane abuse ceiling, per account, one gate for the whole surface.
+    // Every other route already had a limiter. The sync plane, the part that
+    // actually fans out to D1 and R2, had none, so a single stolen token could
+    // hammer it as fast as the edge would carry.
+    //
+    // 900/60s (~15 rps) is an abuse ceiling, not traffic shaping. The worst
+    // legitimate bursts are a fresh-device full sync (about 20 list pages for a
+    // 10k vault plus parallel blob GETs) and a bulk import through the client's
+    // ordered push queue; both are bandwidth-bound well under half of it. Reads
+    // and writes share the one bucket on purpose: two knobs would each have to
+    // be set loose enough for the other's burst.
+    //
+    // rateLimit() fails open on a missing binding, so self-host and the test
+    // runtime (no RL_* bindings at all) behave byte-identically to before.
+    if (isDataPlane(path)) {
+      const limited = await rateLimit(env.RL_SYNC, auth.account);
+      if (limited) return limited;
+    }
 
     // --- live-sync doorbell: authed WebSocket, forwarded to the account's DO ---
     // The DO reads X-Relic-Device off this same request to skip echoing a write
@@ -600,9 +644,29 @@ export default {
     if (devMatch && req.method === "DELETE") {
       const limited = await rateLimit(env.RL_DEVICE, auth.account);
       if (limited) return limited;
-      await env.DB.prepare(
-        "UPDATE devices SET revoked_at = ?3 WHERE account_id = ?1 AND device_id = ?2",
-      ).bind(auth.account, devMatch[1], Math.floor(Date.now() / 1000)).run();
+      const revokedAt = Math.floor(Date.now() / 1000);
+      await env.DB.batch([
+        env.DB.prepare(
+          "UPDATE devices SET revoked_at = ?3 WHERE account_id = ?1 AND device_id = ?2",
+        ).bind(auth.account, devMatch[1], revokedAt),
+        // Real revocation (migrations/0009). The `rev:` marker written below
+        // only bites a request that volunteers X-Relic-Device, so a stolen
+        // device removed here would just drop the header and carry on. The
+        // account watermark kills every access token minted before this moment
+        // instead. MAX() keeps it monotone under any clock skew, and nothing
+        // ever clears it: re-registering a device heals the KV marker, not
+        // this.
+        //
+        // CONSEQUENCE, stated plainly: removing one device signs all of them
+        // out. Legitimate devices recover silently on their next access-token
+        // refresh (~1h; the refresh flow is untouched), and the remover's own
+        // current token goes stale immediately. One forced re-login is the
+        // accepted cost of revocation that actually revokes.
+        env.DB.prepare(
+          `UPDATE accounts SET min_valid_iat = MAX(min_valid_iat, ?2)
+            WHERE account_id = ?1`,
+        ).bind(auth.account, revokedAt),
+      ]);
       if (env.PAIR) {
         await env.PAIR.put(revKey(auth.account, devMatch[1]), "1", {
           expirationTtl: REV_TTL,
@@ -659,7 +723,8 @@ export default {
     try {
       const blobs = await sweepOrphanBlobs(env);
       const tombstones = await sweepTombstones(env);
-      console.log(JSON.stringify({ evt: "janitor", ...blobs, tombstones }));
+      const mpus = await sweepAbandonedMpus(env);
+      console.log(JSON.stringify({ evt: "janitor", ...blobs, tombstones, mpus }));
     } catch (e) {
       console.error(JSON.stringify({ evt: "janitor_error", err: String(e) }));
     }

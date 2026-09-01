@@ -120,6 +120,13 @@ export async function fetchShareBlob(
     ...CORS,
     "Content-Type": "application/octet-stream",
     "Cache-Control": "no-store",
+    // The ciphertext is attacker-supplied bytes served from our own origin, so
+    // never let a browser sniff a content type out of it or render it inline.
+    // The share page reads this with fetch(), so the disposition costs it
+    // nothing. Both the streaming and the buffered last-view branch below build
+    // their Response from this same object.
+    "X-Content-Type-Options": "nosniff",
+    "Content-Disposition": "attachment",
   };
   // Last permitted view: buffer the bytes BEFORE dropping the ciphertext (the
   // response must not stream from an object we're deleting). The D1 row stays

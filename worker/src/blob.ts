@@ -9,8 +9,15 @@
 // Quota model: declared size is checked at create (the cheap, pre-transfer
 // 413/402 — the client's upsell moment), and the TRUE size is re-checked at
 // complete (closes the lying-client hole; over-cap objects are deleted).
-// Abandoned uploads are aborted by the client best-effort and by the bucket
-// lifecycle rule (docs/setup/02-cloudflare.md) as the backstop.
+//
+// Every create also books a row in `mpu_state` (migrations/0010) and every
+// terminal outcome clears it. That row does two things account_usage cannot:
+// it reserves the declared bytes, so N parallel creates can no longer each see
+// the same empty account and each pass the same check, and it is the only trace
+// an abandoned upload leaves anywhere, because R2's list() does not return
+// in-flight multipart parts, so without it nothing could ever be reclaimed. The bucket
+// lifecycle rule (docs/setup/02-cloudflare.md) stays as a second backstop, but
+// src/sweep.ts no longer depends on it.
 
 import type { Env } from "./env";
 import type { Auth } from "./auth";
@@ -57,6 +64,30 @@ async function overQuota(env: Env, auth: Auth, size: number): Promise<boolean> {
   return (await readUsage(env, auth.account)).bytes + size > cap;
 }
 
+/// Bytes already promised to uploads this account has in flight. account_usage
+/// only counts bytes that have LANDED, which is what let ten simultaneous
+/// creates each pass a check the first one should have used up. One indexed
+/// SUM, on a route that runs once per large file.
+async function reservedBytes(env: Env, acct: string): Promise<number> {
+  const row = await env.DB.prepare(
+    "SELECT COALESCE(SUM(declared_size), 0) AS reserved FROM mpu_state WHERE account_id = ?1",
+  ).bind(acct).first<{ reserved: number }>();
+  return row?.reserved ?? 0;
+}
+
+/// Forget an upload. Called on every terminal outcome (completed, rejected,
+/// aborted, swept) so a stale reservation can never hold quota hostage.
+export async function clearMpuState(
+  env: Env,
+  acct: string,
+  blobId: string,
+  uploadId: string,
+): Promise<void> {
+  await env.DB.prepare(
+    "DELETE FROM mpu_state WHERE account_id = ?1 AND blob_id = ?2 AND upload_id = ?3",
+  ).bind(acct, blobId, uploadId).run();
+}
+
 // POST /blob/mpu?id=<blobKey>  {declared_size}
 export async function mpuCreate(req: Request, env: Env, auth: Auth, id: string): Promise<Response> {
   let declared: number;
@@ -69,8 +100,24 @@ export async function mpuCreate(req: Request, env: Env, auth: Auth, id: string):
     return err(400, "invalid_envelope", "bad declared_size");
   }
   if (declared > TIERS[auth.tier].item) return err(413, "too_large", "blob exceeds tier cap");
-  if (await overQuota(env, auth, declared)) return err(402, "storage_quota", "storage quota exceeded");
+  const cap = TIERS[auth.tier].storage;
+  if (cap !== null) {
+    const used = (await readUsage(env, auth.account)).bytes;
+    if (used + (await reservedBytes(env, auth.account)) + declared > cap) {
+      return err(402, "storage_quota", "storage quota exceeded");
+    }
+  }
   const mpu = await env.STORE.createMultipartUpload(blobR2Key(auth.account, id));
+  // Book the reservation only after R2 hands back an upload id, so a failed
+  // create never leaves a row holding quota for something that does not exist.
+  // ON CONFLICT because a client retrying the same upload id must re-book, not
+  // fail the create.
+  await env.DB.prepare(
+    `INSERT INTO mpu_state (account_id, blob_id, upload_id, declared_size, created_at)
+     VALUES (?1, ?2, ?3, ?4, unixepoch())
+     ON CONFLICT(account_id, blob_id, upload_id) DO UPDATE SET
+       declared_size = excluded.declared_size, created_at = excluded.created_at`,
+  ).bind(auth.account, id, mpu.uploadId, declared).run();
   return json({ upload_id: mpu.uploadId, part_size: PART_SIZE, max_parts: maxParts(auth.tier) });
 }
 
@@ -117,7 +164,12 @@ export async function mpuComplete(req: Request, env: Env, auth: Auth, id: string
   } catch {
     return err(404, "not_found", "unknown upload or mismatched parts");
   }
-  // True-size re-check: the declared_size at create was client-claimed.
+  // The upload is no longer in flight either way, so release the reservation
+  // before the size verdict, since all three exits below are terminal.
+  await clearMpuState(env, auth.account, id, body.upload_id);
+  // True-size re-check: the declared_size at create was client-claimed. Note
+  // this one deliberately does NOT add reservedBytes: the row we just cleared
+  // was this upload's own, and any sibling in flight has not landed yet.
   if (obj.size > TIERS[auth.tier].item) {
     await env.STORE.delete(key);
     return err(413, "too_large", "blob exceeds tier cap");
@@ -138,5 +190,9 @@ export async function mpuAbort(env: Env, auth: Auth, id: string, uploadId: strin
   } catch {
     // already aborted/completed/unknown — abort is best-effort by design
   }
+  // Unconditional, and outside the try: even an abort R2 rejected means this
+  // upload is done as far as we are concerned, and leaving the row would hold
+  // the reservation until the 24h sweep.
+  await clearMpuState(env, auth.account, id, uploadId);
   return json({ aborted: true });
 }

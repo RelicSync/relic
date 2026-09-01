@@ -134,18 +134,30 @@ async function verifySupabaseJwt(
   }
 }
 
-// Read (and lazily provision) the cached tier for an account. The Stripe webhook
-// consumer keeps `accounts.tier` current; the reconcile cron handles grace
-// expiry. First contact for a new account writes a free row, once.
-async function tierForAccount(env: Env, accountId: string, email?: string): Promise<Tier> {
-  const row = await env.DB.prepare("SELECT tier FROM accounts WHERE account_id = ?1")
-    .bind(accountId)
-    .first<{ tier: string }>();
-  if (row && isTier(row.tier)) return row.tier;
+// Read (and lazily provision) the per-account hot-path state. The Stripe
+// webhook consumer keeps `accounts.tier` current; the reconcile cron handles
+// grace expiry. First contact for a new account writes a free row, once.
+//
+// min_valid_iat rides along on the row we were already reading, so real session
+// revocation (migrations/0009) costs zero extra queries on the auth hot path.
+async function accountState(
+  env: Env,
+  accountId: string,
+  email?: string,
+): Promise<{ tier: Tier; minValidIat: number }> {
+  const row = await env.DB.prepare(
+    "SELECT tier, min_valid_iat FROM accounts WHERE account_id = ?1",
+  ).bind(accountId).first<{ tier: string; min_valid_iat: number | null }>();
+  if (row) {
+    return {
+      tier: isTier(row.tier) ? row.tier : "free",
+      minValidIat: row.min_valid_iat ?? 0,
+    };
+  }
   await env.DB.prepare(
     "INSERT OR IGNORE INTO accounts (account_id, email) VALUES (?1, ?2)",
   ).bind(accountId, email ?? null).run();
-  return "free";
+  return { tier: "free", minValidIat: 0 };
 }
 
 async function sha256Hex(s: string): Promise<string> {
@@ -171,7 +183,21 @@ export async function authenticate(req: Request, env: Env): Promise<Auth | Respo
         "SELECT account_id FROM account_links WHERE supabase_sub = ?1",
       ).bind(claims.sub).first<{ account_id: string }>();
       const account = link?.account_id ?? claims.sub;
-      const tier = await tierForAccount(env, account, claims.email);
+      const { tier, minValidIat } = await accountState(env, account, claims.email);
+      // REAL REVOCATION (migrations/0009). The `rev:` KV guard further down only
+      // fires when the client volunteers X-Relic-Device, and a stolen device
+      // just drops the header, so removing a device revoked nothing. This
+      // watermark is checked unconditionally: every access token minted before
+      // the stamp is dead, header or no header.
+      //
+      // Resolved AFTER account_links on purpose: the LINKED account is the one
+      // whose data is at risk, so its stamp is the one that governs. Strict `<`
+      // so a token refreshed in the same second as the removal still passes.
+      // A distinct code so the client can branch on it (refresh-and-retry)
+      // rather than treating it as a generic 401.
+      if (minValidIat > 0 && (claims.iat === undefined || claims.iat < minValidIat)) {
+        return err(401, "session_revoked", "this session was signed out; sign in again");
+      }
       base = {
         account,
         tier,
@@ -188,8 +214,16 @@ export async function authenticate(req: Request, env: Env): Promise<Auth | Respo
   // (2) Legacy device token.
   if (!base) {
     const hash = await sha256Hex(token);
+    // COALESCE, not tokens.tier: `tokens.tier` is a snapshot written when the
+    // token was minted and nothing since keeps it current, so a billing
+    // downgrade left a legacy device still authenticating as pro forever.
+    // accounts.tier IS kept current (webhook + grace sweep), so it wins
+    // whenever the account row exists; tokens.tier is only the fallback for a
+    // token whose account was never provisioned.
     const row = await env.DB.prepare(
-      "SELECT account_id, tier FROM tokens WHERE token_hash = ?1 AND revoked = 0",
+      `SELECT t.account_id AS account_id, COALESCE(a.tier, t.tier) AS tier
+         FROM tokens t LEFT JOIN accounts a ON a.account_id = t.account_id
+        WHERE t.token_hash = ?1 AND t.revoked = 0`,
     ).bind(hash).first<{ account_id: string; tier: string }>();
     if (!row) return err(401, "unauthorized", "unknown or revoked token");
     base = { account: row.account_id, tier: isTier(row.tier) ? row.tier : "free" };

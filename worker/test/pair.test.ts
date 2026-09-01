@@ -34,10 +34,24 @@ function call(
   );
 }
 
+// The per-account session-revocation stamp (migrations/0009). Reads 0, never
+// null, for an account that has never had a device removed.
+async function watermark(account: string): Promise<number> {
+  const r = await E.DB.prepare(
+    "SELECT min_valid_iat FROM accounts WHERE account_id = ?1",
+  ).bind(account).first<{ min_valid_iat: number }>();
+  return r?.min_valid_iat ?? 0;
+}
+
 beforeEach(async () => {
   await setupSchema(E.DB);
   await seedToken("tokA", "acctA");
   await seedToken("tokB", "acctB");
+  // Legacy device tokens never create an accounts row, and the DELETE handler
+  // only UPDATEs one, so seed both accounts explicitly.
+  await E.DB.prepare(
+    "INSERT OR IGNORE INTO accounts (account_id) VALUES ('acctA'), ('acctB')",
+  ).run();
 });
 
 describe("pairing relay", () => {
@@ -121,7 +135,9 @@ describe("device registry", () => {
     // authenticate(), before any route — so any authed path 401s).
     const blocked = await call("tokA", "GET", "/account/devices", { device: "gone" });
     expect(blocked.status).toBe(401);
-    // The same credential without the header still works (documented limitation).
+    // The same LEGACY credential without the header still works. That is the
+    // hole min_valid_iat closes for Supabase sessions (migrations/0009);
+    // legacy device tokens carry no iat and stay grandfathered here.
     const ok = await call("tokA", "GET", "/account/devices");
     expect(ok.status).toBe(200);
 
@@ -129,5 +145,36 @@ describe("device registry", () => {
     await call("tokA", "POST", "/account/devices", { body: { device_id: "gone" } });
     const healed = await call("tokA", "GET", "/account/devices", { device: "gone" });
     expect(healed.status).toBe(200);
+  });
+
+  it("removing a device stamps the account's session watermark", async () => {
+    const before = Math.floor(Date.now() / 1000);
+    await call("tokA", "POST", "/account/devices", { body: { device_id: "gone2" } });
+    expect(await watermark("acctA")).toBe(0);
+
+    expect((await call("tokA", "DELETE", "/account/devices/gone2")).status).toBe(200);
+    const stamped = await watermark("acctA");
+    expect(stamped).toBeGreaterThanOrEqual(before);
+
+    // Only this account. A sibling account must not be signed out.
+    expect(await watermark("acctB")).toBe(0);
+  });
+
+  it("the watermark is monotone and survives re-registration", async () => {
+    await call("tokA", "POST", "/account/devices", { body: { device_id: "gone3" } });
+    await call("tokA", "DELETE", "/account/devices/gone3");
+    const first = await watermark("acctA");
+    expect(first).toBeGreaterThan(0);
+
+    // A clock that jumped backwards must not be able to lower the watermark.
+    await E.DB.prepare("UPDATE accounts SET min_valid_iat = ?2 WHERE account_id = ?1")
+      .bind("acctA", first + 10_000).run();
+    await call("tokA", "POST", "/account/devices", { body: { device_id: "gone3" } });
+    await call("tokA", "DELETE", "/account/devices/gone3");
+    expect(await watermark("acctA")).toBe(first + 10_000);
+
+    // Re-registering heals the KV `rev:` marker but never clears the stamp.
+    await call("tokA", "POST", "/account/devices", { body: { device_id: "gone3" } });
+    expect(await watermark("acctA")).toBe(first + 10_000);
   });
 });

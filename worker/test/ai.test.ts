@@ -184,6 +184,37 @@ describe("AI record publish + pull", () => {
     expect(items.map((i) => i.uid)).toEqual(["u2"]);
   });
 
+  it("clamps a junk or out-of-range limit on the AI cursor too", async () => {
+    await seedToken("tk", "acct");
+    await publish("tk", "d", "u1", { ai_at: 1000, level: 3 });
+    await publish("tk", "d", "u2", { ai_at: 2000, level: 3 });
+    // listAi interpolated `limit` into its SQL exactly like listRelics did.
+    // Junk and over-large both fall back to the full page of 500...
+    for (const q of ["limit=abc", "limit=99999"]) {
+      const list = await call("tk", "GET", `/ai?since=0&${q}`);
+      expect(list.status).toBe(200);
+      const { items } = await list.json<{ items: Array<{ uid: string }> }>();
+      expect(items.map((i) => i.uid)).toEqual(["u1", "u2"]);
+    }
+    // ...while zero and negative clamp UP to 1 rather than reaching SQL.
+    for (const q of ["limit=0", "limit=-5"]) {
+      const list = await call("tk", "GET", `/ai?since=0&${q}`);
+      expect(list.status).toBe(200);
+      const { items } = await list.json<{ items: Array<{ uid: string }> }>();
+      expect(items.map((i) => i.uid)).toEqual(["u1"]);
+    }
+  });
+
+  it("honours a limit of 1 and hands back the matching cursor", async () => {
+    await seedToken("tk", "acct");
+    await publish("tk", "d", "u1", { ai_at: 1000, level: 3 });
+    await publish("tk", "d", "u2", { ai_at: 2000, level: 3 });
+    const list = await call("tk", "GET", "/ai?since=0&limit=1");
+    const page = await list.json<{ items: Array<{ uid: string }>; next_cursor: string }>();
+    expect(page.items.map((i) => i.uid)).toEqual(["u1"]);
+    expect(page.next_cursor).toBe("1000:u1");
+  });
+
   it("a bare lease is never served as a record", async () => {
     await seedToken("tk", "acct");
     await claim("tk", "desktop-a", [{ uid: "u1", level: 3 }]);

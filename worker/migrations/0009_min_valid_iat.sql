@@ -1,0 +1,21 @@
+-- Real session revocation, per account.
+--
+-- Removing a device parked its id in KV under `rev:` and the hot path checked
+-- that — but ONLY for requests carrying X-Relic-Device, a header the client
+-- chooses to send (both repos guard with `if (dev)`). A stolen device that
+-- simply omits it kept full access for the life of its refresh token, so
+-- "remove device" revoked nothing at all.
+--
+-- min_valid_iat is a per-account watermark instead. DELETE /account/devices/:id
+-- stamps it with the current time and authenticate() rejects every Supabase
+-- access token issued before it, unconditionally. There is no header to omit.
+--
+-- Legacy device tokens carry no iat and are grandfathered; they stay covered by
+-- the `rev:` check, which remains in place as defense in depth.
+--
+-- Read on the auth hot path, but for free: tierForAccount already did a
+-- per-request `SELECT tier FROM accounts`, so this only widens that row.
+--
+-- DEFAULT 0 means "never revoked", so every existing account is unaffected
+-- until someone actually removes a device.
+ALTER TABLE accounts ADD COLUMN min_valid_iat INTEGER NOT NULL DEFAULT 0;
