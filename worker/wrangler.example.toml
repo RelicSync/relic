@@ -31,6 +31,15 @@ APP_BASE_URL = "https://your-domain.example"
 # Supabase auth bridge (optional; uncomment and fill in to enable JWT auth.
 # Omitted -> the worker runs with legacy device-token auth only).
 # SUPABASE_URL = "https://YOUR-PROJECT.supabase.co"
+# SUPABASE_ANON_KEY = "sb_publishable_YOUR_KEY"
+#
+# SUPABASE_ANON_KEY is the publishable key, not a secret — it ships hard-coded
+# in the client (app/lib/data/supabase_auth.dart). Supabase's gateway wants an
+# `apikey` header on GoTrue routes, and removing a device calls GoTrue's global
+# logout to revoke the account's refresh tokens. Leave it unset and that call is
+# attempted without the header (a GoTrue reached directly needs no gateway
+# credential); if the gateway then refuses, device removal quietly falls back to
+# the KV-only revocation guard instead of failing.
 #
 # If you enable Supabase, also set the SECRET (not a var):
 #   npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY

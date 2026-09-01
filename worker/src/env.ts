@@ -49,6 +49,13 @@ export interface Env {
   // minted before the custom-domain switch (or by old client builds) carry this
   // issuer, so both are accepted. Same JWKS either way.
   SUPABASE_JWT_SECRET?: string; // secret — ONLY if using legacy HS256 tokens
+  SUPABASE_ANON_KEY?: string; // var, NOT a secret — the publishable key, which
+  // ships hard-coded in the open-source client (app/lib/data/supabase_auth.dart).
+  // Supabase's gateway wants an `apikey` header on GoTrue routes, so the global
+  // sign-out on device removal sends it. Unset -> the call is attempted without
+  // it (a GoTrue reached directly needs no gateway credential) and, if the
+  // gateway rejects it, device removal falls back to its pre-revocation
+  // behaviour rather than failing. See revokeSupabaseSessions in src/account.ts.
   SUPABASE_SERVICE_ROLE_KEY?: string; // secret — GoTrue admin key. Used for
   // exactly one thing: DELETE /auth/v1/admin/users/{sub} during account
   // deletion, so deleting an account also deletes the identity (and its email)

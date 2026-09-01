@@ -20,7 +20,7 @@ import { readUsage, usageDelta } from "./usage";
 import { type Auth, authenticate, REV_TTL, revKey } from "./auth";
 import { clampLimit, CORS, err, json } from "./http";
 import { clientIp, rateLimit } from "./ratelimit";
-import { deleteAccount } from "./account";
+import { deleteAccount, revokeSupabaseSessions } from "./account";
 import {
   createShare,
   fetchShareBlob,
@@ -644,15 +644,43 @@ export default {
     if (devMatch && req.method === "DELETE") {
       const limited = await rateLimit(env.RL_DEVICE, auth.account);
       if (limited) return limited;
+      const removedAt = Math.floor(Date.now() / 1000);
+      // Removing a device has to reach the IdP, because the refresh token still
+      // sitting on that device is what would mint it a fresh access token an
+      // hour from now. GoTrue offers no per-session revocation, so this is
+      // necessarily account-wide: the same "sign out everywhere" the settings
+      // screen already exposes.
+      //
+      // Order matters. Revoke at the IdP FIRST and stamp the watermark only if
+      // that worked, so a watermark always means the refresh tokens behind it
+      // are genuinely dead. If the IdP call fails we still remove the device and
+      // land on exactly the behaviour that shipped before, instead of 401-ing
+      // every honest device on the account for an hour and gaining nothing.
+      // authenticate() has already proved this header is a well-formed bearer.
+      const revoked = await revokeSupabaseSessions(
+        env, auth, (req.headers.get("Authorization") ?? "").slice(7),
+      );
       await env.DB.prepare(
         "UPDATE devices SET revoked_at = ?3 WHERE account_id = ?1 AND device_id = ?2",
-      ).bind(auth.account, devMatch[1], Math.floor(Date.now() / 1000)).run();
+      ).bind(auth.account, devMatch[1], removedAt).run();
+      if (revoked === "ok") {
+        // MAX() so two removals racing can never walk the watermark backwards.
+        // A plain UPDATE, deliberately never an upsert: an upsert would create
+        // an accounts row defaulting to tier 'free' and, through the legacy
+        // path's COALESCE(a.tier, t.tier), silently downgrade a device token.
+        await env.DB.prepare(
+          "UPDATE accounts SET min_valid_iat = MAX(min_valid_iat, ?2) WHERE account_id = ?1",
+        ).bind(auth.account, removedAt).run();
+      }
       if (env.PAIR) {
         await env.PAIR.put(revKey(auth.account, devMatch[1]), "1", {
           expirationTtl: REV_TTL,
         });
       }
-      return json({ ok: true });
+      // Reported so the client can say "signed out on all devices" only when it
+      // actually happened. Shipped clients ignore the body; this is for the next
+      // one. See app/lib/data/device_directory.dart.
+      return json({ ok: true, sessions_revoked: revoked === "ok" });
     }
 
     // --- account ---

@@ -22,7 +22,13 @@ CREATE TABLE IF NOT EXISTS accounts (
     account_id TEXT PRIMARY KEY,
     email      TEXT,
     tier       TEXT NOT NULL DEFAULT 'free' CHECK (tier IN ('free','pro','max')),
-    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    -- Session-revocation watermark (migration 0011). Removing a device revokes
+    -- every refresh token at the IdP and stamps the removal time here;
+    -- authenticate() then rejects any access token issued before it, which
+    -- closes the hour an already-minted token would otherwise keep working.
+    -- Written only when the IdP call succeeded. 0 = never revoked.
+    min_valid_iat INTEGER NOT NULL DEFAULT 0
 );
 
 -- A Supabase identity bound to a pre-existing account (vaults that predate

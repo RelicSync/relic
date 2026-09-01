@@ -137,15 +137,32 @@ async function verifySupabaseJwt(
 // Read (and lazily provision) the cached tier for an account. The Stripe webhook
 // consumer keeps `accounts.tier` current; the reconcile cron handles grace
 // expiry. First contact for a new account writes a free row, once.
-async function tierForAccount(env: Env, accountId: string, email?: string): Promise<Tier> {
-  const row = await env.DB.prepare("SELECT tier FROM accounts WHERE account_id = ?1")
+//
+// Also carries min_valid_iat, the session-revocation watermark, so the hot path
+// gets it in the read it was already doing. Zero extra round trips.
+async function accountState(
+  env: Env,
+  accountId: string,
+  email?: string,
+): Promise<{ tier: Tier; minValidIat: number }> {
+  const row = await env.DB.prepare(
+    "SELECT tier, min_valid_iat FROM accounts WHERE account_id = ?1",
+  )
     .bind(accountId)
-    .first<{ tier: string }>();
-  if (row && isTier(row.tier)) return row.tier;
+    .first<{ tier: string; min_valid_iat: number }>();
+  // An existing row wins even if its tier is somehow unreadable: the INSERT
+  // below is a no-op against it anyway, and dropping to the default would throw
+  // the watermark away, which is the one field here that must never regress.
+  if (row) {
+    return {
+      tier: isTier(row.tier) ? row.tier : "free",
+      minValidIat: Number(row.min_valid_iat) || 0,
+    };
+  }
   await env.DB.prepare(
     "INSERT OR IGNORE INTO accounts (account_id, email) VALUES (?1, ?2)",
   ).bind(accountId, email ?? null).run();
-  return "free";
+  return { tier: "free", minValidIat: 0 };
 }
 
 async function sha256Hex(s: string): Promise<string> {
@@ -171,7 +188,22 @@ export async function authenticate(req: Request, env: Env): Promise<Auth | Respo
         "SELECT account_id FROM account_links WHERE supabase_sub = ?1",
       ).bind(claims.sub).first<{ account_id: string }>();
       const account = link?.account_id ?? claims.sub;
-      const tier = await tierForAccount(env, account, claims.email);
+      const { tier, minValidIat } = await accountState(env, account, claims.email);
+      // Session revocation. Removing a device revokes every refresh token for
+      // the account at the IdP and stamps this watermark, so a token minted
+      // before the removal is dead now rather than in an hour's time. Checked
+      // unconditionally: unlike the `rev:` guard below it does not depend on the
+      // client volunteering X-Relic-Device, which is exactly the hole it closes.
+      //
+      // Resolved AFTER account_links so a linked identity is governed by the
+      // account it acts as, not by its own sub.
+      //
+      // Strict `<` so a token refreshed within the same second still passes. A
+      // Supabase token with no iat at all cannot be placed relative to the
+      // stamp, so it fails closed. Legacy device tokens never reach here.
+      if (minValidIat > 0 && (claims.iat === undefined || claims.iat < minValidIat)) {
+        return err(401, "session_revoked", "signed out on this account; sign in again");
+      }
       base = {
         account,
         tier,

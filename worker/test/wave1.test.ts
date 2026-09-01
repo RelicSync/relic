@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src/index";
 import { applyStripeEvent, graceSweep } from "../src/stripe";
-import { setupSchema, sha256Hex } from "./helpers";
+import { HS_SECRET, mintJwt, setupSchema, sha256Hex } from "./helpers";
 
 // deno-lint-ignore no-explicit-any
 const E = env as any;
@@ -35,28 +35,10 @@ function call(
   );
 }
 
-// HS256 JWT minting (mirrors auth.test) so worker.fetch exercises the Supabase
-// path with a known secret — no JWKS / network.
-const HS_SECRET = "test-secret";
+// Supabase path with a known HS256 secret — no JWKS, no network. mintJwt and
+// HS_SECRET are shared with auth.test / devices.test via helpers.
 const supaEnv = (extra: Record<string, unknown> = {}) =>
   ({ ...E, SUPABASE_URL: undefined, SUPABASE_JWT_SECRET: HS_SECRET, ...extra });
-
-const b64url = (bytes: Uint8Array): string =>
-  btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-
-// deno-lint-ignore no-explicit-any
-async function mintJwt(claims: Record<string, any>): Promise<string> {
-  const enc = new TextEncoder();
-  const head = b64url(enc.encode(JSON.stringify({ alg: "HS256", typ: "JWT" })));
-  const body = b64url(enc.encode(JSON.stringify({
-    aud: "authenticated", exp: Math.floor(Date.now() / 1000) + 3600, ...claims,
-  })));
-  const key = await crypto.subtle.importKey(
-    "raw", enc.encode(HS_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
-  );
-  const mac = await crypto.subtle.sign("HMAC", key, enc.encode(`${head}.${body}`));
-  return `${head}.${body}.${b64url(new Uint8Array(mac))}`;
-}
 
 function envelope(uid: string, updated = 1000) {
   return { v: 1, uid, created_at: 1000, updated_at: updated, byte_size: 10, promoted: false, n: "n", ct: "c" };

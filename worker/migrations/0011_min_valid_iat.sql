@@ -1,0 +1,19 @@
+-- Session-revocation watermark (docs/cloudflare/04 §2.3).
+--
+-- Removing a device does two things that have to happen together: it revokes
+-- every refresh token for the account at the IdP (GoTrue POST /logout?scope=
+-- global), and it stamps this column with the removal time. The IdP call is
+-- what makes revocation permanent; without this column an already-issued
+-- access token would still be honoured for up to its remaining hour.
+--
+-- The stamp is written ONLY when the IdP call actually succeeded, so the two
+-- can never drift apart: a watermark always means the refresh tokens behind it
+-- are dead. See revokeSupabaseSessions() in src/account.ts.
+--
+-- 0 = never revoked, which is what every existing account gets. Monotone:
+-- re-registering a device never clears it.
+--
+-- Numbering: 0009 is a deliberate, permanent gap. An earlier cut of this
+-- change used it, shipped without it, and renumbering a migration that other
+-- clones may have applied is how a ledger goes wrong.
+ALTER TABLE accounts ADD COLUMN min_valid_iat INTEGER NOT NULL DEFAULT 0;
