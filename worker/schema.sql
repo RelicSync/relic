@@ -19,14 +19,10 @@ CREATE INDEX IF NOT EXISTS idx_tokens_account ON tokens(account_id);
 -- native-auth account id. `tier` is the hot-path cache the Stripe webhook keeps
 -- current and authenticate() reads on every request.
 CREATE TABLE IF NOT EXISTS accounts (
-    account_id    TEXT PRIMARY KEY,
-    email         TEXT,
-    tier          TEXT NOT NULL DEFAULT 'free' CHECK (tier IN ('free','pro','max')),
-    created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
-    -- Session-revocation watermark (migrations/0009). Supabase access tokens
-    -- with iat < this are rejected; 0 = never revoked. Listed last to match the
-    -- column order an ALTER TABLE ADD COLUMN leaves on a migrated database.
-    min_valid_iat INTEGER NOT NULL DEFAULT 0
+    account_id TEXT PRIMARY KEY,
+    email      TEXT,
+    tier       TEXT NOT NULL DEFAULT 'free' CHECK (tier IN ('free','pro','max')),
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
 -- A Supabase identity bound to a pre-existing account (vaults that predate

@@ -644,29 +644,9 @@ export default {
     if (devMatch && req.method === "DELETE") {
       const limited = await rateLimit(env.RL_DEVICE, auth.account);
       if (limited) return limited;
-      const revokedAt = Math.floor(Date.now() / 1000);
-      await env.DB.batch([
-        env.DB.prepare(
-          "UPDATE devices SET revoked_at = ?3 WHERE account_id = ?1 AND device_id = ?2",
-        ).bind(auth.account, devMatch[1], revokedAt),
-        // Real revocation (migrations/0009). The `rev:` marker written below
-        // only bites a request that volunteers X-Relic-Device, so a stolen
-        // device removed here would just drop the header and carry on. The
-        // account watermark kills every access token minted before this moment
-        // instead. MAX() keeps it monotone under any clock skew, and nothing
-        // ever clears it: re-registering a device heals the KV marker, not
-        // this.
-        //
-        // CONSEQUENCE, stated plainly: removing one device signs all of them
-        // out. Legitimate devices recover silently on their next access-token
-        // refresh (~1h; the refresh flow is untouched), and the remover's own
-        // current token goes stale immediately. One forced re-login is the
-        // accepted cost of revocation that actually revokes.
-        env.DB.prepare(
-          `UPDATE accounts SET min_valid_iat = MAX(min_valid_iat, ?2)
-            WHERE account_id = ?1`,
-        ).bind(auth.account, revokedAt),
-      ]);
+      await env.DB.prepare(
+        "UPDATE devices SET revoked_at = ?3 WHERE account_id = ?1 AND device_id = ?2",
+      ).bind(auth.account, devMatch[1], Math.floor(Date.now() / 1000)).run();
       if (env.PAIR) {
         await env.PAIR.put(revKey(auth.account, devMatch[1]), "1", {
           expirationTtl: REV_TTL,

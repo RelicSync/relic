@@ -9,8 +9,7 @@ const DDL = [
      created_at INTEGER NOT NULL DEFAULT (unixepoch()))`,
   `CREATE TABLE IF NOT EXISTS accounts (
      account_id TEXT PRIMARY KEY, email TEXT,
-     tier TEXT NOT NULL DEFAULT 'free', created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-     min_valid_iat INTEGER NOT NULL DEFAULT 0)`,
+     tier TEXT NOT NULL DEFAULT 'free', created_at INTEGER NOT NULL DEFAULT (unixepoch()))`,
   `CREATE TABLE IF NOT EXISTS subscriptions (
      account_id TEXT PRIMARY KEY, stripe_customer_id TEXT, stripe_subscription_id TEXT,
      tier TEXT NOT NULL DEFAULT 'free', status TEXT NOT NULL DEFAULT 'none',
