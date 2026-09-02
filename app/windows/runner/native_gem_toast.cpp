@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 namespace {
 
@@ -94,152 +95,224 @@ struct PointD {
   double y;
 };
 
-constexpr std::array<PointD, 5> kGemPath = {{
-    {5.0, 4.0},
-    {19.0, 4.0},
-    {21.5, 9.0},
-    {12.0, 21.0},
-    {2.5, 9.0},
+// --- The Relic mark ---------------------------------------------------------
+//
+// The gold shard, transcribed from `lib/widgets/relic_mark.dart`, which took it
+// from `logo-mark.svg`. The control points below are that path's, verbatim, so
+// the two files can be diffed against each other and stay in step.
+//
+// What used to be here was the old faceted gem: five points in a 24x24 box,
+// seven facet lines and a glow behind it. It survived the 2026 restyle because
+// it lives in C++ rather than in the widget tree, so it is not what anyone
+// greps for when they change the mark. The file name and the `showGemToast`
+// channel are vestigial and deliberately left alone; renaming them would break
+// the Dart side for nothing.
+constexpr double kMarkVw = 148.0;
+constexpr double kMarkVh = 150.0;
+
+// A cubic runs from the previous point through c1 and c2 to `to`. A line
+// ignores the control points.
+struct PathOp {
+  bool cubic;
+  PointD c1;
+  PointD c2;
+  PointD to;
+};
+
+constexpr PointD kMarkStart = {27.4388, 140.916};
+
+constexpr std::array<PathOp, 12> kMarkOps = {{
+    {false, {0, 0}, {0, 0}, {132.709, 140.969}},
+    {true, {140.828, 140.973}, {146.838, 133.421}, {145.013, 125.51}},
+    {false, {0, 0}, {0, 0}, {121.339, 22.9363}},
+    {true, {120.235, 18.1532}, {116.458, 14.4442}, {111.656, 13.4276}},
+    {false, {0, 0}, {0, 0}, {80.9218, 6.92219}},
+    {true, {76.2452, 5.93228}, {71.4106, 7.66958}, {68.4338, 11.4098}},
+    {false, {0, 0}, {0, 0}, {52.6439, 31.2487}},
+    {false, {0, 0}, {0, 0}, {20.1246, 72.1069}},
+    {false, {0, 0}, {0, 0}, {4.33476, 91.9458}},
+    {true, {1.35791, 95.686}, {0.749738, 100.787}, {2.76379, 105.122}},
+    {false, {0, 0}, {0, 0}, {15.9997, 133.613}},
+    {true, {18.0679, 138.064}, {22.53, 140.913}, {27.4388, 140.916}},
 }};
 
-constexpr std::array<std::array<PointD, 2>, 7> kFacetLines = {{
-    {{{2.5, 9.0}, {21.5, 9.0}}},
-    {{{9.0, 4.0}, {8.0, 9.0}}},
-    {{{8.0, 9.0}, {12.0, 21.0}}},
-    {{{15.0, 4.0}, {16.0, 9.0}}},
-    {{{16.0, 9.0}, {12.0, 21.0}}},
-    {{{5.0, 4.0}, {8.0, 9.0}}},
-    {{{19.0, 4.0}, {16.0, 9.0}}},
-}};
+// Every cubic here rounds a corner a few units across, so eight steps already
+// puts each segment well under a device pixel at the size this draws.
+constexpr int kCubicSteps = 8;
 
-bool IsInsideGemPath(PointD p) {
-  bool inside = false;
-  for (size_t i = 0, j = kGemPath.size() - 1; i < kGemPath.size(); j = i++) {
-    const PointD a = kGemPath[i];
-    const PointD b = kGemPath[j];
-    const bool crosses = ((a.y > p.y) != (b.y > p.y)) &&
-                         (p.x < (b.x - a.x) * (p.y - a.y) /
-                                    (b.y - a.y + 0.0000001) +
-                                a.x);
-    if (crosses) {
-      inside = !inside;
+// The outline as a closed polygon in viewBox units, flattened once on first
+// use rather than per frame.
+const std::vector<PointD>& MarkPolygon() {
+  static const std::vector<PointD> poly = [] {
+    std::vector<PointD> out;
+    out.push_back(kMarkStart);
+    for (const PathOp& op : kMarkOps) {
+      const PointD from = out.back();
+      if (!op.cubic) {
+        out.push_back(op.to);
+        continue;
+      }
+      for (int i = 1; i <= kCubicSteps; ++i) {
+        const double t = static_cast<double>(i) / kCubicSteps;
+        const double u = 1.0 - t;
+        out.push_back({
+            u * u * u * from.x + 3 * u * u * t * op.c1.x +
+                3 * u * t * t * op.c2.x + t * t * t * op.to.x,
+            u * u * u * from.y + 3 * u * u * t * op.c1.y +
+                3 * u * t * t * op.c2.y + t * t * t * op.to.y,
+        });
+      }
     }
+    return out;
+  }();
+  return poly;
+}
+
+struct Rgb {
+  int r;
+  int g;
+  int b;
+};
+
+// The brand gradient, not to be restyled: #FFE24A -> #FFCE06 -> #F2A93B.
+//
+// The Dart side builds it with LinearGradient's default begin and end, which
+// resolve to the centre-left and centre-right of the shader rect it passes.
+// So what actually renders is a horizontal ramp from x=30 to x=130 in viewBox
+// units, not the diagonal the rect's two corners suggest. Matching what the
+// app draws matters more here than matching what its comment says.
+constexpr double kGradX0 = 30.0;
+constexpr double kGradX1 = 130.0;
+constexpr Rgb kGradStops[3] = {{255, 226, 74}, {255, 206, 6}, {242, 169, 59}};
+
+Rgb MarkColorAt(double vx) {
+  const double t = Clamp01((vx - kGradX0) / (kGradX1 - kGradX0));
+  const bool first_half = t < 0.5;
+  const Rgb a = first_half ? kGradStops[0] : kGradStops[1];
+  const Rgb b = first_half ? kGradStops[1] : kGradStops[2];
+  const double f = first_half ? t * 2.0 : (t - 0.5) * 2.0;
+  return {
+      static_cast<int>(std::lround(a.r + (b.r - a.r) * f)),
+      static_cast<int>(std::lround(a.g + (b.g - a.g) * f)),
+      static_cast<int>(std::lround(a.b + (b.b - a.b) * f)),
+  };
+}
+
+// Vertical resolution of the fill: four sub-scanlines a row.
+constexpr int kSubScanlines = 4;
+
+// Accumulate one horizontal span into a row's coverage, with analytic partial
+// coverage at both ends so edges land on fractions of a pixel rather than
+// snapping to one.
+void AddSpan(double* row, int width, double x0, double x1, double weight) {
+  x0 = std::max(x0, 0.0);
+  x1 = std::min(x1, static_cast<double>(width));
+  if (x1 <= x0) {
+    return;
   }
-  return inside;
-}
-
-double DistToSegment(PointD p, PointD a, PointD b) {
-  const double vx = b.x - a.x;
-  const double vy = b.y - a.y;
-  const double wx = p.x - a.x;
-  const double wy = p.y - a.y;
-  const double len2 = vx * vx + vy * vy;
-  const double t = len2 <= 0.0 ? 0.0 : std::clamp((wx * vx + wy * vy) / len2, 0.0, 1.0);
-  const double dx = p.x - (a.x + t * vx);
-  const double dy = p.y - (a.y + t * vy);
-  return std::sqrt(dx * dx + dy * dy);
-}
-
-double DistToGemOutline(PointD p) {
-  double best = 1000.0;
-  for (size_t i = 0; i < kGemPath.size(); ++i) {
-    const PointD a = kGemPath[i];
-    const PointD b = kGemPath[(i + 1) % kGemPath.size()];
-    best = std::min(best, DistToSegment(p, a, b));
+  const int first = static_cast<int>(x0);
+  const int last = std::min(static_cast<int>(x1), width - 1);
+  if (first >= last) {
+    row[first] += (x1 - x0) * weight;
+    return;
   }
-  return best;
+  row[first] += (first + 1 - x0) * weight;
+  for (int i = first + 1; i < last; ++i) {
+    row[i] += weight;
+  }
+  row[last] += (x1 - last) * weight;
 }
 
-void DrawGem(uint32_t* pixels,
-             int width,
-             int height,
-             double t,
-             double dpi_scale) {
+void DrawMark(uint32_t* pixels,
+              int width,
+              int height,
+              double t,
+              double dpi_scale) {
+  // Timing is copied from the Dart GemToast in lib/widgets/gem_toast.dart so
+  // the two read as one animation.
   const double pop = EaseOutBack(t / 0.28);
   const double scale = 0.60 + 0.40 * pop;
   const double up = EaseOutCubic(t / 0.42);
   const double down = EaseInCubic((t - 0.50) / 0.50);
   const double jump = std::max(0.0, up - down) * 17.0 * dpi_scale;
   const double spin = EaseInOutCubic((t - 0.16) / 0.76) * 2.0 * kPi;
-  const double width_spin = 0.22 + 0.78 * std::abs(std::cos(spin));
   const double fade_in = EaseOutCubic(t / 0.12);
   const double fade_out = 1.0 - EaseInCubic((t - 0.82) / 0.18);
   const double opacity = Clamp01(fade_in * fade_out);
+  if (opacity <= 0.0) {
+    return;
+  }
 
+  // The coin flip, as a horizontal squeeze. Signed, so the mark mirrors once
+  // it turns past edge-on the way a real face would; the 0.22 floor keeps a
+  // sliver on screen at the crossing instead of blinking out for a frame.
+  const double turn = std::cos(spin);
+  const double squeeze =
+      (0.22 + 0.78 * std::abs(turn)) * (turn < 0.0 ? -1.0 : 1.0);
+
+  // 44 logical pixels tall, matching RelicIcon(size: 44) on the Dart side.
+  const double unit_y = 44.0 * dpi_scale * scale / kMarkVh;
+  const double unit_x = unit_y * squeeze;
   const double cx = width / 2.0;
   const double cy = height / 2.0 - jump;
-  const double mark_size = 54.0 * dpi_scale * scale;
-  const double unit_x = mark_size / 24.0 * width_spin;
-  const double unit_y = mark_size / 24.0;
 
-  for (int y = 0; y < height; ++y) {
-    for (int x = 0; x < width; ++x) {
-      const double px = x + 0.5;
-      const double py = y + 0.5;
-      uint32_t* dst = pixels + y * width + x;
+  const std::vector<PointD>& outline = MarkPolygon();
+  std::vector<PointD> pts(outline.size());
+  double min_y = 1e9;
+  double max_y = -1e9;
+  for (size_t i = 0; i < outline.size(); ++i) {
+    pts[i] = {cx + (outline[i].x - kMarkVw / 2.0) * unit_x,
+              cy + (outline[i].y - kMarkVh / 2.0) * unit_y};
+    min_y = std::min(min_y, pts[i].y);
+    max_y = std::max(max_y, pts[i].y);
+  }
 
-      const PointD p = {
-          12.0 + (px - cx) / std::max(0.001, unit_x),
-          12.0 + (py - cy) / std::max(0.001, unit_y),
-      };
-      const double outline = DistToGemOutline(p);
-      if (!IsInsideGemPath(p) && outline < 3.0) {
-        const double glow = std::pow(Clamp01((3.0 - outline) / 3.0), 2.0);
-        BlendPremul(dst, 218, 164, 62,
-                    static_cast<int>(34.0 * glow * opacity));
-      }
+  const int y0 = std::max(0, static_cast<int>(std::floor(min_y)));
+  const int y1 = std::min(height - 1, static_cast<int>(std::ceil(max_y)));
+  if (y1 < y0) {
+    return;
+  }
 
-      constexpr std::array<PointD, 4> samples = {{
-          {-0.25, -0.25},
-          {0.25, -0.25},
-          {-0.25, 0.25},
-          {0.25, 0.25},
-      }};
-      int covered = 0;
-      for (const PointD sample : samples) {
-        const PointD sp = {
-            12.0 + (px + sample.x - cx) / std::max(0.001, unit_x),
-            12.0 + (py + sample.y - cy) / std::max(0.001, unit_y),
-        };
-        if (IsInsideGemPath(sp)) {
-          ++covered;
+  // Scanline fill rather than testing every pixel against the polygon. The gem
+  // this replaced was five points, so brute force was free; the shard flattens
+  // to about forty, and this repaints a layered window at 60fps on the UI
+  // thread, which is not the place to spend that.
+  std::vector<double> coverage(width);
+  std::vector<double> crossings;
+  for (int y = y0; y <= y1; ++y) {
+    std::fill(coverage.begin(), coverage.end(), 0.0);
+    for (int sub = 0; sub < kSubScanlines; ++sub) {
+      const double sy = y + (sub + 0.5) / kSubScanlines;
+      crossings.clear();
+      for (size_t i = 0, j = pts.size() - 1; i < pts.size(); j = i++) {
+        const PointD a = pts[j];
+        const PointD b = pts[i];
+        // Half-open in y, so a vertex exactly on the sub-scanline is counted
+        // once rather than twice. Also guarantees b.y != a.y below.
+        if ((a.y <= sy) == (b.y <= sy)) {
+          continue;
         }
+        crossings.push_back(a.x + (sy - a.y) * (b.x - a.x) / (b.y - a.y));
       }
-      if (covered == 0) {
+      std::sort(crossings.begin(), crossings.end());
+      for (size_t k = 0; k + 1 < crossings.size(); k += 2) {
+        AddSpan(coverage.data(), width, crossings[k], crossings[k + 1],
+                1.0 / kSubScanlines);
+      }
+    }
+
+    uint32_t* row = pixels + y * width;
+    for (int x = 0; x < width; ++x) {
+      const double cov = Clamp01(coverage[x]);
+      if (cov <= 0.0) {
         continue;
       }
-
-      const double edge = covered / 4.0;
-      const double top_light = Clamp01((21.0 - p.y) / 17.0);
-      const bool left = px < cx;
-      const bool top = p.y < 9.0;
-      int r = 218;
-      int g = 164;
-      int b = 62;
-      if (top) {
-        r += 22;
-        g += 18;
-        b += 8;
-      }
-      if (left) {
-        r -= 12;
-        g -= 10;
-      }
-      r = static_cast<int>(r + 28.0 * top_light);
-      g = static_cast<int>(g + 22.0 * top_light);
-      b = static_cast<int>(b + 10.0 * top_light);
-      BlendPremul(dst, r, g, b, static_cast<int>(235.0 * edge * opacity));
-
-      double facet_dist = 1000.0;
-      for (const auto& line : kFacetLines) {
-        facet_dist = std::min(facet_dist, DistToSegment(p, line[0], line[1]));
-      }
-      const double facet_width = 0.42;
-      if (facet_dist < facet_width) {
-        const double facet_alpha = Clamp01((facet_width - facet_dist) / facet_width);
-        BlendPremul(dst, 255, 239, 196,
-                    static_cast<int>(38.0 * facet_alpha * edge * opacity));
-      }
+      // Back through the transform, so the gradient squeezes and mirrors with
+      // the face instead of staying pinned to the window.
+      const double vx = kMarkVw / 2.0 + (x + 0.5 - cx) / unit_x;
+      const Rgb c = MarkColorAt(vx);
+      BlendPremul(row + x, c.r, c.g, c.b,
+                  static_cast<int>(std::lround(255.0 * cov * opacity)));
     }
   }
 }
@@ -277,7 +350,7 @@ bool RenderToastFrame(ToastState* state) {
   HGDIOBJ old_bitmap = SelectObject(mem_dc, bitmap);
   auto* pixels = static_cast<uint32_t*>(bits);
   std::fill(pixels, pixels + state->width * state->height, 0);
-  DrawGem(pixels, state->width, state->height, t, state->scale);
+  DrawMark(pixels, state->width, state->height, t, state->scale);
 
   POINT src = {0, 0};
   RECT rect{};
@@ -396,7 +469,7 @@ bool ShowNativeGemToast(HWND owner) {
   HWND hwnd = CreateWindowEx(
       WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW |
           WS_EX_TOPMOST | WS_EX_NOACTIVATE,
-      kToastClassName, L"Relic gem", WS_POPUP, x, y, state->width,
+      kToastClassName, L"Relic mark", WS_POPUP, x, y, state->width,
       state->height, nullptr, nullptr, GetModuleHandle(nullptr), state);
 
   if (!hwnd) {
