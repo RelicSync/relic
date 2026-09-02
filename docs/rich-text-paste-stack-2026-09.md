@@ -17,7 +17,7 @@ This doc is the handoff. Read §1 and §2, then go to your platform's section.
 |---|---|---|---|---|
 | Windows | yes | yes, native Win32 | yes | yes, release build |
 | macOS | yes | yes, Swift bridge | yes | **never compiled** |
-| Linux | yes | yes, super_clipboard | yes, degraded on Wayland | no |
+| Linux | yes | yes, super_clipboard | yes, degraded on Wayland | yes, release build + runs |
 | Android | tile path only, not wired | yes, HTML only | n/a (desktop only) | no |
 | iOS | no | no, falls back to plain | n/a | no |
 
@@ -160,7 +160,46 @@ worth their own commits rather than folding into this feature:
 
 ## 5. Linux
 
-**Status:** written, not built, not run.
+**Status:** built, runs, tests green. No clipboard interop tested — that is all
+of what is left, and it needs a real desktop session.
+
+**Verified 2026-09-02** on WSL Ubuntu 24.04 with the pinned Flutter 3.44.2, the
+same version and apt list `ci.yml`'s `flutter-linux` job uses. WSL is the compile
+track from the port plan; the QA VM was not involved.
+
+- `flutter analyze` clean, `flutter build linux --release` succeeds. The
+  "never built" half of this section is closed.
+- `flutter test` under a sandboxed `RELIC_DATA_DIR`: **794 pass** on a Linux
+  host, including the new `rich_body`, `rich_capture` and `paste_stack` suites.
+- The binary had never been run. It now does: every shared library resolves, it
+  survives a 25s run with no output but WSLg's own software-rendering warnings,
+  and it initializes a vault.
+- **First-run registration is correct**, which matters because this was the
+  first real Linux run and the port plan flagged the data dir as a landmine.
+  The vault lands in `~/.local/share/relic` and `~/.config/relic` is never
+  created; the `.desktop` entry is written with the `relic://` handler and
+  `StartupWMClass`; the hicolor icon is written at a true 256x256.
+  (Watch out when re-testing this by hand: the entry is `space.relic.app.desktop`,
+  so a `relic*` glob misses it, and a stale entry makes `ensureRegistered` take
+  its early return and skip the icon write entirely. That looks exactly like a
+  broken icon and is not one.)
+
+Confirmed by reading rather than running, so listed as evidence and not as a
+test: `kRelicRtf` really does publish `text/rtf` and `application/rtf` together
+on the fallback codec; D is `0x00070007` and B is `0x00070005` and both are in
+`_keysymNames`, so `linuxAccelerator` yields `<Control><Shift>d` and
+`<Control><Shift>b`; `_pasteRelic` returns off the clipboard write alone, so the
+queue advances on Wayland whether or not injection fires, behind a one-per-run
+notice; `_readRichFlavors` is not platform-gated, so Linux gets rich capture
+through the ordinary super_clipboard reader; and `foregroundAppKey()` has a real
+Linux arm, so the terminal Ctrl+Shift+V branch is wired rather than stubbed.
+
+**Not tested, and not testable here.** Everything below in this section that
+touches the clipboard. WSLg proxies the clipboard through Windows, so a paste
+fidelity result measured under it would be describing Windows. The X grab is
+likewise only half-answered: the accelerator strings parse and an XWayland
+server accepts them, which is not the same as a desktop where another app may
+already hold the chord.
 
 Linux had no native clipboard write at all before this: every write fell through
 to `Clipboard.setData`. Rich text is the first path that writes real formats
