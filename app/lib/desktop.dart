@@ -1857,12 +1857,19 @@ class _RealAppState extends State<RealApp>
         _sizeWindow(520, 560);
       },
     );
-    // Stack any of-the-moment banners above the list: verify-to-sync (email not
-    // confirmed) and the demo nudge (sample data seeded). Both are dismissible.
-    return ValueListenableBuilder<bool>(
-      valueListenable: widget.repo.emailUnverified,
-      builder: (context, unverified, _) {
+    // Stack any of-the-moment banners above the list: signed-out (the session
+    // was revoked), verify-to-sync (email not confirmed) and the demo nudge
+    // (sample data seeded). The last two are dismissible; the signed-out one is
+    // not, because sync stays broken until it is acted on.
+    return ListenableBuilder(
+      listenable: Listenable.merge(
+          [widget.repo.emailUnverified, widget.repo.sessionRevoked]),
+      builder: (context, _) {
+        final unverified = widget.repo.emailUnverified.value;
         final banners = <Widget>[];
+        if (widget.repo.sessionRevoked.value) {
+          banners.add(_signedOutBanner());
+        }
         if (unverified && !_emailBannerDismissed) {
           banners.add(_verifyBanner());
         }
@@ -1898,6 +1905,50 @@ class _RealAppState extends State<RealApp>
   /// plus a bottom hairline is what separates it from the header underneath,
   /// and both of its controls are ghosts — the popup's own "+" is the one
   /// filled CTA in this window.
+  /// Shown when the account's session was revoked (somebody removed a device,
+  /// which signs the whole account out at the IdP). Without this the sync chip
+  /// just says "offline" and stays that way for ever, because the refresh token
+  /// is gone and no retry can succeed. Deliberately not dismissible: dismissing
+  /// it would leave a permanently broken sync with nothing explaining why.
+  Widget _signedOutBanner() {
+    final c = _useDark ? RelicColors.dark : RelicColors.light;
+    return Material(
+      color: c.panel,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: c.border, width: 1)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+              Insets.lg, Insets.md, Insets.sm, Insets.md),
+          child: Row(children: [
+            Icon(LucideIcons.logOut, color: c.accent, size: 17),
+            const SizedBox(width: Insets.md),
+            Expanded(
+              child: Text(
+                  'You were signed out. Sign in again to resume syncing. '
+                  'Your vault is safe on this device.',
+                  style:
+                      RelicTheme.sans(size: 12.5, color: c.text, height: 1.35)),
+            ),
+            const SizedBox(width: Insets.sm),
+            GhostButton(
+              label: 'Sign in',
+              onTap: () {
+                _toAppMode();
+                setState(() {
+                  _connecting = true;
+                  _onboardStartAtSignIn = true;
+                });
+                _sizeWindow(520, 560);
+              },
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
   Widget _verifyBanner() {
     final c = _useDark ? RelicColors.dark : RelicColors.light;
     return Material(

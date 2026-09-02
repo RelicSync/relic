@@ -477,6 +477,26 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
 
   /// True when [body] is the worker's `{"error":"email_unverified",...}` payload.
   /// Static + pure so the flag logic is unit-testable. Lockstep with WorkerRepo.
+  /// Set true when the account's session has been revoked: the worker answered
+  /// 401 `session_revoked` (this token predates a device removal), or GoTrue
+  /// refused the refresh token outright. The hosts watch this to prompt a fresh
+  /// sign-in.
+  ///
+  /// Without it a dead session is indistinguishable from a flaky network: both
+  /// just clear `_online`, so the app shows "offline" for ever while retrying a
+  /// token that can never work again. Lockstep with WorkerRepo.sessionRevoked.
+  final ValueNotifier<bool> sessionRevoked = ValueNotifier(false);
+
+  /// True when [body] is the worker's `{"error":"session_revoked",...}` payload.
+  /// Static + pure so the flag logic is unit-testable. Lockstep with WorkerRepo.
+  static bool isSessionRevokedBody(String body) {
+    try {
+      return (jsonDecode(body) as Map)['error'] == 'session_revoked';
+    } catch (_) {
+      return false;
+    }
+  }
+
   static bool isEmailUnverifiedBody(String body) {
     try {
       return (jsonDecode(body) as Map)['error'] == 'email_unverified';
@@ -4438,6 +4458,14 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           } catch (_) {} // best-effort, must not flip _online
         }
       }
+    } on SessionRevoked {
+      // Terminal, unlike every other refresh failure: GoTrue has thrown the
+      // session away, so the next cycle would retry a token that can never
+      // work. Drop it and let the host ask for a real sign-in.
+      appendSyncLog('token refresh refused: session revoked, sign-in required');
+      _refreshToken = null;
+      sessionRevoked.value = true;
+      _online = false;
     } catch (e) {
       appendSyncLog('token refresh failed: $e');
       _online = false; // next cycle retries; persistent failure → re-sign-in
@@ -4932,6 +4960,13 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
             'pull /relics -> ${resp.statusCode} '
             '${resp.body.length > 200 ? resp.body.substring(0, 200) : resp.body}',
           );
+          // Not a flaky network: this token predates a device removal and no
+          // refresh will mint a working one, because the refresh tokens went
+          // with it. Say so instead of sitting on "offline".
+          if (resp.statusCode == 401 && isSessionRevokedBody(resp.body)) {
+            _refreshToken = null;
+            sessionRevoked.value = true;
+          }
           _online = false;
           return;
         }
