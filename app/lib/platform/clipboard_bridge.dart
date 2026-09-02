@@ -86,7 +86,9 @@ Future<bool> writeSensitiveTextToClipboard(String text) async {
 /// plugin publishes lazily (OLE on Windows, an NSPasteboardWriter promise on
 /// macOS), so the content would die when Relic quits, and its clearContents
 /// would drop the privacy markers. Linux has no native write at all, and
-/// Android has no reason to want one, so both take the plugin path.
+/// Android and iOS have no reason to want one, so all three take the plugin
+/// path. The lazy-provider lifetime problem does not exist on iOS: the plugin
+/// calls the provider eagerly there, and the bytes are already in hand.
 ///
 /// Returns false when nothing native handled it; the caller then falls back to
 /// the framework clipboard, losing only the formatting.
@@ -108,7 +110,7 @@ Future<bool> writeRichToClipboard(
   if (Platform.isMacOS) {
     return mac.writeRich(text, html: html, rtf: rtf, sensitive: sensitive);
   }
-  if (Platform.isLinux || Platform.isAndroid) {
+  if (Platform.isLinux || Platform.isAndroid || Platform.isIOS) {
     try {
       final clip = SystemClipboard.instance;
       if (clip == null) return false;
@@ -118,7 +120,7 @@ Future<bool> writeRichToClipboard(
       final item = DataWriterItem();
       if (html != null) item.add(kRelicHtml(html));
       // Nothing on Android publishes or reads RTF, so leave ClipDescription
-      // clean there.
+      // clean there. iOS keeps it: Pages, Notes and Mail all read public.rtf.
       if (rtf != null && !Platform.isAndroid) item.add(kRelicRtf(rtf));
       item.add(Formats.plainText(text));
       await clip.write([item]);

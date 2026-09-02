@@ -16,19 +16,20 @@ This doc is the handoff. Read §1 and §2, then go to your platform's section.
 | Platform | Rich capture | Rich paste | Paste stack | Built? |
 |---|---|---|---|---|
 | Windows | yes | yes, native Win32 | yes | yes, release build |
-| macOS | yes | yes, Swift bridge | yes | **never compiled** |
+| macOS | yes, verified | yes, Swift bridge, verified on the pasteboard | yes, verified without the AX grant | yes, debug build compiles + runs (2026-09-02) |
 | Linux | yes | yes, super_clipboard | yes, degraded on Wayland | yes, release build + runs |
 | Android | tile path, HTML only | yes, HTML only | n/a (desktop only) | yes, release AAB |
-| iOS | no | no, falls back to plain | n/a | no |
+| iOS | trigger paths, HTML only | yes, HTML + RTF | n/a (desktop only) | pending |
 
 The test suite covers the pure logic (CF_HTML framing, the cap, the fingerprint,
 the queue) and the storage and sync round-trip. It cannot cover "does Word see
 it", so §8 answers that separately with a harness that drives real Office.
 
-As of 2026-09-02 the Windows column of §8 is real: Word round-trips correctly
+As of 2026-09-02 two columns of §8 are real. Windows: Word round-trips correctly
 through both flavors, and clipboard content survives the writing process
-exiting. Excel is unresolved and needs a human at a keyboard (§8b). No other
-platform has been pasted into a real app yet.
+exiting; Excel is unresolved and needs a human at a keyboard (§8b). macOS:
+compiled, run, and verified on the pasteboard. Linux and Android are built and
+green but have not been pasted into a real app.
 
 ---
 
@@ -122,10 +123,11 @@ OLE's hidden window.
 
 ## 4. macOS
 
-**Status: the Swift has never been compiled.** This is the single most important
-item in this doc. `app/macos/Runner/Bridge/ClipboardBridge.swift` gained a
-`writeRich` case that was written on a Windows machine. Build it first, before
-anything else.
+**Status: built, runs, pasteboard-verified 2026-09-02** on Apple silicon,
+macOS 26, Flutter 3.44.9, against branch `e459b3b`. The Swift compiled first
+time; `flutter analyze` is clean; `flutter test` under a sandboxed
+`RELIC_DATA_DIR` is 797 pass, 20 skipped on a macOS host. What is left is the
+part only a person at a Mac can do: pasting into Pages, Notes and Word.
 
 The Dart side is `app/lib/platform/src/macos/clipboard_macos.dart` (`writeRich`),
 sending `text`, optional `html`, optional `rtf` as `FlutterStandardTypedData`,
@@ -140,18 +142,46 @@ Same reason as Windows for not using super_clipboard here: it does
 when Relic quits, and the `clearContents` would wipe the `org.nspasteboard.*`
 privacy markers.
 
-**To verify:**
-1. It compiles.
-2. Copy styled text from Pages or Safari, paste into Pages. Formatting survives.
-3. Copy into Notes. Check the text is not mojibake (that is the charset marker).
-4. Copy, quit Relic, paste.
-5. **Confirm ⌃⇧D and ⌃⇧B are actually unclaimed on macOS.** The comment at
-   `hotkeys.dart:196` records that ⌃⇧Q/W/E/Space/1-5 were verified. D and B were
-   picked on Windows and have NOT been checked on macOS. If either is taken,
-   `repo.failedHotkeys` will surface it in Settings, but check by hand too.
-6. Paste stack without the Accessibility grant: the chord cannot be injected,
-   so the item should land on the clipboard, the one-per-run notice should
-   appear, and the queue should still advance when you press ⌘V yourself.
+**Verified, by driving `NSPasteboard.general` from a small Swift tool and
+reading the sandbox `relics.db`:**
+
+1. Compiles. `flutter build macos --debug` succeeds with the `writeRich` case.
+2. Rich capture. A pasteboard carrying `public.rtf` + `public.html` +
+   `public.utf8-plain-text` lands as one row whose `rich` column holds the
+   HTML, the RTF (base64) and the fingerprint `h`.
+3. Rich paste. Quick-paste (⌃⇧1) of that row writes, in this declaration
+   order: `public.rtf`, `public.html` (with the charset marker prepended),
+   `public.utf8-plain-text`, then the `org.nspasteboard.ConcealedType` and
+   `TransientType` markers. Plain text is byte-identical to the stored
+   content; RTF and HTML are byte-identical to what was captured.
+4. Copy, quit Relic, paste. The content is real data on the pasteboard, not a
+   promise: after `relic_app` exits the types and bytes are all still there.
+5. ⌃⇧D and ⌃⇧B are unclaimed. Nothing in `com.apple.symbolichotkeys` binds
+   keycode 2 or 11 with control+shift, and both chords registered and fired.
+6. Paste stack without the Accessibility grant. Push twice via ⌃⇧D (it queues
+   what is on the clipboard, since the copy chord cannot be injected), then
+   ⌃⇧B three times: the pasteboard reads item one, then item two, then is
+   untouched on the third press. FIFO, consumed on the clipboard write, and an
+   empty stack writes nothing.
+
+**Not verified, needs a person:** Pages → Relic → Pages, Safari → Notes (the
+mojibake check), Word → Relic → Word, and the one-per-run "press ⌘V yourself"
+notice, which fires as a notification and was not observed from the shell.
+
+**Two traps for whoever tests by hand on Jordan's Mac:**
+
+- The onboarding window of a sandboxed instance pops up on first run. If you
+  click through "Continue with Google" the sandbox binds to the real account
+  and syncs every test capture into the real vault. Run the sandbox, close the
+  onboarding, and if it does bind, delete `config.json` from the sandbox dir
+  to detach it. Test rows that did sync can be tombstoned with
+  `relic rm --allow-delete <uid>` from the app's bundled CLI.
+- Parsec mirrors the clipboard between Jordan's Mac and the Windows box, and
+  the Windows Relic captures every plain-text write the Mac makes (device
+  "Desktop"). Every pasteboard test here shows up in the vault twice. Writes
+  that carry the `org.nspasteboard.ConcealedType` marker are skipped by the
+  Mac watcher but still mirrored, so the Windows copy needs cleaning either
+  way.
 
 **While you are in there,** two pre-existing bugs surfaced by this work, both
 worth their own commits rather than folding into this feature:
@@ -308,20 +338,41 @@ stale on an edit, and a cache round trip).
 
 ## 7. iOS
 
-**Status: untouched.**
+**Status:** written. Landed 2026-09-02 as the cheap route this section used to
+prescribe: the `Platform.isLinux || Platform.isAndroid` branch in
+`clipboard_bridge.dart` now includes iOS, and that is the entire paste-side
+change. No native code; there is no iOS clipboard bridge and still no reason to
+build one. The lazy-provider lifetime concern does not apply — super_clipboard
+calls the iOS provider eagerly, and we always have the bytes in hand.
 
-`writeRichToClipboard` returns false on iOS, so it falls through to
-`Clipboard.setData` and pastes plain. Nothing is broken, the feature just is not
-there.
+**Paste.** `WorkerRepo.putOnClipboard` was already calling
+`writeRichToClipboard` on mobile; it just returned false here. Now the plugin
+path publishes `public.html` and `public.rtf` (via `kRelicHtml` / `kRelicRtf`,
+whose iOS codecs predate this change) plus plain text. Unlike Android, RTF is
+included: Pages, Notes and Mail all read it. The **Paste with formatting**
+toggle and the row's `Copy as > Plain text` were never platform-gated, so both
+already work.
 
-`Formats.htmlText` and `public.rtf` both work on iOS through super_clipboard
-with no native code, so the cheapest route is extending the
-`Platform.isLinux || Platform.isAndroid` branch in `clipboard_bridge.dart` to
-include iOS. There is no iOS clipboard bridge to add a native case to, and there
-is probably no reason to build one.
+**Capture.** Nothing to change: `_readClipboardOnce` is shared mobile code, so
+the `relic://capture` trigger paths (Action Button, Back Tap, Shortcut) pick up
+`public.html` through the same super_clipboard read the Android tile uses. The
+share sheet stays plain on iOS for exactly the Android reason —
+`receive_sharing_intent` hands over a bare String. RTF capture is skipped on
+mobile (both platforms): `captureText` takes `html:` only, and HTML is the
+flavor that round-trips to every other platform.
 
-One note if you do: super_clipboard's iOS lazy provider is called eagerly, which
-is fine here because we always have the bytes in hand.
+The iOS codec names are pinned in `rich_body_test.dart` ("iOS publishes the UTI
+names") so a lost `ios:` arm fails loudly instead of falling back to MIME names
+UIKit apps never look for.
+
+**To verify on a device or simulator:**
+1. Capture styled text on a desktop, sync, paste into Notes or Mail on the
+   phone. Formatting should survive (that is the HTML flavor; RTF rides along).
+2. Paste the same item into a plain text field. Clean text, not markup.
+3. Copy styled text in Safari, trigger a capture (Shortcut or Action Button),
+   then paste the captured item back into Notes. This is the capture path.
+4. Copy an API key, capture it. The row must mask, no formatting stored.
+5. Settings > Paste with formatting off, copy a styled item, paste. Plain.
 
 The paste stack is desktop-only and stays that way.
 
@@ -330,20 +381,21 @@ The paste stack is desktop-only and stays that way.
 ## 8. The interop matrix
 
 The actual acceptance test. Windows was run 2026-09-02 against real Word and
-Excel over COM; see §8a for the harness and §8b for the bug it found.
+Excel over COM; §8a is the harness, §8b is the one question it could not
+settle.
 
-| Source → target | Win | mac | Linux | Android |
-|---|---|---|---|---|
-| Word → Relic → Word (RTF) | pass | | n/a | n/a |
-| Word → Relic → Word (HTML) | pass | | | |
-| Browser → Relic → Word or Pages (HTML) | not run | | | |
-| Excel → Relic → Excel | **unresolved, see §8b** | | | n/a |
-| Relic → plain text editor | pass | | | |
-| Copy, quit Relic, paste | pass | | n/a | n/a |
-| Secret → any target: plain only, marker set | not run | | | |
-| Desktop rich capture → phone paste into Gmail | n/a | n/a | n/a | |
-| Phone tile capture in Chrome → paste into Gmail | n/a | n/a | n/a | |
-| Stack of 3 drained into a form | not run | | | n/a |
+| Source → target | Win | mac | Linux | Android | iOS |
+|---|---|---|---|---|---|
+| Word → Relic → Word (RTF) | pass | | n/a | n/a | n/a |
+| Word → Relic → Word (HTML) | pass | | | | |
+| Browser → Relic → Word or Pages (HTML) | not run | | | | |
+| Excel → Relic → Excel | **unresolved, see §8b** | | | n/a | n/a |
+| Relic → plain text editor | pass | | | | |
+| Copy, quit Relic, paste | pass | yes (pasteboard) | n/a | n/a | n/a |
+| Secret → any target: plain only, marker set | not run | | | | |
+| Desktop rich capture → phone paste into Gmail | n/a | n/a | n/a | | |
+| Phone trigger capture in the browser → paste into Gmail | n/a | n/a | n/a | | |
+| Stack of 3 drained into a form | not run | 2 drained, no AX grant | | n/a | n/a |
 
 "Copy, quit Relic, paste" passes by construction and was observed: the harness
 is a short-lived `dart run` process, and its clipboard contents outlive it and
