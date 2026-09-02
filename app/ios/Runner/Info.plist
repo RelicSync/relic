@@ -79,6 +79,12 @@
 	<!-- Scanning a pairing QR to add this device to an existing vault. -->
 	<key>NSCameraUsageDescription</key>
 	<string>Relic uses the camera to scan a pairing QR code when you add this device to your vault.</string>
+	<!-- file_picker bundles DKImagePickerController, whose DKCamera links
+	     CLLocationManager for photo geotagging — a path Relic never invokes
+	     (no Relic feature reads location). App Store processing scans for the
+	     linked API and demands the purpose string anyway (ITMS-90683). -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Relic does not use your location. A bundled photo picker component references location APIs for geotagging, which Relic never invokes.</string>
 	<!-- The App Group the RelicShare extension hands shared payloads over in.
 	     receive_sharing_intent reads this key on both sides; the value comes from
 	     Flutter/RelicIds.xcconfig so the app and the appex cannot drift. -->
