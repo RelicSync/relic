@@ -8,6 +8,12 @@
 // a cursor persisted in sweep_state, so a large bucket is swept
 // incrementally across ticks rather than in one unbounded pass.
 //
+// Abandoned multipart uploads: R2's list() does not return in-flight multipart
+// parts, so the orphan sweep above is structurally blind to them and a client
+// that died mid-upload left bytes billed forever. mpu_state (migrations/0010)
+// is the only trace they leave, so the sweep works from that instead of from
+// the bucket.
+//
 // Tombstone GC: tombstones exist so deletion wins over late pushes from
 // offline devices (putRelic checks them). They only need to outlive any
 // plausible offline device, not live forever. Rows older than
@@ -16,9 +22,13 @@
 // docs/api.md.
 
 import type { Env } from "./env";
+import { blobR2Key, clearMpuState } from "./blob";
 
 export const ORPHAN_MIN_AGE_S = 24 * 3600;
 export const TOMBSTONE_TTL_DAYS = 90;
+// Same window as the orphan-blob sweep, for the same reason: a legitimate large
+// upload has long since completed or been aborted by its client.
+export const MPU_MIN_AGE_S = 24 * 3600;
 
 const PAGES_PER_RUN = 3; // <= 3000 objects listed per tick
 const CURSOR_KEY = "orphan_blob_cursor";
@@ -99,6 +109,39 @@ export async function sweepOrphanBlobs(
 
   await setCursor(env, cursor);
   return { scanned, deleted, done };
+}
+
+/**
+ * Abort multipart uploads nobody ever finished, oldest first. Returns rows
+ * cleared. `now` is injectable for tests.
+ *
+ * Bounded per run like the orphan sweep. An abort R2 refuses (already gone,
+ * already completed, unknown id) still drops the row: the reservation must not
+ * outlive the upload, and a row we can never abort would otherwise be retried
+ * every six hours forever.
+ */
+export async function sweepAbandonedMpus(env: Env, now = nowS()): Promise<number> {
+  const rows = await env.DB.prepare(
+    `SELECT account_id, blob_id, upload_id FROM mpu_state
+     WHERE created_at < ?1 ORDER BY created_at LIMIT 100`,
+  ).bind(now - MPU_MIN_AGE_S).all<{
+    account_id: string;
+    blob_id: string;
+    upload_id: string;
+  }>();
+  let cleared = 0;
+  for (const r of rows.results) {
+    try {
+      await env.STORE
+        .resumeMultipartUpload(blobR2Key(r.account_id, r.blob_id), r.upload_id)
+        .abort();
+    } catch {
+      // see the note above: the row goes either way
+    }
+    await clearMpuState(env, r.account_id, r.blob_id, r.upload_id);
+    cleared++;
+  }
+  return cleared;
 }
 
 /** Drop tombstones past their retention window. Returns rows deleted. */

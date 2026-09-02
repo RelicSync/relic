@@ -19,7 +19,8 @@ const relicR2Key = (acct: string, uid: string) => `users/${acct}/relics/${uid}`;
 type EnvOpts = {
   created_at?: number;
   updated_at?: number;
-  byte_size?: number;
+  // deno-lint-ignore no-explicit-any
+  byte_size?: any; // deliberately loose: the validation cases push junk through
   promoted?: boolean;
   blob_key?: string;
   ct?: string;
@@ -31,7 +32,7 @@ function envelope(uid: string, o: EnvOpts = {}) {
     uid,
     created_at: o.created_at ?? 1000,
     updated_at: o.updated_at ?? 1000,
-    byte_size: o.byte_size ?? 10,
+    byte_size: "byte_size" in o ? o.byte_size : 10,
     promoted: o.promoted ?? false,
     n: "nonce",
     ct: o.ct ?? "cipher",
@@ -121,6 +122,69 @@ describe("putRelic — item cap", () => {
     const res = await put(FREE, "x", { byte_size: 10, ct: big });
     expect(res.status).toBe(413);
     expect((await res.json()).error).toBe("too_large");
+  });
+});
+
+describe("putRelic — byte_size validation", () => {
+  // THE regression that matters: byte_size feeds account_usage, and usage.ts
+  // floors the counters at 0, so one negative push used to permanently zero an
+  // account's storage total and remove all backpressure. The row must come out
+  // of a rejected write byte-for-byte unchanged.
+  it("rejects a negative byte_size and leaves account_usage untouched", async () => {
+    await E.DB.prepare(
+      "INSERT INTO account_usage (account_id, bytes_used, vault_count) VALUES ('A', 12345, 7)",
+    ).run();
+
+    const res = await put(FREE, "x", { byte_size: -1_000_000 });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("invalid_envelope");
+
+    const usage = await E.DB.prepare(
+      "SELECT bytes_used, vault_count FROM account_usage WHERE account_id = 'A'",
+    ).first();
+    expect(usage).toEqual({ bytes_used: 12345, vault_count: 7 });
+    expect(await hasMeta("x")).toBe(false);
+  });
+
+  it("rejects a byte_size that is not a whole number", async () => {
+    for (const bad of [1.5, NaN, "10", null, undefined]) {
+      const res = await put(FREE, "x", { byte_size: bad });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe("invalid_envelope");
+    }
+    expect(await hasMeta("x")).toBe(false);
+  });
+
+  it("accepts byte_size 0 (an empty relic is a legal envelope)", async () => {
+    const res = await put(FREE, "x", { byte_size: 0, ct: "" });
+    expect(res.status).toBe(200);
+    expect((await res.json()).stale).toBe(false);
+  });
+});
+
+describe("putRelic — byte_size plausibility floor", () => {
+  it("rejects a body wildly larger than the declared byte_size", async () => {
+    // 40 KiB of ciphertext declared as 100 bytes: 4 * 100 + 16384 is nowhere
+    // near it, so the free-storage trick is refused.
+    const res = await put(FREE, "x", { byte_size: 100, ct: "c".repeat(40 * 1024) });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("invalid_envelope");
+    expect(await hasMeta("x")).toBe(false);
+  });
+
+  it("leaves real client divergence alone (body ~1.34x byte_size)", async () => {
+    // What a shipped client actually sends: base64 ciphertext about a third
+    // larger than the byte_size it computed off the plaintext.
+    const declared = 60_000;
+    const res = await put(FREE, "x", { byte_size: declared, ct: "c".repeat(Math.floor(declared * 1.34)) });
+    expect(res.status).toBe(200);
+  });
+
+  it("the 16 KiB slack covers small relics, whose overhead dominates", async () => {
+    // A 12-byte note still ships a few hundred bytes of envelope. The additive
+    // term, not the multiplier, is what keeps these from tripping the floor.
+    const res = await put(FREE, "x", { byte_size: 12, ct: "c".repeat(2000) });
+    expect(res.status).toBe(200);
   });
 });
 
@@ -332,6 +396,25 @@ describe("listRelics — cursor pagination", () => {
     const r = await (await list("limit=1000")).json();
     expect(r.items).toHaveLength(4);
     expect(r.next_cursor).toBeNull();
+  });
+
+  it("clamps a junk or out-of-range limit instead of reaching SQL with it", async () => {
+    await seedFour();
+    // limit is bound now, but it is still the one query-string value that ends
+    // up shaping the SQL text. Each of these used to produce LIMIT NaN or an
+    // unbounded scan; all four must simply page normally.
+    for (const q of ["limit=abc", "limit=0", "limit=-5", "limit=99999"]) {
+      const r = await (await list(q)).json();
+      expect(r.items.length).toBeGreaterThan(0);
+      expect(r.items.length).toBeLessThanOrEqual(4);
+    }
+  });
+
+  it("clamps limit=1 up from below and still hands back a usable cursor", async () => {
+    await seedFour();
+    const r = await (await list("limit=1")).json();
+    expect(r.items.map((x: { uid: string }) => x.uid)).toEqual(["a"]);
+    expect(r.next_cursor).toBe("10:a");
   });
 
   it("omits rows whose R2 envelope is missing (documents current behavior)", async () => {

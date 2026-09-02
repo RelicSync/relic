@@ -12,10 +12,12 @@ const FREE = { account: "A", tier: "free" } as const;
 const PRO = { account: "A", tier: "pro" } as const;
 
 const BLOB = "blob-0000-test";
+// A second blob key, so two uploads can be genuinely in flight at once.
+const BLOB2 = "blob-0000-two1";
 const u = (q: string) => new URL(`http://x/blob/mpu/${BLOB}?${q}`);
 
-function createReq(declared: number): Request {
-  return new Request("http://x/blob/mpu?id=" + BLOB, {
+function createReq(declared: number, id = BLOB): Request {
+  return new Request("http://x/blob/mpu?id=" + id, {
     method: "POST",
     body: JSON.stringify({ declared_size: declared }),
   });
@@ -39,9 +41,18 @@ async function seedUsage(bytes: number) {
   ).bind(bytes).run();
 }
 
+// In-flight reservations for account A (migrations/0010).
+async function mpuRows(): Promise<Array<{ upload_id: string; declared_size: number }>> {
+  const r = await E.DB.prepare(
+    "SELECT upload_id, declared_size FROM mpu_state WHERE account_id = 'A' ORDER BY upload_id",
+  ).all();
+  return r.results;
+}
+
 beforeEach(async () => {
   await setupSchema(E.DB);
   await E.STORE.delete(blobR2Key("A", BLOB));
+  await E.STORE.delete(blobR2Key("A", BLOB2));
 });
 
 describe("blob id charset", () => {
@@ -79,6 +90,97 @@ describe("mpu create", () => {
       });
       expect((await mpuCreate(req, E, PRO, BLOB)).status).toBe(400);
     }
+  });
+});
+
+describe("mpu_state reservations", () => {
+  it("create books a row and complete releases it", async () => {
+    const uploadId = await create(PRO, 100);
+    expect(await mpuRows()).toEqual([{ upload_id: uploadId, declared_size: 100 }]);
+
+    const up = await mpuPart(
+      partReq(new TextEncoder().encode("bytes")), E, PRO, BLOB, u(`upload_id=${uploadId}&part=1`),
+    );
+    const { part, etag } = await up.json();
+    const done = await mpuComplete(
+      new Request("http://x/c", {
+        method: "POST",
+        body: JSON.stringify({ upload_id: uploadId, parts: [{ part, etag }] }),
+      }),
+      E, PRO, BLOB,
+    );
+    expect(done.status).toBe(200);
+    expect(await mpuRows()).toEqual([]);
+  });
+
+  it("abort releases it, idempotently", async () => {
+    const uploadId = await create(PRO, 100);
+    expect(await mpuRows()).toHaveLength(1);
+    expect((await mpuAbort(E, PRO, BLOB, uploadId)).status).toBe(200);
+    expect(await mpuRows()).toEqual([]);
+    expect((await mpuAbort(E, PRO, BLOB, uploadId)).status).toBe(200);
+    expect(await mpuRows()).toEqual([]);
+  });
+
+  it("a rejected complete releases it too, so quota is not held hostage", async () => {
+    const uploadId = await create(FREE, 100); // declares tiny...
+    const big = new Uint8Array(TIERS.free.item + 1); // ...uploads over the cap
+    const up = await mpuPart(partReq(big), E, FREE, BLOB, u(`upload_id=${uploadId}&part=1`));
+    const { part, etag } = await up.json();
+    const done = await mpuComplete(
+      new Request("http://x/c", {
+        method: "POST",
+        body: JSON.stringify({ upload_id: uploadId, parts: [{ part, etag }] }),
+      }),
+      E, FREE, BLOB,
+    );
+    expect(done.status).toBe(413);
+    expect(await mpuRows()).toEqual([]);
+  });
+
+  it("parallel creates cannot each spend the whole quota", async () => {
+    // Room for exactly one more upload of this size...
+    await seedUsage(TIERS.free.storage - 1000);
+    expect((await mpuCreate(createReq(900), E, FREE, BLOB)).status).toBe(200);
+    // ...so the second must see the first one's reservation and be refused.
+    // Before mpu_state both saw the same headroom and both passed, which made
+    // the effective cap the cap times the concurrency.
+    const second = await mpuCreate(createReq(900, BLOB2), E, FREE, BLOB2);
+    expect(second.status).toBe(402);
+    expect((await second.json()).error).toBe("storage_quota");
+    expect(await mpuRows()).toHaveLength(1);
+  });
+
+  it("releasing a reservation frees the headroom again", async () => {
+    await seedUsage(TIERS.free.storage - 1000);
+    const first = await mpuCreate(createReq(900), E, FREE, BLOB);
+    const { upload_id } = await first.json();
+    expect((await mpuCreate(createReq(900, BLOB2), E, FREE, BLOB2)).status).toBe(402);
+    await mpuAbort(E, FREE, BLOB, upload_id);
+    expect((await mpuCreate(createReq(900, BLOB2), E, FREE, BLOB2)).status).toBe(200);
+  });
+
+  it("books one row per upload, so a retry of the same blob key is tracked separately", async () => {
+    // A client that gives up on a stalled attempt and starts again has two
+    // uploads in flight under one blob key; both must be reclaimable.
+    const a = await create(PRO, 100);
+    const b = await create(PRO, 100);
+    expect(a).not.toBe(b);
+    expect(await mpuRows()).toHaveLength(2);
+    await mpuAbort(E, PRO, BLOB, a);
+    expect((await mpuRows()).map((r) => r.upload_id)).toEqual([b]);
+  });
+
+  it("a create R2 refuses leaves no reservation behind", async () => {
+    const failing = {
+      ...E,
+      STORE: {
+        ...E.STORE,
+        createMultipartUpload: () => Promise.reject(new Error("r2 down")),
+      },
+    };
+    await expect(mpuCreate(createReq(100), failing, PRO, BLOB)).rejects.toThrow();
+    expect(await mpuRows()).toEqual([]);
   });
 });
 

@@ -251,25 +251,95 @@ async function accountByCustomer(env: Env, customerId?: string): Promise<string 
 
 // Upsert a subscriptions row and mirror the resolved tier into accounts (the
 // hot-path cache authenticate() reads). Only touches accounts.tier when a tier
-// is part of this update.
+// is part of this update AND the subscriptions write actually landed.
+//
+// ORDERING GUARD: webhook delivery is not ordered, and the queue consumer plus
+// the reconcile cron are two more producers on the same row. Without the guard
+// an old customer.subscription.updated redelivered after a newer one silently
+// reinstated the stale status and tier. When the caller supplies
+// updated_stripe_ts, an event older than what the row already holds is dropped;
+// `>=` (not `>`) so two events inside the same second both apply. Callers with
+// no ts field (checkout.session.completed, which only fills in the Stripe ids)
+// keep the old unconditional behaviour.
+//
+// Returns whether the row was written, so a caller can tell a real apply from a
+// skipped one.
 async function writeSub(
   env: Env,
   accountId: string,
   fields: Record<string, string | number | null>,
-): Promise<void> {
+): Promise<boolean> {
   const cols = ["account_id", ...Object.keys(fields)];
   const placeholders = cols.map((_, i) => `?${i + 1}`).join(",");
   const updates = Object.keys(fields).map((k) => `${k} = excluded.${k}`).join(", ");
-  await env.DB.prepare(
+  const guard = "updated_stripe_ts" in fields
+    ? " WHERE excluded.updated_stripe_ts >= subscriptions.updated_stripe_ts"
+    : "";
+  // RETURNING rather than meta.changes: a DO UPDATE the guard filtered out
+  // yields no row at all, which is an unambiguous "did not apply".
+  const wrote = await env.DB.prepare(
     `INSERT INTO subscriptions (${cols.join(",")}) VALUES (${placeholders})
-     ON CONFLICT(account_id) DO UPDATE SET ${updates}, updated_at = unixepoch()`,
-  ).bind(accountId, ...Object.values(fields)).run();
+     ON CONFLICT(account_id) DO UPDATE SET ${updates}, updated_at = unixepoch()${guard}
+     RETURNING account_id`,
+  ).bind(accountId, ...Object.values(fields)).first<{ account_id: string }>();
+  if (!wrote) return false;
   if ("tier" in fields) {
     await env.DB.prepare(
       `INSERT INTO accounts (account_id, tier) VALUES (?1, ?2)
        ON CONFLICT(account_id) DO UPDATE SET tier = excluded.tier`,
     ).bind(accountId, fields.tier).run();
   }
+  return true;
+}
+
+// The ONE place a Stripe subscription object turns into our billing state.
+// customer.subscription.created/updated and the reconcile cron both go through
+// it, because as two copies they drifted: reconcile re-stamped grace_until on
+// every 6-hourly tick, so graceSweep's `grace_until < now` never matched and a
+// failed card kept its paid tier until Stripe's own dunning gave up.
+//
+// GRACE IS MONOTONE. The first past_due sets the deadline; every later past_due
+// reads the existing stamp back and leaves it alone, so the window really does
+// close GRACE_DAYS after the first failure.
+async function applySubscriptionState(
+  env: Env,
+  accountId: string,
+  // deno-lint-ignore no-explicit-any
+  sub: any,
+  map: Record<string, Tier>,
+  now: number,
+  stripeTs: number,
+): Promise<boolean> {
+  const status = String(sub.status);
+  let graceUntil: number | null = null;
+  // active/trialing grant outright. past_due grants only inside the window.
+  // Anything else (incomplete, unpaid, canceled, paused) grants nothing.
+  let grant = status === "active" || status === "trialing";
+  if (status === "past_due") {
+    const row = await env.DB.prepare(
+      "SELECT grace_until FROM subscriptions WHERE account_id = ?1",
+    ).bind(accountId).first<{ grace_until: number | null }>();
+    graceUntil = row?.grace_until ?? now + GRACE_DAYS * 86400;
+    grant = now < graceUntil;
+  }
+
+  const fields: Record<string, string | number | null> = {
+    stripe_customer_id: sub.customer ?? null,
+    stripe_subscription_id: sub.id ?? null,
+    status,
+    current_period_end: sub.current_period_end ?? null,
+    cancel_at_period_end: sub.cancel_at_period_end ? 1 : 0,
+    grace_until: graceUntil,
+    updated_stripe_ts: stripeTs,
+  };
+  if (grant) fields.tier = tierFromSub(sub, map);
+  else if (status !== "past_due") fields.tier = "free";
+  // A past_due whose grace has already run out deliberately writes NO tier:
+  // graceSweep has already moved accounts.tier to free, and subscriptions.tier
+  // has to keep holding the ENTITLED tier because that is what invoice.paid
+  // restores from. Writing "free" here would erase the entitlement and strand a
+  // customer on free after their card finally went through.
+  return writeSub(env, accountId, fields);
 }
 
 // Human label for the email body. Unknown/free -> generic wording (the tier may
@@ -366,20 +436,7 @@ export async function applyStripeEvent(env: Env, ev: StripeMessage): Promise<voi
     case "customer.subscription.created":
     case "customer.subscription.updated": {
       const accountId = obj?.metadata?.account_id as string | undefined;
-      if (accountId) {
-        const status = String(obj.status);
-        const grant = status === "active" || status === "trialing" || status === "past_due";
-        await writeSub(env, accountId, {
-          stripe_customer_id: obj.customer ?? null,
-          stripe_subscription_id: obj.id ?? null,
-          tier: grant ? tierFromSub(obj, map) : "free",
-          status,
-          current_period_end: obj.current_period_end ?? null,
-          cancel_at_period_end: obj.cancel_at_period_end ? 1 : 0,
-          grace_until: status === "past_due" ? now + GRACE_DAYS * 86400 : null,
-          updated_stripe_ts: ev.created,
-        });
-      }
+      if (accountId) await applySubscriptionState(env, accountId, obj, map, now, ev.created);
       break;
     }
     case "customer.subscription.deleted": {
@@ -399,9 +456,16 @@ export async function applyStripeEvent(env: Env, ev: StripeMessage): Promise<voi
     case "invoice.payment_failed": {
       const accountId = await accountByCustomer(env, obj.customer);
       if (accountId) {
+        const row = await env.DB.prepare(
+          "SELECT grace_until FROM subscriptions WHERE account_id = ?1",
+        ).bind(accountId).first<{ grace_until: number | null }>();
         await writeSub(env, accountId, {
           status: "past_due",
-          grace_until: now + GRACE_DAYS * 86400, // keep tier through grace
+          // Only the FIRST failure starts the clock. Stripe retries a failed
+          // invoice several times across the dunning window and every retry is
+          // another payment_failed; re-stamping on each one pushed the deadline
+          // out again, so the grace period could never expire.
+          grace_until: row?.grace_until ?? now + GRACE_DAYS * 86400,
           updated_stripe_ts: ev.created,
         });
       }
@@ -411,9 +475,19 @@ export async function applyStripeEvent(env: Env, ev: StripeMessage): Promise<voi
     case "invoice.payment_succeeded": {
       const accountId = await accountByCustomer(env, obj.customer);
       if (accountId) {
+        // Clearing status and grace was never enough to undo a sweep
+        // downgrade: graceSweep moves accounts.tier to free and leaves
+        // subscriptions.tier holding the entitlement, so paying again has to
+        // copy that entitlement back across. Passing `tier` is also what makes
+        // writeSub mirror into accounts at all, which is what graceSweep's own
+        // comment already promised this event would do.
+        const row = await env.DB.prepare(
+          "SELECT tier FROM subscriptions WHERE account_id = ?1",
+        ).bind(accountId).first<{ tier: string }>();
         await writeSub(env, accountId, {
           status: "active",
           grace_until: null,
+          tier: isTier(row?.tier) ? row.tier : "free",
           updated_stripe_ts: ev.created,
         });
       }
@@ -550,18 +624,11 @@ export async function reconcile(env: Env): Promise<void> {
       const accountId = (sub?.metadata?.account_id as string | undefined) ??
         (await accountByCustomer(env, sub.customer));
       if (!accountId) continue;
-      const status = String(sub.status);
-      const grant = status === "active" || status === "trialing" || status === "past_due";
-      await writeSub(env, accountId, {
-        stripe_customer_id: sub.customer ?? null,
-        stripe_subscription_id: sub.id ?? null,
-        tier: grant ? tierFromSub(sub, map) : "free",
-        status,
-        current_period_end: sub.current_period_end ?? null,
-        cancel_at_period_end: sub.cancel_at_period_end ? 1 : 0,
-        grace_until: status === "past_due" ? now + GRACE_DAYS * 86400 : null,
-        updated_stripe_ts: sub.created ?? now,
-      });
+      // `now`, NOT sub.created. sub.created is the subscription's birth date,
+      // so against writeSub's ordering guard it would lose every comparison
+      // with a real webhook timestamp and silently mute reconcile forever,
+      // which is exactly the drift repair this cron exists to be.
+      await applySubscriptionState(env, accountId, sub, map, now, now);
     }
     startingAfter = page.has_more && subs.length ? subs[subs.length - 1].id : undefined;
   } while (startingAfter && ++pages < 50);

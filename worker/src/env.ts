@@ -32,6 +32,10 @@ export interface Env {
   RL_PLANS?: RateLimiter; // GET /stripe/plans — public/pre-auth (per-IP)
   RL_SHARE?: RateLimiter; // POST/DELETE /share — create/revoke (per-account)
   RL_SHARE_VIEW?: RateLimiter; // GET /s/:id + /share/:id/blob — public (per-IP)
+  RL_SYNC?: RateLimiter; // the encrypted-sync data plane (per-account): /relics,
+  // /tombstones, /keyparams, /relic/*, /blob*, /ai + /ai/*. One knob across
+  // reads AND writes. /sync/socket is excluded, because MAX_SOCKETS in
+  // notify.ts governs that one.
 
   // --- pairing relay + device-revocation set (docs/cloudflare/13 §5.5, 04 §2.3) ---
   // One KV namespace, two key prefixes: `pair:` (QR transfer slots, ~120s TTL,
@@ -45,6 +49,13 @@ export interface Env {
   // minted before the custom-domain switch (or by old client builds) carry this
   // issuer, so both are accepted. Same JWKS either way.
   SUPABASE_JWT_SECRET?: string; // secret — ONLY if using legacy HS256 tokens
+  SUPABASE_ANON_KEY?: string; // var, NOT a secret — the publishable key, which
+  // ships hard-coded in the open-source client (app/lib/data/supabase_auth.dart).
+  // Supabase's gateway wants an `apikey` header on GoTrue routes, so the global
+  // sign-out on device removal sends it. Unset -> the call is attempted without
+  // it (a GoTrue reached directly needs no gateway credential) and, if the
+  // gateway rejects it, device removal falls back to its pre-revocation
+  // behaviour rather than failing. See revokeSupabaseSessions in src/account.ts.
   SUPABASE_SERVICE_ROLE_KEY?: string; // secret — GoTrue admin key. Used for
   // exactly one thing: DELETE /auth/v1/admin/users/{sub} during account
   // deletion, so deleting an account also deletes the identity (and its email)

@@ -111,6 +111,14 @@ describe("account_usage: the caps still bite", () => {
     await setupSchema(E.DB);
   });
 
+  // The three cases below each drive 25+ sequential writes through the real
+  // handler (R2 object + D1 batch apiece). Alone that is ~200ms, but test files
+  // run concurrently against one miniflare instance and one D1, so under a full
+  // run they contend and can pass 30x that, enough to trip the 5s default and
+  // fail on timing rather than on behaviour. Bounded explicitly here rather than
+  // globally, because these are the only tests in the suite shaped this way.
+  const SLOW = 30_000;
+
   it("free tier still refuses the 26th kept relic", async () => {
     for (let i = 0; i < 25; i++) {
       const r = await put(`u${i}`, 10, true);
@@ -120,7 +128,7 @@ describe("account_usage: the caps still bite", () => {
     const over = await put("u25", 10, true);
     expect(over.status).toBe(402);
     expect(await cached()).toEqual({ bytes_used: 250, vault_count: 25 }); // unchanged
-  });
+  }, SLOW);
 
   // free is 250 MB of storage in 10 MB items, so 25 unpromoted relics sit
   // exactly on the cap (the check is `>`), and the 26th byte is over it.
@@ -139,7 +147,7 @@ describe("account_usage: the caps still bite", () => {
     expect(over.status).toBe(402);
     expect(await over.json()).toMatchObject({ error: "storage_quota" });
     expect(await cached()).toEqual({ bytes_used: CAP, vault_count: 0 }); // unchanged
-  });
+  }, SLOW);
 
   it("lets an in-place edit through when it does not grow the account", async () => {
     await fillToCap();
@@ -151,5 +159,5 @@ describe("account_usage: the caps still bite", () => {
     // ...and the rewrite left us still exactly on the cap, so one more byte
     // in a new relic is still refused.
     expect((await put("extra", 1, false)).status).toBe(402);
-  });
+  }, SLOW);
 });

@@ -33,6 +33,7 @@ Non-2xx responses carry `{ "error": "<code>", "message": "<human text>" }`.
 |---|---|---|
 | 400 | `invalid_envelope` | malformed JSON / missing fields / bad version |
 | 401 | `unauthorized` | missing, unknown, or revoked token |
+| 401 | `session_revoked` | token predates a device removal; sign in again |
 | 402 | `storage_quota` | tier storage quota exceeded (250 MB / 25 GB / 250 GB) |
 | 402 | `vault_cap` | free-tier promoted-relic cap reached |
 | 404 | `not_found` | unknown uid / blob key / no keyparams yet |
@@ -131,8 +132,15 @@ no `iat` and are grandfathered.
   Enforces the per-tier device cap; at cap returns `409` **with the current
   device list** so the client can offer "remove one."
 - `GET /account/devices` — list registered devices.
-- `DELETE /account/devices/:id` — remove + revoke (KV `rev:` set, so cut-off
-  is immediate even with an unexpired JWT).
+- `DELETE /account/devices/:id` — remove **and sign the account out**. Revokes
+  every refresh token at the IdP (GoTrue `POST /logout?scope=global`) and stamps
+  `accounts.min_valid_iat`, so access tokens issued before the removal are
+  refused at once rather than lingering for their last hour. GoTrue has no
+  per-session revocation, so this is necessarily account-wide: every device has
+  to sign in again. Answers `{ "ok": true, "sessions_revoked": <bool> }`; when
+  the IdP call does not succeed the watermark is deliberately left unstamped and
+  only the KV `rev:` guard applies, which needs the client to send
+  `X-Relic-Device`.
 
 ### Pairing relay — `/pair/*` (device onboarding)
 Short-lived KV relay for the QR join flow: `POST /pair/start`,

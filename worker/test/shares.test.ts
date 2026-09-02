@@ -73,6 +73,24 @@ describe("share links", () => {
     }
   });
 
+  it("serves the ciphertext as a non-sniffable attachment", async () => {
+    await create("tokA", ID_A);
+    const blob = await getBlob(ID_A);
+    expect(blob.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(blob.headers.get("Content-Disposition")).toBe("attachment");
+    await blob.arrayBuffer(); // consume the R2 stream
+  });
+
+  it("keeps those headers on the buffered last-view branch", async () => {
+    // The final permitted view builds its Response from a buffer, not the R2
+    // stream, which is a separate code path that used to be easy to miss.
+    await create("tokA", ID_B, { views: 1 });
+    const blob = await getBlob(ID_B);
+    expect(blob.status).toBe(200);
+    expect(blob.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(blob.headers.get("Content-Disposition")).toBe("attachment");
+  });
+
   it("creating requires auth; viewing does not", async () => {
     const anon = await worker.fetch(
       new Request(`https://x/share?id=${ID_A}&ttl=3600`, { method: "POST", body: CT }),

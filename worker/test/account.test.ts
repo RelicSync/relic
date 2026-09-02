@@ -24,6 +24,10 @@ async function seed(acct: string) {
       "INSERT INTO relic_meta (account_id, uid, created_at, updated_at, byte_size, promoted) VALUES (?1,'u1',1,1,10,0)",
     ).bind(acct),
     E.DB.prepare("INSERT INTO tombstones (account_id, uid, deleted_at) VALUES (?1,'u0',1)").bind(acct),
+    E.DB.prepare(
+      `INSERT INTO mpu_state (account_id, blob_id, upload_id, declared_size, created_at)
+       VALUES (?1,'b-inflight','up1',1000,1)`,
+    ).bind(acct),
   ]);
   await E.STORE.put(`users/${acct}/keyparams.json`, "{}");
   await E.STORE.put(`users/${acct}/relics/u1`, "envelope");
@@ -50,6 +54,9 @@ async function kvCount(prefix: string): Promise<number> {
 
 const PER_ACCOUNT_TABLES = [
   "accounts", "subscriptions", "tokens", "devices", "relic_meta", "tombstones",
+  // In-flight multipart parts are invisible to purgeR2Prefix (R2's list() does
+  // not return them), so the teardown has to drop these rows explicitly.
+  "mpu_state",
 ];
 
 beforeEach(async () => {

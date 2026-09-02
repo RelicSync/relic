@@ -90,12 +90,21 @@ function fakeWs(device: string) {
   };
 }
 
-function fakeState(sockets: WebSocket[]) {
+function fakeState(sockets: WebSocket[], accepted: WebSocket[] = []) {
   return {
     getWebSockets: () => sockets,
-    acceptWebSocket: () => {},
+    acceptWebSocket: (ws: WebSocket) => accepted.push(ws),
     setWebSocketAutoResponse: () => {},
   } as unknown as DurableObjectState;
+}
+
+function upgrade(state: DurableObjectState, device = "devX") {
+  const so = new SyncSocket(state, {} as Env);
+  return so.fetch(
+    new Request("https://do.invalid/sync/socket", {
+      headers: { Upgrade: "websocket", "X-Relic-Device": device },
+    }),
+  );
 }
 
 async function triggerBroadcast(state: DurableObjectState, origin: string | null) {
@@ -109,11 +118,14 @@ async function triggerBroadcast(state: DurableObjectState, origin: string | null
 }
 
 describe("doorbell: SyncSocket.broadcast", () => {
-  it("wakes every device except the originator", async () => {
+  it("wakes every device, the originator included", async () => {
+    // The old skip matched a client-supplied header against a client-supplied
+    // socket attachment, so any device could name a sibling and mute that
+    // sibling's wake. Suppression is gone; the writer just self-wakes.
     const a = fakeWs("devA");
     const b = fakeWs("devB");
     await triggerBroadcast(fakeState([a.ws, b.ws]), "devA");
-    expect(a.sent).toEqual([]); // sender is skipped
+    expect(a.sent).toEqual([WAKE]);
     expect(b.sent).toEqual([WAKE]);
   });
 
@@ -123,6 +135,49 @@ describe("doorbell: SyncSocket.broadcast", () => {
     await triggerBroadcast(fakeState([a.ws, b.ws]), null);
     expect(a.sent).toEqual([WAKE]);
     expect(b.sent).toEqual([WAKE]);
+  });
+
+  it("a spoofed origin cannot suppress anyone's wake", async () => {
+    // Sibling device ids are enumerable via GET /account/devices, so this is
+    // the exact attack the skip made possible.
+    const victim = fakeWs("devVictim");
+    await triggerBroadcast(fakeState([victim.ws]), "devVictim");
+    expect(victim.sent).toEqual([WAKE]);
+  });
+
+  it("one dead socket does not stop the rest from being woken", async () => {
+    const dead = {
+      deserializeAttachment: () => ({ device: "devDead" }),
+      send: () => { throw new Error("closing"); },
+    } as unknown as WebSocket;
+    const live = fakeWs("devLive");
+    await triggerBroadcast(fakeState([dead, live.ws]), null);
+    expect(live.sent).toEqual([WAKE]);
+  });
+});
+
+describe("doorbell: socket cap", () => {
+  it("accepts an upgrade while under the cap", async () => {
+    const accepted: WebSocket[] = [];
+    const res = await upgrade(fakeState([], accepted));
+    expect(res.status).toBe(101);
+    expect(accepted).toHaveLength(1);
+  });
+
+  it("429s past the cap and never accepts the socket", async () => {
+    // 32 is the ceiling; nothing legitimate reaches it, so a DO sitting at it
+    // is one token opening sockets until the account's live sync falls over.
+    const existing = Array.from({ length: 32 }, (_, i) => fakeWs(`d${i}`).ws);
+    const accepted: WebSocket[] = [];
+    const res = await upgrade(fakeState(existing, accepted));
+    expect(res.status).toBe(429);
+    expect(accepted).toHaveLength(0);
+  });
+
+  it("still rejects a non-upgrade request before counting sockets", async () => {
+    const so = new SyncSocket(fakeState([]), {} as Env);
+    const res = await so.fetch(new Request("https://do.invalid/sync/socket"));
+    expect(res.status).toBe(426);
   });
 });
 

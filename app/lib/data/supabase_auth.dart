@@ -23,6 +23,19 @@ class EmailConfirmationPending implements Exception {
   String toString() => 'EmailConfirmationPending($email)';
 }
 
+/// Thrown by [SupabaseAuth.refresh] when GoTrue rejects the refresh token
+/// itself. The session is gone: signed out everywhere, or revoked along with a
+/// removed device (the Worker calls GoTrue global logout on
+/// `DELETE /account/devices/:id`). Typed on purpose, because the caller has to
+/// tell this apart from the network being down: retrying cures one and can
+/// never cure the other. Without the distinction a dead session reads as
+/// "offline" and stays that way for ever.
+class SessionRevoked implements Exception {
+  const SessionRevoked();
+  @override
+  String toString() => 'SessionRevoked';
+}
+
 /// Minimal, dependency-free Supabase Auth (GoTrue REST) client. Email/password
 /// sign-in/up/refresh, PLUS browser OAuth (PKCE) — just enough to obtain a
 /// short-lived access token to use as the Worker bearer. The vault passphrase is
@@ -168,6 +181,12 @@ class SupabaseAuth {
       headers: _headers,
       body: jsonEncode({'refresh_token': refreshToken}),
     ).timeout(kNetTimeout);
+    // GoTrue refusing the refresh token is not a blip: the session is gone and
+    // retrying cannot bring it back. 429 and 5xx are deliberately NOT in here,
+    // because those ARE transient and must stay retryable.
+    if (r.statusCode == 400 || r.statusCode == 401 || r.statusCode == 403) {
+      throw const SessionRevoked();
+    }
     return _sessionOrThrow(r);
   }
 

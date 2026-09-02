@@ -31,6 +31,14 @@ interface Attachment {
 const PING = JSON.stringify({ t: "ping" });
 const PONG = JSON.stringify({ t: "pong" });
 
+// Hard ceiling on concurrent sockets per account DO. Nothing legitimate comes
+// close. Max is the largest tier and it caps devices at unlimited only in the
+// sense of "no cap enforced here", while a real account runs a handful. Without
+// a ceiling one authenticated token could open sockets until the DO fell over,
+// taking live sync down for every device on that account. Clients already treat
+// a failed upgrade as "poll instead", so the 429 degrades quietly.
+const MAX_SOCKETS = 32;
+
 export class SyncSocket {
   constructor(
     private readonly state: DurableObjectState,
@@ -54,10 +62,11 @@ export class SyncSocket {
     // Internal broadcast trigger (Worker -> DO stub, never reachable from the
     // public edge — the outer Worker only calls this via env.SYNC.get(id)).
     if (url.pathname === "/broadcast") {
-      const { origin } = await req
-        .json<{ origin?: string | null }>()
-        .catch(() => ({ origin: null }));
-      this.broadcast(origin ?? undefined);
+      // The body still carries {origin} and pokeSync still sends it, so no call
+      // site changes and X-Relic-Device stays optional, but broadcast() no
+      // longer acts on it. See the note on broadcast() below.
+      await req.json<{ origin?: string | null }>().catch(() => ({ origin: null }));
+      this.broadcast();
       return new Response(null, { status: 204 });
     }
 
@@ -65,21 +74,37 @@ export class SyncSocket {
     if (req.headers.get("Upgrade") !== "websocket") {
       return new Response("expected websocket", { status: 426 });
     }
+    if (this.state.getWebSockets().length >= MAX_SOCKETS) {
+      return new Response("too many sockets", { status: 429 });
+    }
     const device = req.headers.get("X-Relic-Device") ?? "";
     const { 0: client, 1: server } = new WebSocketPair();
-    // Hibernatable accept: the socket survives isolate eviction. The device id is
-    // stashed as an attachment (persists across hibernation) so a broadcast can
-    // skip the originator without re-sending them their own write.
+    // Hibernatable accept: the socket survives isolate eviction. The device id
+    // rides along as an attachment (it persists across hibernation) purely so a
+    // connection is identifiable in a debug session; broadcast() no longer
+    // branches on it.
     this.state.acceptWebSocket(server);
     server.serializeAttachment({ device } satisfies Attachment);
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  private broadcast(origin?: string): void {
+  // Wake EVERY socket, including the writer's own.
+  //
+  // This used to skip the originating device, matched on the X-Relic-Device the
+  // writer put on its request against the id the socket asserted at connect
+  // time. Both halves are self-asserted by the client, and an account's sibling
+  // device ids are enumerable through GET /account/devices, so any device could
+  // name a sibling and suppress that sibling's wake: a targeted "your other
+  // machine never hears about this write" with no way for the DO to tell the
+  // difference. Nothing keyed on device ids inside one account can be made
+  // unspoofable, so the suppression is gone rather than patched.
+  //
+  // Cost of waking the writer too: one extra self-wake per write, which the
+  // client answers with an incremental GET /relics?since=<cursor> that finds
+  // nothing new. Cheap, and it cannot be weaponised.
+  private broadcast(): void {
     const msg = JSON.stringify({ t: "wake" });
     for (const ws of this.state.getWebSockets()) {
-      const att = ws.deserializeAttachment() as Attachment | null;
-      if (origin && att?.device && att.device === origin) continue; // skip sender
       try {
         ws.send(msg);
       } catch {

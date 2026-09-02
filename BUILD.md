@@ -283,7 +283,8 @@ The Rust reference for the formats and the deterministic classification rules.
 ## macOS and iOS
 
 `codemagic.yaml` at the repository root defines two cloud build lanes on
-Codemagic's Mac hardware: an iOS TestFlight lane and a macOS DMG lane. Its
-header comments double as the setup guide. Signing material is supplied through
-Codemagic environment variable groups and never lives in this repository. Both
-platforms are still in progress.
+Codemagic's Mac hardware: an iOS App Store/TestFlight lane and a macOS DMG
+lane. Its header comments double as the setup guide. Signing material is
+supplied through Codemagic environment variable groups and never lives in this
+repository. Released builds are available from the App Store and
+<https://relic.space/download/macos>.
