@@ -52,6 +52,27 @@ load-bearing: capture drops it, `richIfCurrent` refuses to serve it, and
 marked secret after capture. Without it a redacted export scrubs the plaintext
 body and ships the same secret inside the HTML.
 
+**The source's skin is stripped on the way OUT.** `stripHtmlSkin` in
+models/rich_body.dart removes colour, background, font-family/size, shadows and
+every `*-color` property from the HTML just before it reaches the clipboard.
+Bold, italic, links, lists, headings, tables and alignment all survive and take
+the destination document's look.
+
+This is not tidiness. Copying three sentences out of a dark-themed page carries
+`color: #e6edf3` and `background-color: #0d1117` on every span, so pasting into
+a white document gives white text in black boxes. A direct browser paste does
+the same thing, so nothing was broken, but it is the wrong default for a
+clipboard manager: you paste weeks later into a document you were not thinking
+about when you copied. Confirmed against a real GitHub capture (9,381 bytes,
+five different `*-color` properties, one link) which now pastes as ordinary
+document text with the link intact.
+
+It runs at write time, never at capture, so the stored HTML keeps everything the
+source published and the decision stays reversible. **RTF is deliberately not
+scrubbed**: the dark-page problem is a web problem and the web publishes HTML,
+while RTF comes from Word and Pages where the formatting is the user's own, and
+Word prefers RTF when both are offered. Pinned by tests in `rich_body_test.dart`.
+
 **256 KiB cap** on the serialized `rich` JSON, enforced on the way in as well as
 on capture. Over the cap RTF is dropped first and HTML kept, because HTML works
 on more platforms. The number is set by the Worker's `caps.item * 1.5` envelope

@@ -156,6 +156,112 @@ class RichBody {
   }
 }
 
+// --- Dropping the source's skin ---------------------------------------------
+//
+// A browser puts the page's LOOK on the clipboard as well as its structure.
+// Copy three sentences out of a dark-themed site and the fragment carries
+// `color: #e6edf3` and `background-color: #0d1117` on every span, so pasting it
+// into a white document gives you white text in black boxes. That is not a bug
+// in anything: Chrome published it, Word's default is to keep source
+// formatting, and a direct paste does exactly the same. It is still the wrong
+// default for a clipboard manager, because you paste things weeks later into
+// documents you were not thinking about when you copied.
+//
+// So the skin goes and the structure stays. Bold, italic, links, lists,
+// headings, tables and alignment all survive and take the destination's look.
+//
+// This runs on the way OUT, never on capture: the stored HTML keeps everything
+// the source published, so the decision is reversible and nothing is lost.
+// RTF is deliberately left alone. The dark-page problem is a web problem and
+// the web publishes HTML; RTF comes from Word and Pages, where the formatting
+// is the user's own and Word prefers RTF over HTML when both are offered.
+//
+// Regexes, not a parser. The scrub is best-effort by design — plain text is
+// authoritative, so the worst case is a flavor that keeps a colour it should
+// have dropped. Every rewrite happens INSIDE a tag, never over a text node, so
+// prose that happens to contain "color = red" is untouched.
+
+/// CSS properties dropped on the way to the clipboard. Anything ending in
+/// `-color` goes as well, which covers `background-color`, `border-color`,
+/// `text-decoration-color`, `caret-color` and the `-webkit-` spellings without
+/// listing them: a real capture from GitHub had five different `*-color`
+/// properties on it.
+///
+/// Shorthands that can carry a colour among other values (`border: 1px solid
+/// #fff`) keep it. Picking a colour out of a shorthand value means parsing the
+/// value, and the failure it would fix is a border that blends in, not text you
+/// cannot read.
+const _skinProps = {
+  'color',
+  'background',
+  'background-image',
+  'font',
+  'font-family',
+  'font-size',
+  'text-shadow',
+  'box-shadow',
+  'outline',
+  '-webkit-text-stroke',
+  '-webkit-text-stroke-width',
+};
+
+/// The pre-CSS attribute spellings of the same thing (`<font color>`,
+/// `<td bgcolor>`, `<body text link vlink>`).
+final _skinAttrs = RegExp(
+  r'''\s(?:bgcolor|background|color|text|link|vlink|alink)\s*=\s*'''
+  r'''(?:"[^"]*"|'[^']*'|[^\s>]+)''',
+  caseSensitive: false,
+);
+
+final _htmlTag = RegExp(r'<[a-zA-Z][^>]*>');
+// The leading whitespace is part of the match so that removing an attribute
+// closes the gap it leaves rather than turning `<p style="color:red">` into
+// `<p >`.
+final _styleAttr = RegExp(
+  r'''(\s*)\bstyle\s*=\s*(["'])([\s\S]*?)\2''',
+  caseSensitive: false,
+);
+final _styleBlock = RegExp(
+  r'<style\b[^>]*>([\s\S]*?)</style\s*>',
+  caseSensitive: false,
+);
+final _cssBlock = RegExp(r'\{([^{}]*)\}');
+
+/// Keep the declarations in one `;`-separated CSS run that are not skin.
+String _keepDecls(String css) {
+  final kept = <String>[];
+  for (final d in css.split(';')) {
+    final i = d.indexOf(':');
+    if (i < 0) continue; // empty or malformed: nothing worth keeping
+    final prop = d.substring(0, i).trim().toLowerCase();
+    if (prop.isEmpty || prop.endsWith('-color') || _skinProps.contains(prop)) {
+      continue;
+    }
+    kept.add(d.trim());
+  }
+  return kept.join('; ');
+}
+
+String _scrubTag(String tag) => tag.replaceAllMapped(_styleAttr, (m) {
+      final kept = _keepDecls(m[3]!);
+      return kept.isEmpty ? '' : '${m[1]}style=${m[2]}$kept${m[2]}';
+    }).replaceAll(_skinAttrs, '');
+
+/// Strip the source page's colours, backgrounds and fonts from [html], leaving
+/// everything that carries meaning. See the note above for why and where.
+String stripHtmlSkin(String html) {
+  // Class-based rules first: Word and Excel put their cell and paragraph
+  // styling in a <style> block rather than inline, and the selectors have to
+  // survive or a pasted table loses its alignment and borders along with its
+  // colours.
+  final out = html.replaceAllMapped(
+    _styleBlock,
+    (m) => m[0]!.replaceFirst(m[1]!,
+        m[1]!.replaceAllMapped(_cssBlock, (c) => '{${_keepDecls(c[1]!)}}')),
+  );
+  return out.replaceAllMapped(_htmlTag, (m) => _scrubTag(m[0]!));
+}
+
 // --- CF_HTML ----------------------------------------------------------------
 //
 // Windows wraps clipboard HTML in a byte-offset header:

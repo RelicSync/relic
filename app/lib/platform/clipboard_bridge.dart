@@ -90,6 +90,10 @@ Future<bool> writeSensitiveTextToClipboard(String text) async {
 /// path. The lazy-provider lifetime problem does not exist on iOS: the plugin
 /// calls the provider eagerly there, and the bytes are already in hand.
 ///
+/// The HTML goes through [stripHtmlSkin] first, so a paste takes the
+/// destination document's colours and fonts instead of the source page's. See
+/// the note in models/rich_body.dart for why, and why RTF does not.
+///
 /// Returns false when nothing native handled it; the caller then falls back to
 /// the framework clipboard, losing only the formatting.
 Future<bool> writeRichToClipboard(
@@ -97,7 +101,8 @@ Future<bool> writeRichToClipboard(
   RichBody rich, {
   bool sensitive = false,
 }) async {
-  final html = rich.html;
+  final stored = rich.html;
+  final html = stored == null ? null : stripHtmlSkin(stored);
   final rtf = rich.rtf;
   if (Platform.isWindows) {
     return win.writeRichToClipboard(

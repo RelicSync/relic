@@ -216,4 +216,108 @@ void main() {
       expect(kRelicRtf.ios!.decodingFormats, ['public.rtf']);
     });
   });
+
+  // Copying out of a dark-themed page used to paste as white text in black
+  // boxes: the browser publishes `color` and `background-color` on every span,
+  // and Word's default is to keep source formatting. Nothing was broken, but it
+  // is the wrong default for a clipboard manager, where you paste weeks later
+  // into a document you were not thinking about when you copied.
+  //
+  // So the skin goes on the way out and the structure stays.
+  group('stripHtmlSkin', () {
+    test('drops the source page colours and keeps the words', () {
+      const html = '<span style="color: #e6edf3; background-color: #0d1117">'
+          'The open-source clipboard manager.</span>';
+      final out = stripHtmlSkin(html);
+
+      expect(out, isNot(contains('background-color')));
+      expect(out, isNot(contains('#0d1117')));
+      expect(out, contains('The open-source clipboard manager.'));
+    });
+
+    test('a style attribute left with nothing goes away entirely', () {
+      final out = stripHtmlSkin('<p style="color:red">hi</p>');
+      expect(out, '<p>hi</p>',
+          reason: 'an empty style="" is litter, not a no-op');
+    });
+
+    test('keeps the declarations that carry meaning', () {
+      final out = stripHtmlSkin(
+          '<p style="font-weight: 700; color: red; text-align: center">x</p>');
+      expect(out, contains('font-weight: 700'));
+      expect(out, contains('text-align: center'));
+      expect(out, isNot(contains('color')));
+    });
+
+    test('a link survives with its href intact', () {
+      const html = '<a href="https://relic.space" style="color:#4493f8">'
+          'relic.space</a>';
+      final out = stripHtmlSkin(html);
+      expect(out, contains('href="https://relic.space"'));
+      expect(out, contains('relic.space</a>'));
+      expect(out, isNot(contains('#4493f8')));
+    });
+
+    test('structure tags are never touched', () {
+      const html = '<h2>Topics</h2><ul><li><b>a</b></li><li><i>b</i></li></ul>';
+      expect(stripHtmlSkin(html), html);
+    });
+
+    test('the pre-CSS attribute spellings go too', () {
+      final out = stripHtmlSkin(
+          '<table><tr><td bgcolor="#000"><font color="red">x</font>'
+          '</td></tr></table>');
+      expect(out, isNot(contains('bgcolor')));
+      expect(out, isNot(contains('"red"')));
+      expect(out, contains('<table>'));
+      expect(out, contains('x'));
+    });
+
+    test('a Word style block keeps its selectors and loses its colours', () {
+      // Word and Excel put cell styling in a <style> block rather than inline.
+      // The selectors have to survive or a pasted table loses its alignment and
+      // borders along with its background.
+      const html = '<style>td.x { color: #fff; text-align: right; '
+          'border: 1px solid }</style><table><tr><td class="x">1</td></tr>'
+          '</table>';
+      final out = stripHtmlSkin(html);
+
+      expect(out, contains('td.x {'), reason: 'the selector still applies');
+      expect(out, contains('text-align: right'));
+      expect(out, contains('border: 1px solid'));
+      expect(out, isNot(contains('#fff')));
+      expect(out, contains('class="x"'));
+    });
+
+    test('prose that talks about colour is left alone', () {
+      // The scrub only ever rewrites inside a tag. Copying a CSS snippet out of
+      // a docs page must not have its own text edited.
+      const html = '<code>body { color = red; background = black }</code>';
+      expect(stripHtmlSkin(html), html);
+    });
+
+    test('running it twice changes nothing the second time', () {
+      const html = '<div style="color:#111; margin:4px"><b>x</b></div>';
+      final once = stripHtmlSkin(html);
+      expect(stripHtmlSkin(once), once);
+    });
+
+    test('every *-color property goes, not just the obvious one', () {
+      // A real GitHub capture carried five different colour properties. The
+      // rule is the suffix, so nobody has to keep the list in step with CSS.
+      final out = stripHtmlSkin('<a style="text-decoration-color: #4493f8; '
+          'border-color: #30363d; text-decoration-line: underline">x</a>');
+      expect(out, contains('text-decoration-line: underline'));
+      expect(out, isNot(contains('#4493f8')));
+      expect(out, isNot(contains('#30363d')));
+    });
+
+    test('the shorthand forms go, not just the long ones', () {
+      final out = stripHtmlSkin(
+          '<p style="font: 12px Arial; background: #eee; padding: 2px">x</p>');
+      expect(out, contains('padding: 2px'));
+      expect(out, isNot(contains('Arial')));
+      expect(out, isNot(contains('#eee')));
+    });
+  });
 }
