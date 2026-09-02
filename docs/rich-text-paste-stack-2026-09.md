@@ -16,7 +16,7 @@ This doc is the handoff. Read §1 and §2, then go to your platform's section.
 | Platform | Rich capture | Rich paste | Paste stack | Built? |
 |---|---|---|---|---|
 | Windows | yes | yes, native Win32 | yes | yes, release build |
-| macOS | yes | yes, Swift bridge | yes | **never compiled** |
+| macOS | yes, verified | yes, Swift bridge, verified on the pasteboard | yes, verified without the AX grant | yes, debug build compiles + runs (2026-09-02) |
 | Linux | yes | yes, super_clipboard | yes, degraded on Wayland | yes, release build + runs |
 | Android | tile path, HTML only | yes, HTML only | n/a (desktop only) | yes, release AAB |
 | iOS | trigger paths, HTML only | yes, HTML + RTF | n/a (desktop only) | pending |
@@ -116,10 +116,11 @@ OLE's hidden window.
 
 ## 4. macOS
 
-**Status: the Swift has never been compiled.** This is the single most important
-item in this doc. `app/macos/Runner/Bridge/ClipboardBridge.swift` gained a
-`writeRich` case that was written on a Windows machine. Build it first, before
-anything else.
+**Status: built, runs, pasteboard-verified 2026-09-02** on Apple silicon,
+macOS 26, Flutter 3.44.9, against branch `e459b3b`. The Swift compiled first
+time; `flutter analyze` is clean; `flutter test` under a sandboxed
+`RELIC_DATA_DIR` is 797 pass, 20 skipped on a macOS host. What is left is the
+part only a person at a Mac can do: pasting into Pages, Notes and Word.
 
 The Dart side is `app/lib/platform/src/macos/clipboard_macos.dart` (`writeRich`),
 sending `text`, optional `html`, optional `rtf` as `FlutterStandardTypedData`,
@@ -134,18 +135,46 @@ Same reason as Windows for not using super_clipboard here: it does
 when Relic quits, and the `clearContents` would wipe the `org.nspasteboard.*`
 privacy markers.
 
-**To verify:**
-1. It compiles.
-2. Copy styled text from Pages or Safari, paste into Pages. Formatting survives.
-3. Copy into Notes. Check the text is not mojibake (that is the charset marker).
-4. Copy, quit Relic, paste.
-5. **Confirm ⌃⇧D and ⌃⇧B are actually unclaimed on macOS.** The comment at
-   `hotkeys.dart:196` records that ⌃⇧Q/W/E/Space/1-5 were verified. D and B were
-   picked on Windows and have NOT been checked on macOS. If either is taken,
-   `repo.failedHotkeys` will surface it in Settings, but check by hand too.
-6. Paste stack without the Accessibility grant: the chord cannot be injected,
-   so the item should land on the clipboard, the one-per-run notice should
-   appear, and the queue should still advance when you press ⌘V yourself.
+**Verified, by driving `NSPasteboard.general` from a small Swift tool and
+reading the sandbox `relics.db`:**
+
+1. Compiles. `flutter build macos --debug` succeeds with the `writeRich` case.
+2. Rich capture. A pasteboard carrying `public.rtf` + `public.html` +
+   `public.utf8-plain-text` lands as one row whose `rich` column holds the
+   HTML, the RTF (base64) and the fingerprint `h`.
+3. Rich paste. Quick-paste (⌃⇧1) of that row writes, in this declaration
+   order: `public.rtf`, `public.html` (with the charset marker prepended),
+   `public.utf8-plain-text`, then the `org.nspasteboard.ConcealedType` and
+   `TransientType` markers. Plain text is byte-identical to the stored
+   content; RTF and HTML are byte-identical to what was captured.
+4. Copy, quit Relic, paste. The content is real data on the pasteboard, not a
+   promise: after `relic_app` exits the types and bytes are all still there.
+5. ⌃⇧D and ⌃⇧B are unclaimed. Nothing in `com.apple.symbolichotkeys` binds
+   keycode 2 or 11 with control+shift, and both chords registered and fired.
+6. Paste stack without the Accessibility grant. Push twice via ⌃⇧D (it queues
+   what is on the clipboard, since the copy chord cannot be injected), then
+   ⌃⇧B three times: the pasteboard reads item one, then item two, then is
+   untouched on the third press. FIFO, consumed on the clipboard write, and an
+   empty stack writes nothing.
+
+**Not verified, needs a person:** Pages → Relic → Pages, Safari → Notes (the
+mojibake check), Word → Relic → Word, and the one-per-run "press ⌘V yourself"
+notice, which fires as a notification and was not observed from the shell.
+
+**Two traps for whoever tests by hand on Jordan's Mac:**
+
+- The onboarding window of a sandboxed instance pops up on first run. If you
+  click through "Continue with Google" the sandbox binds to the real account
+  and syncs every test capture into the real vault. Run the sandbox, close the
+  onboarding, and if it does bind, delete `config.json` from the sandbox dir
+  to detach it. Test rows that did sync can be tombstoned with
+  `relic rm --allow-delete <uid>` from the app's bundled CLI.
+- Parsec mirrors the clipboard between Jordan's Mac and the Windows box, and
+  the Windows Relic captures every plain-text write the Mac makes (device
+  "Desktop"). Every pasteboard test here shows up in the vault twice. Writes
+  that carry the `org.nspasteboard.ConcealedType` marker are skipped by the
+  Mac watcher but still mirrored, so the Windows copy needs cleaning either
+  way.
 
 **While you are in there,** two pre-existing bugs surfaced by this work, both
 worth their own commits rather than folding into this feature:
@@ -352,11 +381,11 @@ Nobody has filled this in. It is the actual acceptance test.
 | Browser → Relic → Word or Pages (HTML) | | | | | |
 | Excel → Relic → Excel | | | | n/a | n/a |
 | Relic → plain text editor | | | | | |
-| Copy, quit Relic, paste | | | n/a | n/a | n/a |
+| Copy, quit Relic, paste | | yes (pasteboard) | n/a | n/a | n/a |
 | Secret → any target: plain only, marker set | | | | | |
 | Desktop rich capture → phone paste into Gmail | n/a | n/a | n/a | | |
 | Phone trigger capture in the browser → paste into Gmail | n/a | n/a | n/a | | |
-| Stack of 3 drained into a form | | | | n/a | n/a |
+| Stack of 3 drained into a form | | 2 drained, no AX grant | | n/a | n/a |
 
 ---
 
