@@ -221,32 +221,50 @@ class HotkeyBinding {
     HotkeyBinding(ctrl: true, shift: true, usbUsage: 0x00070022, label: '5'),
   ];
 
-  // Paste stack: Ctrl+Shift+D adds what you copied, Ctrl+Shift+B pastes the
-  // next one. Both sit one key from the Q/W/E row, so all five actions stay
-  // under the left hand with no reach.
+  // Paste stack: Ctrl+Alt+D adds what you copied, Ctrl+Alt+B pastes the next
+  // one. Same two letters as the Ctrl+Shift pair these replaced, so the muscle
+  // memory survives, on the modifier that is actually free.
   //
   // A global grab does not FAIL on a contested chord, it silently takes the key
-  // from every app, so the bar here is "genuinely low traffic", not "free". D
-  // is duplicate-line in VS Code and little else; B is a VS Code build task and
-  // is not a browser or JetBrains primary. Ruled out: Ctrl+Shift+F (Find in
-  // Files in PyCharm and VS Code), Ctrl+Shift+V ([legacyHistory], and the Linux
-  // terminal paste chord we ourselves send), Ctrl+Shift+R/T (browser reload and
-  // reopen-tab), Ctrl+Shift+A (JetBrains Find Action).
+  // from every app, so the bar here is "genuinely low traffic", not "free".
+  // **Ctrl+Shift+D and Ctrl+Shift+B are both Chrome**: bookmark every open tab,
+  // and toggle the bookmarks bar. Picking them would have quietly broken both
+  // for every Chrome user on the machine, which is exactly the failure this
+  // paragraph exists to prevent and which the first pass walked into anyway.
+  // Also ruled out on Ctrl+Shift: F (Find in Files in PyCharm and VS Code), V
+  // ([legacyHistory], and the Linux terminal paste chord we ourselves send),
+  // R and T (browser reload and reopen-tab), A (JetBrains Find Action).
+  //
+  // Ctrl+Alt is where the pre-July-2026 defaults lived ([legacyCapture] was
+  // Ctrl+Alt+C), so it is proven ground on Windows. Two known costs, both
+  // accepted: Ctrl+Alt is AltGr on international layouts, so on a non-US
+  // keyboard these can collide with a character key, and some Linux desktops
+  // bind Ctrl+Alt+D to show-desktop. Either way the grab is refused rather than
+  // stolen, and a refusal surfaces in `repo.failedHotkeys` in Settings.
   //
   // Registered only while feature_paste_stack is on, so an opted-out user gives
   // up nothing. HID usage page 0x07: 'b'=0x05, 'd'=0x07.
   static const defaultStackPush =
-      HotkeyBinding(ctrl: true, shift: true, usbUsage: 0x00070007, label: 'D'); // Ctrl+Shift+D
+      HotkeyBinding(ctrl: true, alt: true, usbUsage: 0x00070007, label: 'D'); // Ctrl+Alt+D
   static const defaultStackPop =
-      HotkeyBinding(ctrl: true, shift: true, usbUsage: 0x00070005, label: 'B'); // Ctrl+Shift+B
+      HotkeyBinding(ctrl: true, alt: true, usbUsage: 0x00070005, label: 'B'); // Ctrl+Alt+B
 
   // --- pre-July-2026 defaults, kept so _loadPrefs can upgrade installs that
   // never customized: a stored binding equal to the OLD default counts as
   // "never changed" and adopts the new one.
+  //
+  // The two stack entries are much younger than the rest. The feature shipped
+  // with the Chrome chords above and they were caught in testing, so the window
+  // is small, but anyone who ran that build has them written into prefs.json
+  // and would otherwise keep stealing Chrome's bookmark keys for ever.
   static const legacyHistory =
       HotkeyBinding(ctrl: true, shift: true, usbUsage: 0x00070019, label: 'V'); // Ctrl+Shift+V
   static const legacyCapture =
       HotkeyBinding(ctrl: true, alt: true, usbUsage: 0x00070006, label: 'C'); // Ctrl+Alt+C
   static const legacyPromote =
       HotkeyBinding(ctrl: true, alt: true, usbUsage: 0x00070013, label: 'P'); // Ctrl+Alt+P
+  static const legacyStackPush =
+      HotkeyBinding(ctrl: true, shift: true, usbUsage: 0x00070007, label: 'D'); // Ctrl+Shift+D
+  static const legacyStackPop =
+      HotkeyBinding(ctrl: true, shift: true, usbUsage: 0x00070005, label: 'B'); // Ctrl+Shift+B
 }

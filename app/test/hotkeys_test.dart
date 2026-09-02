@@ -185,22 +185,36 @@ void main() {
   });
 
   group('paste stack chords', () {
-    test('are Ctrl+Shift+D (add) and Ctrl+Shift+B (paste next)', () {
+    test('are Ctrl+Alt+D (add) and Ctrl+Alt+B (paste next)', () {
       const push = HotkeyBinding.defaultStackPush;
       expect(push.ctrl, isTrue);
-      expect(push.shift, isTrue);
-      expect(push.alt, isFalse);
+      expect(push.alt, isTrue);
+      expect(push.shift, isFalse);
       expect(push.win, isFalse);
       expect(push.usbUsage, 0x00070007); // 'd'
       expect(push.label, 'D');
 
       const pop = HotkeyBinding.defaultStackPop;
       expect(pop.ctrl, isTrue);
-      expect(pop.shift, isTrue);
-      expect(pop.alt, isFalse);
+      expect(pop.alt, isTrue);
+      expect(pop.shift, isFalse);
       expect(pop.win, isFalse);
       expect(pop.usbUsage, 0x00070005); // 'b'
       expect(pop.label, 'B');
+    });
+
+    test('are never the Chrome bookmark chords', () {
+      // Ctrl+Shift+D bookmarks every open tab and Ctrl+Shift+B toggles the
+      // bookmarks bar. The first version of this feature shipped on exactly
+      // those two, which a global grab would have taken from Chrome silently
+      // and permanently. This is the regression, named.
+      for (final b in [
+        HotkeyBinding.defaultStackPush,
+        HotkeyBinding.defaultStackPop,
+      ]) {
+        expect(b.ctrl && b.shift, isFalse,
+            reason: 'Ctrl+Shift+D and Ctrl+Shift+B belong to Chrome');
+      }
     });
 
     test('avoid the chords that were deliberately ruled out', () {
@@ -218,6 +232,27 @@ void main() {
         expect(b.usbUsage, isNot(0x00070017), reason: 'T reopens a tab');
         expect(b.usbUsage, isNot(0x00070004), reason: 'A is Find Action');
       }
+    });
+
+    test('the retired chords are kept, and are not the new ones', () {
+      // _loadPrefs upgrades a stored binding that still equals the old default,
+      // so these two constants are what makes an install that ran the first
+      // build stop stealing Chrome's keys. Deleting them silently strands it.
+      expect(HotkeyBinding.legacyStackPush.ctrl, isTrue);
+      expect(HotkeyBinding.legacyStackPush.shift, isTrue);
+      expect(HotkeyBinding.legacyStackPush.usbUsage, 0x00070007);
+      expect(HotkeyBinding.legacyStackPop.ctrl, isTrue);
+      expect(HotkeyBinding.legacyStackPop.shift, isTrue);
+      expect(HotkeyBinding.legacyStackPop.usbUsage, 0x00070005);
+
+      expect(
+          HotkeyBinding.defaultStackPush
+              .sameChordAs(HotkeyBinding.legacyStackPush),
+          isFalse);
+      expect(
+          HotkeyBinding.defaultStackPop
+              .sameChordAs(HotkeyBinding.legacyStackPop),
+          isFalse);
     });
 
     test('both round-trip through JSON', () {

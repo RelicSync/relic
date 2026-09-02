@@ -10,6 +10,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:relic_app/data/hotkeys.dart';
 import 'package:relic_app/data/local_desk_repo.dart';
 import 'package:relic_app/models/relic.dart';
 
@@ -186,5 +187,47 @@ void main() {
     expect(b.pasteStack, isEmpty);
     expect(b.pasteStackOn, isTrue, reason: 'but the FLAG is remembered');
     b.setPasteStack(false);
+  });
+
+  // The feature first shipped on Ctrl+Shift+D and Ctrl+Shift+B, which are
+  // Chrome's "bookmark all tabs" and "toggle the bookmarks bar". A global grab
+  // takes a chord from every app without failing, so anyone who ran that build
+  // has Chrome's keys written into their prefs and would keep them for ever.
+  test('an install still holding the Chrome chords is moved off them',
+      () async {
+    if (guarded) {
+      markTestSkipped('RELIC_DATA_DIR sandbox not set');
+      return;
+    }
+    final first = await repo();
+    first.setStackPushHotkey(HotkeyBinding.legacyStackPush);
+    first.setStackPopHotkey(HotkeyBinding.legacyStackPop);
+
+    final reopened = await repo(); // a later launch reads the same prefs
+
+    expect(
+        reopened.stackPushHotkey.sameChordAs(HotkeyBinding.defaultStackPush),
+        isTrue,
+        reason: 'Ctrl+Shift+D was never a choice, so it is not a preference');
+    expect(reopened.stackPopHotkey.sameChordAs(HotkeyBinding.defaultStackPop),
+        isTrue);
+  });
+
+  test('a chord the user actually picked is left alone', () async {
+    if (guarded) {
+      markTestSkipped('RELIC_DATA_DIR sandbox not set');
+      return;
+    }
+    const mine = HotkeyBinding(
+        ctrl: true, alt: true, usbUsage: 0x0007000E, label: 'K'); // Ctrl+Alt+K
+    final first = await repo();
+    first.setStackPushHotkey(mine);
+
+    final reopened = await repo();
+
+    expect(reopened.stackPushHotkey.sameChordAs(mine), isTrue,
+        reason: 'the upgrade only ever replaces the exact old default');
+    // Put the default back so a reused sandbox does not leak into later runs.
+    reopened.setStackPushHotkey(HotkeyBinding.defaultStackPush);
   });
 }

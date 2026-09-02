@@ -588,7 +588,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   // device. On by default (registered like the other hotkeys), each editable.
   List<HotkeyBinding> _hkQuickPaste =
       List<HotkeyBinding>.from(HotkeyBinding.defaultQuickPaste);
-  // Paste stack (Ctrl+Shift+D / Ctrl+Shift+B). Registered ONLY while
+  // Paste stack (Ctrl+Alt+D / Ctrl+Alt+B). Registered ONLY while
   // [pasteStackOn], so an opted-out user keeps both chords.
   HotkeyBinding _hkStackPush = HotkeyBinding.defaultStackPush;
   HotkeyBinding _hkStackPop = HotkeyBinding.defaultStackPop;
@@ -1577,10 +1577,13 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
                     : null) ??
                 HotkeyBinding.defaultQuickPaste[i],
         ];
-        _hkStackPush = HotkeyBinding.fromJson(j['hk_stack_push']) ??
-            HotkeyBinding.defaultStackPush;
-        _hkStackPop = HotkeyBinding.fromJson(j['hk_stack_pop']) ??
-            HotkeyBinding.defaultStackPop;
+        // Same upgrade as the Q/W/E row: an install that ran the first paste
+        // stack build has Ctrl+Shift+D/B written here, and those are Chrome's
+        // bookmark chords. Anyone who never rebound them moves to Ctrl+Alt.
+        _hkStackPush = upgrade(j['hk_stack_push'],
+            HotkeyBinding.legacyStackPush, HotkeyBinding.defaultStackPush);
+        _hkStackPop = upgrade(j['hk_stack_pop'], HotkeyBinding.legacyStackPop,
+            HotkeyBinding.defaultStackPop);
         // Mini picker hotkey (new): no legacy to upgrade, just the default.
         _hkMini =
             HotkeyBinding.fromJson(j['hk_mini']) ?? HotkeyBinding.defaultMini;

@@ -138,7 +138,7 @@ OLE's hidden window.
 5. Copy a card number or an API key. Confirm no formatting is stored (the row
    shows masked) and that the Windows clipboard-history flyout does not show it.
 6. Fill a stack of three from the picker, dismiss it, drain into a spreadsheet
-   with Ctrl+Shift+B three times.
+   with Ctrl+Alt+B three times.
 
 ---
 
@@ -179,11 +179,16 @@ reading the sandbox `relics.db`:**
    promise: after `relic_app` exits the types and bytes are all still there.
 5. ⌃⇧D and ⌃⇧B are unclaimed. Nothing in `com.apple.symbolichotkeys` binds
    keycode 2 or 11 with control+shift, and both chords registered and fired.
+   **This result is now stale**: the chords moved to ⌃⌥D and ⌃⌥B on 2026-09-02
+   because Ctrl+Shift+D and Ctrl+Shift+B are Chrome's bookmark keys on every
+   platform, and a global grab takes a chord silently. The same check needs
+   redoing for control+option on keycodes 2 and 11.
 6. Paste stack without the Accessibility grant. Push twice via ⌃⇧D (it queues
    what is on the clipboard, since the copy chord cannot be injected), then
    ⌃⇧B three times: the pasteboard reads item one, then item two, then is
    untouched on the third press. FIFO, consumed on the clipboard write, and an
-   empty stack writes nothing.
+   empty stack writes nothing. The chords are ⌃⌥D and ⌃⌥B now; the behaviour
+   this pins is unchanged.
 
 **Not verified, needs a person:** Pages → Relic → Pages, Safari → Notes (the
 mojibake check), Word → Relic → Word, and the one-per-run "press ⌘V yourself"
@@ -244,8 +249,10 @@ track from the port plan; the QA VM was not involved.
 Confirmed by reading rather than running, so listed as evidence and not as a
 test: `kRelicRtf` really does publish `text/rtf` and `application/rtf` together
 on the fallback codec; D is `0x00070007` and B is `0x00070005` and both are in
-`_keysymNames`, so `linuxAccelerator` yields `<Control><Shift>d` and
-`<Control><Shift>b`; `_pasteRelic` returns off the clipboard write alone, so the
+`_keysymNames`, so `linuxAccelerator` yields `<Control><Alt>d` and
+`<Control><Alt>b` (this read was done against the old `<Control><Shift>` chords
+and the only thing that changed is the modifier); `_pasteRelic` returns off the
+clipboard write alone, so the
 queue advances on Wayland whether or not injection fires, behind a one-per-run
 notice; `_readRichFlavors` is not platform-gated, so Linux gets rich capture
 through the ordinary super_clipboard reader; and `foregroundAppKey()` has a real
@@ -281,8 +288,11 @@ codec, because LibreOffice and GTK look for different ones.
 5. Hotkeys. Relic owns `XGrabKey` itself in `linux/runner/hotkeys.cc` because
    both hotkey libraries are broken here. D (`0x00070007`) and B (`0x00070005`)
    are already in `_keysymNames`, so `linuxAccelerator` produces
-   `<Control><Shift>d` and `<Control><Shift>b`, but the actual grab needs
-   testing. A refused grab surfaces in `repo.failedHotkeys`.
+   `<Control><Alt>d` and `<Control><Alt>b`, but the actual grab needs testing.
+   A refused grab surfaces in `repo.failedHotkeys`. **Linux is the platform most
+   likely to refuse these**: some desktops bind Ctrl+Alt+D to show-desktop. If
+   the grab is refused, say so rather than working around it, because the chord
+   is a cross-platform default and changing it again is a shared decision.
 6. Terminal paste. The pop path reads `foregroundAppKey()` and sends
    Ctrl+Shift+V into terminals. Confirm the stack drains correctly into one.
 
