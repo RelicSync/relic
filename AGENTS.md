@@ -52,7 +52,11 @@ winget install --id Relic.Relic
 
 ### macOS
 
-Download the signed Apple Silicon build from
+```sh
+brew install --cask RelicSync/relic/relic
+```
+
+Or download the signed Apple Silicon build from
 <https://relic.space/download/macos>.
 
 ### Linux

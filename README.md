@@ -38,7 +38,7 @@ https://github.com/user-attachments/assets/de173215-3d6e-495c-981f-de611491831c
 | Platform | How |
 |---|---|
 | **Windows** | `winget install --id Relic.Relic` — or the [signed installer](https://github.com/RelicSync/relic/releases/latest), or Scoop (below) |
-| **macOS** | [signed download](https://relic.space/download/macos) (Apple Silicon) |
+| **macOS** | `brew install --cask RelicSync/relic/relic`, or the [signed download](https://relic.space/download/macos) (Apple Silicon) |
 | **Linux** | [tarball](https://relic.space/download/linux) or [AppImage](https://relic.space/download/linux/appimage) (x86_64) — built for X11, see [`docs/linux.md`](./docs/linux.md) |
 | **Android** | [Google Play](https://play.google.com/store/apps/details?id=relic.space.app) |
 | **iPhone** | [App Store](https://apps.apple.com/us/app/relic-clipboard-vault/id6800556025) |
