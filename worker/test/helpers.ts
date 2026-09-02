@@ -9,7 +9,8 @@ const DDL = [
      created_at INTEGER NOT NULL DEFAULT (unixepoch()))`,
   `CREATE TABLE IF NOT EXISTS accounts (
      account_id TEXT PRIMARY KEY, email TEXT,
-     tier TEXT NOT NULL DEFAULT 'free', created_at INTEGER NOT NULL DEFAULT (unixepoch()))`,
+     tier TEXT NOT NULL DEFAULT 'free', created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+     min_valid_iat INTEGER NOT NULL DEFAULT 0)`,
   `CREATE TABLE IF NOT EXISTS subscriptions (
      account_id TEXT PRIMARY KEY, stripe_customer_id TEXT, stripe_subscription_id TEXT,
      tier TEXT NOT NULL DEFAULT 'free', status TEXT NOT NULL DEFAULT 'none',
@@ -49,12 +50,17 @@ const DDL = [
   `CREATE TABLE IF NOT EXISTS account_usage (
      account_id TEXT PRIMARY KEY, bytes_used INTEGER NOT NULL,
      vault_count INTEGER NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS mpu_state (
+     account_id TEXT NOT NULL, blob_id TEXT NOT NULL, upload_id TEXT NOT NULL,
+     declared_size INTEGER NOT NULL,
+     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+     PRIMARY KEY (account_id, blob_id, upload_id))`,
 ];
 
 const TABLES = [
   "tokens", "accounts", "subscriptions", "billing_events",
   "devices", "relic_meta", "ai_meta", "tombstones", "shares", "sweep_state",
-  "account_links", "account_usage",
+  "account_links", "account_usage", "mpu_state",
 ];
 
 export async function setupSchema(db: D1Database): Promise<void> {
@@ -78,4 +84,27 @@ export async function hmacHex(secret: string, msg: string): Promise<string> {
   );
   const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(msg));
   return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// --- Supabase (GoTrue) token minting ----------------------------------------
+// verifySupabaseJwt prefers SUPABASE_JWT_SECRET over the JWKS endpoint, so a
+// known HS256 secret lets tests take the real Supabase path with no network.
+// Lived in three test files as copy-paste; one definition now.
+export const HS_SECRET = "test-secret";
+
+const b64url = (bytes: Uint8Array): string =>
+  btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+// deno-lint-ignore no-explicit-any
+export async function mintJwt(claims: Record<string, any>): Promise<string> {
+  const enc = new TextEncoder();
+  const head = b64url(enc.encode(JSON.stringify({ alg: "HS256", typ: "JWT" })));
+  const body = b64url(enc.encode(JSON.stringify({
+    aud: "authenticated", exp: Math.floor(Date.now() / 1000) + 3600, ...claims,
+  })));
+  const key = await crypto.subtle.importKey(
+    "raw", enc.encode(HS_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+  );
+  const mac = await crypto.subtle.sign("HMAC", key, enc.encode(`${head}.${body}`));
+  return `${head}.${body}.${b64url(new Uint8Array(mac))}`;
 }

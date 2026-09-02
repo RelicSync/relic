@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src/index";
 import { applyStripeEvent, graceSweep } from "../src/stripe";
-import { setupSchema, sha256Hex } from "./helpers";
+import { HS_SECRET, mintJwt, setupSchema, sha256Hex } from "./helpers";
 
 // deno-lint-ignore no-explicit-any
 const E = env as any;
@@ -35,28 +35,10 @@ function call(
   );
 }
 
-// HS256 JWT minting (mirrors auth.test) so worker.fetch exercises the Supabase
-// path with a known secret — no JWKS / network.
-const HS_SECRET = "test-secret";
+// Supabase path with a known HS256 secret — no JWKS, no network. mintJwt and
+// HS_SECRET are shared with auth.test / devices.test via helpers.
 const supaEnv = (extra: Record<string, unknown> = {}) =>
   ({ ...E, SUPABASE_URL: undefined, SUPABASE_JWT_SECRET: HS_SECRET, ...extra });
-
-const b64url = (bytes: Uint8Array): string =>
-  btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-
-// deno-lint-ignore no-explicit-any
-async function mintJwt(claims: Record<string, any>): Promise<string> {
-  const enc = new TextEncoder();
-  const head = b64url(enc.encode(JSON.stringify({ alg: "HS256", typ: "JWT" })));
-  const body = b64url(enc.encode(JSON.stringify({
-    aud: "authenticated", exp: Math.floor(Date.now() / 1000) + 3600, ...claims,
-  })));
-  const key = await crypto.subtle.importKey(
-    "raw", enc.encode(HS_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
-  );
-  const mac = await crypto.subtle.sign("HMAC", key, enc.encode(`${head}.${body}`));
-  return `${head}.${body}.${b64url(new Uint8Array(mac))}`;
-}
 
 function envelope(uid: string, updated = 1000) {
   return { v: 1, uid, created_at: 1000, updated_at: updated, byte_size: 10, promoted: false, n: "n", ct: "c" };
@@ -64,6 +46,91 @@ function envelope(uid: string, updated = 1000) {
 
 beforeEach(async () => {
   await setupSchema(E.DB);
+});
+
+// --- (0) data-plane rate limiting (RL_SYNC) ---------------------------------
+// The suite provides no RL_* bindings (see vitest.config.mts), so limiters are
+// injected per test rather than configured. rateLimit() fails open on an absent
+// binding, which is exactly why the default path below still returns 200.
+describe("RL_SYNC data-plane gate", () => {
+  const blocked = { limit: async () => ({ success: false }) };
+  const allowed = { limit: async () => ({ success: true }) };
+
+  // Every path the gate is supposed to cover, one request each.
+  const covered: Array<[string, string]> = [
+    ["GET", "/relics"],
+    ["GET", "/tombstones"],
+    ["GET", "/keyparams"],
+    ["PUT", "/keyparams"],
+    ["PUT", "/relic/u1"],
+    ["DELETE", "/relic/u1"],
+    ["POST", "/blob?id=blob-0000-test"],
+    ["GET", "/blob/blob-0000-test"],
+    ["POST", "/blob/mpu?id=blob-0000-test"],
+    ["GET", "/ai"],
+    ["POST", "/ai/claim"],
+    ["PUT", "/ai/u1"],
+  ];
+
+  it("429s every data-plane route when the limiter says no", async () => {
+    await seedToken("tokRL", "acctRL");
+    for (const [method, path] of covered) {
+      const res = await call("tokRL", method, path, { env: { ...E, RL_SYNC: blocked } });
+      expect([method, path, res.status]).toEqual([method, path, 429]);
+      expect((await res.json()).error).toBe("rate_limited");
+    }
+  });
+
+  it("lets the same routes through when the limiter says yes", async () => {
+    await seedToken("tokRL", "acctRL");
+    const res = await call("tokRL", "GET", "/relics", { env: { ...E, RL_SYNC: allowed } });
+    expect(res.status).toBe(200);
+  });
+
+  it("fails open when the binding is missing (self-host, local dev, tests)", async () => {
+    await seedToken("tokRL", "acctRL");
+    const res = await call("tokRL", "GET", "/relics");
+    expect(res.status).toBe(200);
+  });
+
+  it("buckets per account, so one abuser cannot 429 anyone else", async () => {
+    await seedToken("tokRL", "acctRL");
+    await seedToken("tokQuiet", "acctQuiet");
+    const keys: string[] = [];
+    const recording = {
+      limit: async ({ key }: { key: string }) => {
+        keys.push(key);
+        return { success: true };
+      },
+    };
+    await call("tokRL", "GET", "/relics", { env: { ...E, RL_SYNC: recording } });
+    await call("tokQuiet", "GET", "/relics", { env: { ...E, RL_SYNC: recording } });
+    expect(keys).toEqual(["acctRL", "acctQuiet"]);
+  });
+
+  it("leaves the control plane and the socket alone", async () => {
+    await seedToken("tokRL", "acctRL");
+    const env2 = { ...E, RL_SYNC: blocked };
+    // Account/device/share routes have their own limiters and must not be
+    // caught by this one...
+    expect((await call("tokRL", "GET", "/account", { env: env2 })).status).toBe(200);
+    expect((await call("tokRL", "GET", "/account/devices", { env: env2 })).status).toBe(200);
+    // ...and /sync/socket is governed by MAX_SOCKETS in the DO, not here. With
+    // no SYNC binding that is a 501, which is still proof the gate did not fire.
+    const sock = await worker.fetch(
+      new Request("https://x/sync/socket", {
+        headers: { Authorization: "Bearer tokRL", Upgrade: "websocket" },
+      }),
+      env2 as never,
+    );
+    expect(sock.status).toBe(501);
+  });
+
+  it("does not gate the public pre-auth routes", async () => {
+    const env2 = { ...E, RL_SYNC: blocked };
+    const health = await worker.fetch(new Request("https://x/health"), env2 as never);
+    expect(health.status).toBe(200);
+  });
 });
 
 // --- (1) device rename ------------------------------------------------------

@@ -1,0 +1,11 @@
+# Keeps the SHA-pinned GitHub Actions from rotting. Every `uses:` in
+# .github/workflows/ is pinned to a full commit SHA (supply-chain hardening:
+# a tag can be moved, a SHA cannot), which means nothing updates on its own.
+# Dependabot opens a monthly PR bumping each pin to the newest release, with
+# the trailing version comment rewritten to match.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

@@ -1,7 +1,14 @@
 ﻿import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { ORPHAN_MIN_AGE_S, sweepOrphanBlobs, sweepTombstones, TOMBSTONE_TTL_DAYS } from "../src/sweep";
+import {
+  MPU_MIN_AGE_S,
+  ORPHAN_MIN_AGE_S,
+  sweepAbandonedMpus,
+  sweepOrphanBlobs,
+  sweepTombstones,
+  TOMBSTONE_TTL_DAYS,
+} from "../src/sweep";
 import { blobR2Key } from "../src/blob";
 import worker from "../src/index";
 import { setupSchema } from "./helpers";
@@ -84,6 +91,61 @@ describe("tombstone GC", () => {
     expect(await sweepTombstones(E, NOW)).toBe(1);
     const left = await E.DB.prepare("SELECT uid FROM tombstones").all();
     expect(left.results.map((r: { uid: string }) => r.uid)).toEqual(["new"]);
+  });
+});
+
+describe("abandoned-MPU sweep", () => {
+  // R2's list() never returns in-flight multipart parts, so mpu_state is the
+  // only handle this sweep has. Rows are seeded directly: what is under test is
+  // the age window and the row lifecycle, not R2's own abort.
+  async function seedMpu(blobId: string, uploadId: string, createdAt: number) {
+    await E.DB.prepare(
+      `INSERT INTO mpu_state (account_id, blob_id, upload_id, declared_size, created_at)
+       VALUES ('A', ?1, ?2, 1000, ?3)`,
+    ).bind(blobId, uploadId, createdAt).run();
+  }
+
+  const rowCount = async (): Promise<number> => {
+    const r = await E.DB.prepare("SELECT COUNT(*) AS n FROM mpu_state").first();
+    return r.n as number;
+  };
+
+  it("clears rows past the age window and keeps fresh ones", async () => {
+    await seedMpu("blob-old-0001", "up-old", NOW - MPU_MIN_AGE_S - 60);
+    await seedMpu("blob-new-0001", "up-new", NOW - 60);
+
+    expect(await sweepAbandonedMpus(E, NOW)).toBe(1);
+    const left = await E.DB.prepare("SELECT upload_id FROM mpu_state").all();
+    expect(left.results.map((r: { upload_id: string }) => r.upload_id)).toEqual(["up-new"]);
+  });
+
+  it("drops a row even when R2 refuses the abort", async () => {
+    // The upload id is fiction, so the abort throws. The row still has to go,
+    // or the sweep would retry it every six hours forever.
+    await seedMpu("blob-bogus-001", "not-a-real-upload", NOW - MPU_MIN_AGE_S - 60);
+    expect(await sweepAbandonedMpus(E, NOW)).toBe(1);
+    expect(await rowCount()).toBe(0);
+  });
+
+  it("is bounded to 100 rows per run", async () => {
+    const stmts = [];
+    for (let i = 0; i < 105; i++) {
+      stmts.push(
+        E.DB.prepare(
+          `INSERT INTO mpu_state (account_id, blob_id, upload_id, declared_size, created_at)
+           VALUES ('A', ?1, ?2, 10, ?3)`,
+        ).bind(`blob-bulk-${i}`, `up-${i}`, NOW - MPU_MIN_AGE_S - 60),
+      );
+    }
+    await E.DB.batch(stmts);
+    expect(await sweepAbandonedMpus(E, NOW)).toBe(100);
+    expect(await rowCount()).toBe(5);
+  });
+
+  it("the janitor cron runs it", async () => {
+    await seedMpu("blob-cron-001", "up-cron", NOW - MPU_MIN_AGE_S - 60);
+    await worker.scheduled({} as ScheduledController, E);
+    expect(await rowCount()).toBe(0);
   });
 });
 

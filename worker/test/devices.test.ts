@@ -1,8 +1,8 @@
 import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src/index";
-import { setupSchema, sha256Hex } from "./helpers";
+import { HS_SECRET, mintJwt, setupSchema, sha256Hex } from "./helpers";
 
 // deno-lint-ignore no-explicit-any
 const E = env as any;
@@ -18,7 +18,12 @@ function call(
   token: string,
   method: string,
   path: string,
-  opts: { body?: unknown; device?: string; appVersion?: string } = {},
+  opts: {
+    body?: unknown;
+    device?: string;
+    appVersion?: string;
+    env?: Record<string, unknown>; // override bindings (e.g. the Supabase path)
+  } = {},
 ) {
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
   if (opts.body !== undefined) headers["Content-Type"] = "application/json";
@@ -30,7 +35,7 @@ function call(
       headers,
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     }),
-    E,
+    opts.env ?? E,
   );
 }
 
@@ -149,5 +154,120 @@ describe("device last-seen touch", () => {
     const row = await deviceRow("acctT4", "dt4");
     expect(row.last_seen_at).toBe(stale);
     expect(row.app_version).toBeNull();
+  });
+});
+
+// --- removing a device is a real revocation --------------------------------
+// The old behaviour only parked the device id in KV, and that guard runs solely
+// when the client volunteers X-Relic-Device — drop the header and keep full
+// access. Removal now goes to the IdP instead, because the refresh token on the
+// removed device is the thing that would mint it a new access token an hour
+// later. GoTrue exposes no per-session revocation (POST /logout authenticates as
+// the user; the /admin surface has no session route at all), so this is
+// necessarily account-wide.
+describe("device removal revokes IdP sessions", () => {
+  const ISS = "https://auth.test/auth/v1";
+  const supaEnv = (extra: Record<string, unknown> = {}) => ({
+    ...E,
+    SUPABASE_URL: "https://auth.test",
+    SUPABASE_JWT_SECRET: HS_SECRET, // verify locally; no JWKS fetch
+    SUPABASE_ANON_KEY: "sb_publishable_test", // scan-ok: fake key in a test
+    ...extra,
+  });
+
+  // Capture what the worker sends to GoTrue, and control what it hears back.
+  function stubGoTrue(status: number) {
+    const seen: { url: string; method?: string; headers: Record<string, string> }[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation((async (input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({
+        url: String(input),
+        method: init?.method,
+        headers: Object.fromEntries(new Headers(init?.headers).entries()),
+      });
+      return new Response(null, { status });
+    }) as typeof fetch);
+    return seen;
+  }
+
+  const watermark = async (account: string) =>
+    (await E.DB.prepare("SELECT min_valid_iat AS m FROM accounts WHERE account_id = ?1")
+      .bind(account).first<{ m: number }>())?.m;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("calls GoTrue's global logout and stamps the watermark", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const jwt = await mintJwt({ sub: "rv-ok", iat: now - 10, iss: ISS });
+    await call(jwt, "POST", "/account/devices", { body: { device_id: "d1" }, env: supaEnv() });
+    const seen = stubGoTrue(204); // GoTrue's documented success
+
+    const r = await call(jwt, "DELETE", "/account/devices/d1", { env: supaEnv() });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ ok: true, sessions_revoked: true });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].url).toBe("https://auth.test/auth/v1/logout?scope=global");
+    expect(seen[0].method).toBe("POST");
+    // The CALLER's token, not the service-role key: /logout authenticates as
+    // the user, so the admin key cannot reach it.
+    expect(seen[0].headers.authorization).toBe(`Bearer ${jwt}`);
+    expect(seen[0].headers.apikey).toBe("sb_publishable_test"); // scan-ok: fake key in a test
+    expect(await watermark("rv-ok")).toBeGreaterThanOrEqual(now);
+    expect((await deviceRow("rv-ok", "d1"))?.revoked_at).not.toBeNull();
+  });
+
+  // The two halves are coupled deliberately. A watermark whose refresh tokens
+  // are still alive is worse than none: it 401s every honest device for an hour
+  // while the removed one quietly refreshes back in.
+  it("does NOT stamp the watermark when GoTrue refuses", async () => {
+    const jwt = await mintJwt({ sub: "rv-fail", iat: Math.floor(Date.now() / 1000) - 10, iss: ISS });
+    await call(jwt, "POST", "/account/devices", { body: { device_id: "d1" }, env: supaEnv() });
+    stubGoTrue(500);
+
+    const r = await call(jwt, "DELETE", "/account/devices/d1", { env: supaEnv() });
+    expect(r.status).toBe(200); // removal still succeeds
+    expect(await r.json()).toMatchObject({ ok: true, sessions_revoked: false });
+    expect(await watermark("rv-fail")).toBe(0);
+    // Falls back to exactly what shipped before: the device row is revoked.
+    expect((await deviceRow("rv-fail", "d1"))?.revoked_at).not.toBeNull();
+  });
+
+  // Legacy device-token auth and self-host have no IdP session to revoke.
+  it("skips the IdP entirely for a legacy device token", async () => {
+    await seedToken("legacy", "rv-legacy");
+    await call("legacy", "POST", "/account/devices", { body: { device_id: "d1" } });
+    const seen = stubGoTrue(204);
+
+    const r = await call("legacy", "DELETE", "/account/devices/d1");
+    expect(await r.json()).toMatchObject({ ok: true, sessions_revoked: false });
+    expect(seen).toHaveLength(0);
+    // No accounts row is conjured either. The stamp is a plain UPDATE for
+    // exactly this reason: an upsert would create one defaulting to tier
+    // 'free' and, through COALESCE(a.tier, t.tier), downgrade this token.
+    expect(await watermark("rv-legacy")).toBeUndefined();
+    expect((await deviceRow("rv-legacy", "d1"))?.revoked_at).not.toBeNull();
+  });
+
+  // The point of the whole change: after a removal the old bearer is dead
+  // immediately, WITHOUT the client having to send X-Relic-Device.
+  it("kills the pre-removal bearer at once, and only that one", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const old = await mintJwt({ sub: "rv-e2e", iat: now - 10, iss: ISS });
+    await call(old, "POST", "/account/devices", { body: { device_id: "d1" }, env: supaEnv() });
+    stubGoTrue(204);
+    await call(old, "DELETE", "/account/devices/d1", { env: supaEnv() });
+    vi.restoreAllMocks();
+
+    // No X-Relic-Device header anywhere here — that header is exactly what the
+    // old KV guard depended on and an attacker would simply omit.
+    const stale = await call(old, "GET", "/account/devices", { env: supaEnv() });
+    expect(stale.status).toBe(401);
+    expect(await stale.json()).toMatchObject({ error: "session_revoked" });
+
+    // A token minted after the removal (a fresh sign-in) works again.
+    const fresh = await mintJwt({ sub: "rv-e2e", iat: now + 60, iss: ISS });
+    expect((await call(fresh, "GET", "/account/devices", { env: supaEnv() })).status).toBe(200);
   });
 });
