@@ -94,6 +94,13 @@ class WorkerRepo implements RelicRepo {
   /// host from device-local prefs, like [autoVault]/[deviceLabel].
   bool maskSecrets;
 
+  /// When true (default), a copy puts the item's stored HTML on the clipboard
+  /// alongside the plain text, so pasting into Gmail or Docs keeps the styling.
+  /// When false every copy is plain. Mirrors the desktop
+  /// LocalDeskRepo.pasteRichText preference; the row "Copy as > Plain text"
+  /// stays the one-off lever either way.
+  bool pasteRichText;
+
   /// Stable per-install device id, sent as `X-Relic-Device` so the backend can
   /// list this device and honor a remote remove (docs/cloudflare/13 §7).
   String? deviceId;
@@ -105,6 +112,7 @@ class WorkerRepo implements RelicRepo {
     this.deviceLabel = 'Phone',
     this.autoVault = true,
     this.maskSecrets = true,
+    this.pasteRichText = true,
     this.deviceId,
   });
 
@@ -1750,7 +1758,13 @@ class WorkerRepo implements RelicRepo {
   /// the text was empty/uncapturable, or the master key could not be unlocked.
   /// Callers must not report success on a false: the QS tile used to toast
   /// "Captured to Relic" over a silent no-op.
-  Future<bool> captureText(String text) async {
+  ///
+  /// [html] is the HTML flavor the clipboard offered alongside the plain text,
+  /// when there was one. Only the Quick Settings tile can supply it: the share
+  /// sheet delivers a bare String and can never carry markup. Plain text stays
+  /// authoritative either way, so a null [html] is an ordinary capture and not
+  /// a degraded one. RTF is not read on Android — nothing there publishes it.
+  Future<bool> captureText(String text, {String? html}) async {
     final t = text.trim();
     if (t.isEmpty || isUncapturable(t)) return false;
     try {
@@ -1760,18 +1774,27 @@ class WorkerRepo implements RelicRepo {
     }
     if (_mk == null) return false;
     final now = _now;
+    final rich = RichBody.capture(plain: t, html: html);
     // Re-copy dedupe (parity with the desktop watcher): identical text
     // resurfaces as the newest capture instead of duplicating. Both stamps
     // move — every list surface orders by created_at, so a bumped item that
     // kept its old created_at would look like a dropped capture.
     final i = _items.indexWhere((e) => e.kind == Kind.string && e.content == t);
     if (i >= 0) {
-      final bumped = _items[i].copyWith(createdAt: now, updatedAt: now);
+      var bumped = _items[i].copyWith(createdAt: now, updatedAt: now);
+      // Same text, better flavors: fill the formatting in rather than keying
+      // the dedupe on it, which would make re-copying a sentence you first
+      // took plain a duplicate row. Never the other way round — an existing
+      // body already matches this text, so replacing it buys nothing.
+      if (rich != null && bumped.rich == null && !bumped.isSecret) {
+        bumped = bumped.copyWith(rich: rich);
+      }
       _items.removeAt(i);
       _items.insert(0, bumped);
       await _push(bumped);
       return true;
     }
+    final tags = _tagsFor(t); // same deterministic facets as desktop
     final r = Relic(
       uid: _uuid.v4(),
       createdAt: now,
@@ -1781,9 +1804,14 @@ class WorkerRepo implements RelicRepo {
       promoted: autoVault,
       byteSize: utf8.encode(t).length,
       device: deviceLabel,
-      tags: _tagsFor(t), // same deterministic facets as desktop (mask-aware)
+      tags: tags,
       content: t,
       preview: _previewLine(t),
+      // A secret never carries formatting: the masked plain text would be
+      // scrubbed while the HTML flavor shipped the same value in the clear.
+      // Mirrors LocalDeskRepo.captureText; richIfCurrent and exportVault
+      // enforce it again, because an item can be marked secret after capture.
+      rich: tags.contains('secret') ? null : rich,
     );
     _items.insert(0, r);
     await _push(r);
@@ -2278,11 +2306,11 @@ class WorkerRepo implements RelicRepo {
     }
     final t = await textOf(r);
     if (t == null) return;
-    // Rich paste is the half of this feature that works on mobile: Android has
-    // no clipboard watcher, so almost nothing is captured with formatting
-    // here, but a clip captured on the desktop should still paste styled into
-    // Gmail or Docs. richIfCurrent covers the secret and stale-text cases.
-    final rich = r.richIfCurrent;
+    // Rich paste is the valuable half of this feature on mobile: a clip
+    // captured with styling anywhere on the account should paste styled into
+    // Gmail or Docs from the phone. richIfCurrent covers the secret and
+    // stale-text cases; [pasteRichText] is the user's own off switch.
+    final rich = pasteRichText ? r.richIfCurrent : null;
     final wrote = rich == null
         ? await writeSensitiveTextToClipboard(t)
         : await writeRichToClipboard(t, rich, sensitive: true);

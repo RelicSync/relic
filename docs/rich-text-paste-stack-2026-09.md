@@ -18,7 +18,7 @@ This doc is the handoff. Read §1 and §2, then go to your platform's section.
 | Windows | yes | yes, native Win32 | yes | yes, release build |
 | macOS | yes | yes, Swift bridge | yes | **never compiled** |
 | Linux | yes | yes, super_clipboard | yes, degraded on Wayland | yes, release build + runs |
-| Android | tile path only, not wired | yes, HTML only | n/a (desktop only) | no |
+| Android | tile path, HTML only | yes, HTML only | n/a (desktop only) | yes, release AAB |
 | iOS | no | no, falls back to plain | n/a | no |
 
 Nothing here has been pasted into a real app on any platform yet, Windows
@@ -233,11 +233,15 @@ codec, because LibreOffice and GTK look for different ones.
 
 ## 6. Android
 
-**Status:** paste is written and not tested. Capture is not wired at all.
+**Status:** written and built. Not tested on a device.
 
-**What works:** `WorkerRepo.putOnClipboard` writes through `DataWriterItem` with
-HTML plus plain text, which maps to `ClipData.newHtmlText`. A clip captured with
-formatting on the desktop should paste styled into Gmail or Docs. This is the
+Landed 2026-09-02 in the Android pass: the tile capture upgrade named below as
+the open question, plus a settings toggle for rich paste. Release AAB
+**1.0.42+58**, signed with the real upload key.
+
+**Paste.** `WorkerRepo.putOnClipboard` writes through `DataWriterItem` with HTML
+plus plain text, which maps to `ClipData.newHtmlText`. A clip captured with
+formatting anywhere on the account pastes styled into Gmail or Docs. This is the
 genuinely valuable half on mobile.
 
 RTF is deliberately skipped on Android. Nothing there publishes or reads it and
@@ -246,27 +250,53 @@ leaving it out keeps `ClipDescription` clean.
 **Note:** super_clipboard documents that Android may reject the write outright
 if `plainText` is not in the same item. It is included. Do not remove it.
 
-**What does not work, and why:** there is no clipboard watcher on Android. The
-two capture entry points are the share sheet and the `relic://capture` deep link
-from the Quick Settings tile.
+Settings now carries **Paste with formatting** (`_pasteRichTile` in
+`mobile.dart`, stored as `relic.paste.richText`, default on), the mobile mirror
+of the desktop toggle. `Copy as > Plain text` in the row menu is still the
+one-off lever and works here already.
 
+**Capture.** There is no clipboard watcher on Android, so the two entry points
+are the share sheet and the `relic://capture` deep link from the Quick Settings
+tile. The tile now captures formatting; the share sheet still cannot.
+
+- `mobile.dart:_readClipboard` returns `({String? text, String? html})`. Each
+  attempt goes through `_readClipboardOnce`, which reads `Formats.plainText` and
+  then `kRelicHtml` off one super_clipboard reader, and falls back to
+  `Clipboard.getData` when there is no reader or it throws. The twelve 250 ms
+  attempts are unchanged: Android 10+ only lets a focused app read the
+  clipboard, and a tile launch calls this before the window has focus.
+  The HTML read has its own 400 ms budget and its own catch, so a slow or broken
+  provider costs the flavor and never the capture.
+- `WorkerRepo.captureText` takes `html:`, builds the `RichBody`, and drops it
+  when the text is tagged `secret`. A re-copy of text already stored fills the
+  formatting in rather than duplicating the row, and never the reverse: an
+  existing body already matches this exact text, so replacing it buys nothing.
+- The queue that holds a tile capture made before the repo is connected carries
+  the HTML too, so a queued capture is not quietly poorer than a live one.
 - The share sheet can never carry HTML. `receive_sharing_intent` delivers
   `SharedMediaFile` with a plain `String` for text and url types. Android does
   define `Intent.EXTRA_HTML_TEXT` and Chrome and Gmail do set it, so a custom
   `ACTION_SEND` receiver could read it, but that means native Kotlin plus
-  forking or replacing the plugin. Out of scope unless someone decides it is
-  worth it.
-- The tile path CAN be upgraded. `mobile.dart:_readClipboard` polls
-  `Clipboard.getData(kTextPlain)` twelve times at 250 ms, because Android 10+
-  only lets a focused app read the clipboard. Reading `kRelicHtml` through
-  super_clipboard alongside it, with the same retry loop, would give HTML
-  capture from the tile. That is the one piece of Android capture worth doing.
+  forking or replacing the plugin. Still out of scope.
 
-**To verify:**
+Tests: `app/test/mobile_rich_capture_test.dart` (8 tests: what is stored, the
+secret rule, both directions of the re-copy, the cap, the fingerprint going
+stale on an edit, and a cache round trip).
+
+**To verify on a device:**
 1. Capture styled text on a desktop, sync, paste into Gmail on the phone.
    Formatting should survive.
 2. Paste into a plain text field. Should be clean text, not markup.
 3. Confirm the write is not being rejected (that is the plainText requirement).
+4. Copy styled text in Chrome on the phone, pull down the Quick Settings tile,
+   and check the captured item carries formatting when you paste it back into
+   Gmail. This is the new path and the one most likely to be wrong: whether a
+   given app sets `htmlText` on copy is per-app behaviour we do not control.
+5. The tile with a copied API key. The row must mask, and the item must have no
+   formatting stored.
+6. Settings, turn **Paste with formatting** off, copy a styled item, paste. It
+   must come out plain. This toggle has no test: asserting it needs a real
+   clipboard.
 
 ---
 
@@ -304,6 +334,7 @@ Nobody has filled this in. It is the actual acceptance test.
 | Copy, quit Relic, paste | | | n/a | n/a |
 | Secret → any target: plain only, marker set | | | | |
 | Desktop rich capture → phone paste into Gmail | n/a | n/a | n/a | |
+| Phone tile capture in Chrome → paste into Gmail | n/a | n/a | n/a | |
 | Stack of 3 drained into a form | | | | n/a |
 
 ---
@@ -318,6 +349,7 @@ Nobody has filled this in. It is the actual acceptance test.
 | Windows write | `app/lib/platform/src/windows/clipboard_win.dart` |
 | macOS write | `app/lib/platform/src/macos/clipboard_macos.dart` + `app/macos/Runner/Bridge/ClipboardBridge.swift` |
 | Capture ladders (keep in step) | `app/lib/desktop.dart` `onClipboardChanged`, `_readClipboardContent`, `_readRichFlavors` |
+| Android tile capture | `app/lib/mobile.dart` `_readClipboard`, `_readClipboardOnce`, `_captureFromTrigger`; `worker_repo.dart` `captureText` |
 | Capture, dedupe, secret rule | `app/lib/data/local_desk_repo.dart` `captureText`, `_resolveCapturedUid` |
 | Paste path | `local_desk_repo.dart` `_putOnClipboardInner`, `worker_repo.dart` `putOnClipboard` |
 | Storage | `app/lib/data/relic_db.dart` (`rich` column, both halves of `upsert`, `bulkLoad`) |
