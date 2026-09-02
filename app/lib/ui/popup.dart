@@ -377,6 +377,11 @@ class _PopupViewState extends State<PopupView> {
   /// Back to the default browse state: no text, no tag/date filters, default
   /// sort, All scope, scrolled to the top. Runs while the window is hidden
   /// (fired on explicit close), so the next summon opens fresh.
+  ///
+  /// The paste stack is deliberately NOT here and must never move into this
+  /// State: filling the queue, dismissing the popup, and draining it into
+  /// another app is the entire feature, and this runs on every close. It lives
+  /// on the repo (LocalDeskRepo._stack) and this widget only renders it.
   void _resetSearchState() {
     if (!mounted) return;
     _debounce?.cancel();
@@ -1249,9 +1254,13 @@ class _PopupViewState extends State<PopupView> {
   /// Join the selected TEXT relics in display order using [sep]. Returns
   /// (joinedText, sensitive, mergedCount, skippedNonText) or null when nothing
   /// selected / no text to merge. Shared by "Copy" and "Combine & paste".
-  Future<(String, bool, int, int)?> _joinSelectedText(String sep) async {
+  /// The multi-selection in the order it appears on screen. Items that have
+  /// scrolled out of the loaded window (or that a re-sort moved) keep a stable
+  /// place at the end rather than jumping around. Shared by the combine and
+  /// the paste-stack paths so both agree on what "in order" means.
+  List<Relic> _selectionInDisplayOrder() {
     final items = _multiSel.values.toList();
-    if (items.isEmpty) return null;
+    if (items.isEmpty) return items;
     final order = <String, int>{};
     final res = _results;
     for (var i = 0; i < res.length; i++) {
@@ -1262,6 +1271,12 @@ class _PopupViewState extends State<PopupView> {
       order.putIfAbsent(r.uid, () => next++);
     }
     items.sort((a, b) => order[a.uid]!.compareTo(order[b.uid]!));
+    return items;
+  }
+
+  Future<(String, bool, int, int)?> _joinSelectedText(String sep) async {
+    final items = _selectionInDisplayOrder();
+    if (items.isEmpty) return null;
 
     final parts = <String>[];
     var sensitive = false;
@@ -1274,6 +1289,19 @@ class _PopupViewState extends State<PopupView> {
     }
     if (parts.isEmpty) return null;
     return (parts.join(sep), sensitive, parts.length, items.length - parts.length);
+  }
+
+  /// Queue the selection for sequential pasting, in display order.
+  void _loadStack() {
+    final items = _selectionInDisplayOrder();
+    if (items.isEmpty) return;
+    widget.repo.pushStackAll(items);
+    _toasts.show(ToastMsg(
+      items.length == 1 ? '1 item queued' : '${items.length} items queued',
+      severity: ToastSeverity.success,
+      icon: LucideIcons.layers,
+    ));
+    setState(_multiSel.clear);
   }
 
   Future<void> _bulkCopy() async {
@@ -1402,6 +1430,88 @@ class _PopupViewState extends State<PopupView> {
     _recomputeCollections();
   }
 
+  /// The paste stack, shown above the list whenever it holds anything.
+  ///
+  /// The stack changes what a global hotkey does while being invisible, which
+  /// is the one real footgun in the feature. This is the antidote: the queue is
+  /// inspectable, reorderable and clearable from the place people already look.
+  /// It reads straight off the repo, never from popup state, because the popup
+  /// wipes its own state on every close and the stack has to outlive that.
+  Widget _stackBar(RelicColors c) {
+    final stack = widget.repo.pasteStack;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(
+          Insets.lg, Insets.sm, Insets.lg, Insets.sm),
+      decoration: BoxDecoration(
+        color: c.panel,
+        border: Border(bottom: BorderSide(color: c.border, width: 1)),
+      ),
+      child: Row(
+        children: [
+          Icon(LucideIcons.layers, size: 13, color: c.accent),
+          const SizedBox(width: 7),
+          Text(
+            stack.length == 1 ? '1 queued' : '${stack.length} queued',
+            style: RelicTheme.mono(size: 11, color: c.textSecondary),
+          ),
+          const SizedBox(width: Insets.md),
+          // Same overflow-safe pattern as _bulkBar: the cluster scrolls rather
+          // than overflowing at Mini width.
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              reverse: true,
+              child: Row(
+                children: [
+                  // In pop order, so the first chip is the next paste.
+                  for (final r in stack) ...[
+                    _stackChip(c, r),
+                    const SizedBox(width: 6),
+                  ],
+                  if (stack.length > 1) ...[
+                    _bulkBtn(c, 'Reverse', LucideIcons.arrowUpDown,
+                        widget.repo.reverseStack),
+                    const SizedBox(width: 8),
+                  ],
+                  _bulkBtn(c, 'Clear', LucideIcons.x, widget.repo.clearStack),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// One queued item: its title, and an x to drop it without draining.
+  Widget _stackChip(RelicColors c, Relic r) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        decoration: BoxDecoration(
+          color: c.tagBg,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: c.border, width: 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 110),
+              child: Text(
+                r.displayTitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: RelicTheme.mono(size: 10, color: c.tagText),
+              ),
+            ),
+            const SizedBox(width: 5),
+            GestureDetector(
+              onTap: () => widget.repo.removeFromStack(r.uid),
+              child: Icon(LucideIcons.x, size: 11, color: c.textFaint),
+            ),
+          ],
+        ),
+      );
+
   /// Slim action bar shown above the list while a multi-selection exists.
   Widget _bulkBar(RelicColors c) => Container(
         padding: const EdgeInsets.fromLTRB(
@@ -1445,6 +1555,10 @@ class _PopupViewState extends State<PopupView> {
                       _sepChip(c),
                       const SizedBox(width: 8),
                       _bulkBtn(c, 'Combine', LucideIcons.combine, _combinePaste),
+                    ],
+                    if (widget.repo.pasteStackOn) ...[
+                      const SizedBox(width: 8),
+                      _bulkBtn(c, 'Stack', LucideIcons.layers, _loadStack),
                     ],
                   ],
                 ),
@@ -2628,6 +2742,10 @@ class _PopupViewState extends State<PopupView> {
                 // keeps them as their own strip here.
                 if (!mini && !searching && RelicTheme.isMobileOf(context))
                   _collectionsStrip(c),
+                if (!mini &&
+                    widget.repo.pasteStackOn &&
+                    widget.repo.pasteStack.isNotEmpty)
+                  _stackBar(c),
                 if (!mini && _multiSel.isNotEmpty) _bulkBar(c),
                 Expanded(
                   child: mini

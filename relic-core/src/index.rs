@@ -474,6 +474,11 @@ fn row_to_relic(row: &Row) -> rusqlite::Result<Relic> {
         content: row.get(16)?,
         preview: row.get(17)?,
         attachments: decode_attachments(row.get::<_, String>(18)?),
+        // relic-core's own reference index (relics.sql) has no `rich` column.
+        // The desktop app's SQLite does, but it never reads rows through here.
+        // Envelope round-tripping is what matters for the field, and that path
+        // (seal_relic / open_relic) carries it.
+        rich: None,
     })
 }
 
@@ -512,6 +517,7 @@ mod tests {
             content: content.map(Into::into),
             preview: content.map(|c| c.chars().take(20).collect()),
             attachments: vec![],
+            rich: None,
         }
     }
 

@@ -66,6 +66,10 @@ export interface RelicPayload {
   content?: string;
   preview?: string;
   attachments?: unknown[];
+  /** Formatting flavors for a text relic: `{h, html?, rtf?}`, rtf base64,
+   *  capped at 256 KiB. The vault re-seals the decrypted payload map verbatim,
+   *  so this survives a web edit without any handling here. */
+  rich?: { h: number; html?: string; rtf?: string };
 }
 
 /** Argon2id(passphrase, salt) → 32-byte KEK. Params come from the keyparams

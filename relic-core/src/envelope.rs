@@ -62,6 +62,12 @@ struct PrivatePayload {
     preview: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     attachments: Vec<Attachment>,
+    /// Formatting flavors (HTML / RTF) for a text relic, capped at 256 KiB.
+    /// Opaque here on purpose: relic-core never renders or rewrites them, it
+    /// only has to round-trip them so a re-seal does not silently drop the
+    /// field. Shape is `{"h": <fingerprint>, "html"?: str, "rtf"?: base64}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rich: Option<serde_json::Value>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -90,6 +96,7 @@ pub fn seal_relic(mk: &MasterKey, relic: &Relic) -> Result<EncryptedRelic, Envel
         content: relic.content.clone(),
         preview: relic.preview.clone(),
         attachments: relic.attachments.clone(),
+        rich: relic.rich.clone(),
     };
     let plaintext =
         serde_json::to_vec(&payload).map_err(|_| EnvelopeError::Malformed("payload json"))?;
@@ -144,6 +151,7 @@ pub fn open_relic(mk: &MasterKey, env: &EncryptedRelic) -> Result<Relic, Envelop
         content: p.content,
         preview: p.preview,
         attachments: p.attachments,
+        rich: p.rich,
     })
 }
 
@@ -172,6 +180,7 @@ mod tests {
             content: Some("https://example.com/secret".into()),
             preview: Some("https://example.com…".into()),
             attachments: vec![],
+            rich: None,
         }
     }
 
@@ -182,6 +191,43 @@ mod tests {
         let env = seal_relic(&mk, &relic).unwrap();
         let back = open_relic(&mk, &env).unwrap();
         assert_eq!(serde_json::to_value(&back).unwrap(), serde_json::to_value(&relic).unwrap());
+    }
+
+    #[test]
+    fn rich_survives_a_reseal() {
+        // The whole reason PrivatePayload carries `rich`: a client that opens a
+        // relic and pushes it back must not silently strip the formatting. The
+        // field is opaque here, so this also pins that we do not reshape it.
+        let mk = MasterKey::generate();
+        let mut relic = sample();
+        relic.rich = Some(serde_json::json!({
+            "h": 123456789,
+            "html": "<b>hello</b>",
+            "rtf": "e1xydGYxfQ==",
+        }));
+
+        let back = open_relic(&mk, &seal_relic(&mk, &relic).unwrap()).unwrap();
+        assert_eq!(back.rich, relic.rich);
+
+        // And again, the way a re-push actually happens: open, then re-seal.
+        let again = open_relic(&mk, &seal_relic(&mk, &back).unwrap()).unwrap();
+        assert_eq!(again.rich, relic.rich);
+    }
+
+    #[test]
+    fn an_unknown_payload_field_is_ignored_not_fatal() {
+        // docs/wire-format.md: "clients ignore unknown fields within a
+        // version". Guards against anyone adding deny_unknown_fields.
+        let json = serde_json::json!({
+            "kind": "string",
+            "source": "clipboard",
+            "tags": [],
+            "user_tags": [],
+            "content": "hi",
+            "some_future_field": {"a": 1},
+        });
+        let p: PrivatePayload = serde_json::from_value(json).unwrap();
+        assert_eq!(p.content.as_deref(), Some("hi"));
     }
 
     #[test]

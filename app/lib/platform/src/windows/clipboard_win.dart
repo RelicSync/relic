@@ -150,22 +150,64 @@ bool markClipboardSensitive() {
   }
 }
 
-/// Place text on the clipboard with Windows privacy hints that exclude it from
-/// clipboard history, cloud clipboard, and monitoring tools.
-bool writeSensitiveTextToClipboard(String text) {
-  if (!Platform.isWindows) return false;
+/// UTF-16LE with the null terminator CF_UNICODETEXT wants.
+Uint8List _utf16le(String text) {
   final bytes = BytesBuilder();
   for (final u in text.codeUnits) {
     bytes.addByte(u & 0xff);
     bytes.addByte((u >> 8) & 0xff);
   }
-  bytes.add(const [0, 0]); // UTF-16 null terminator
+  bytes.add(const [0, 0]);
+  return bytes.toBytes();
+}
 
-  if (OpenClipboard(0) == 0) return false;
+/// Place text on the clipboard with Windows privacy hints that exclude it from
+/// clipboard history, cloud clipboard, and monitoring tools.
+bool writeSensitiveTextToClipboard(String text) =>
+    writeRichToClipboard(text, sensitive: true);
+
+/// Place text plus its formatting flavors on the clipboard in ONE clipboard
+/// session, highest fidelity first.
+///
+/// Deliberately raw Win32 rather than super_clipboard's writer, which is what
+/// the photo path uses. Two reasons, both load-bearing:
+///
+///  * super_native_extensions publishes through `OleSetClipboard` with a live
+///    delayed-rendering IDataObject and never calls `OleFlushClipboard`, so the
+///    content dies when Relic exits. Relic is a tray app people quit, and
+///    "copy, quit, paste" works today.
+///  * [_markClipboardSensitiveOpen] needs to own the clipboard. Under OLE the
+///    owner is OLE's hidden window, so the privacy hints would not stick.
+///
+/// [cfHtml] must already be CF_HTML-framed (see cfHtmlEncode); [rtf] is raw RTF
+/// bytes. Either may be null. Returns false if the clipboard never opened, in
+/// which case the caller falls back to the framework write.
+bool writeRichToClipboard(
+  String text, {
+  Uint8List? cfHtml,
+  Uint8List? rtf,
+  bool sensitive = false,
+}) {
+  if (!Platform.isWindows) return false;
+  if (!_openClipboardWithRetry()) return false;
   try {
     EmptyClipboard();
-    if (!_putGlobalBytes(_cfUnicodeText, bytes.toBytes())) return false;
-    return _markClipboardSensitiveOpen();
+    // Plain text first: if anything below fails the clipboard still holds a
+    // correct, if unformatted, copy.
+    if (!_putGlobalBytes(_cfUnicodeText, _utf16le(text))) return false;
+    var ok = true;
+    if (cfHtml != null) {
+      final fmt = _registeredClipboardFormat('HTML Format');
+      ok = fmt != 0 && _putGlobalBytes(fmt, cfHtml) && ok;
+    }
+    if (rtf != null) {
+      // The registered name Word, WordPad and Outlook publish under. NOT the
+      // `application/rtf` MIME type, which no Windows app reads.
+      final fmt = _registeredClipboardFormat('Rich Text Format');
+      ok = fmt != 0 && _putGlobalBytes(fmt, rtf) && ok;
+    }
+    if (sensitive) ok = _markClipboardSensitiveOpen() && ok;
+    return ok;
   } finally {
     CloseClipboard();
   }

@@ -14,6 +14,7 @@ import 'package:uuid/uuid.dart';
 
 import '../platform/clipboard_bridge.dart';
 import '../models/relic.dart';
+import '../models/rich_body.dart';
 import '../widgets/chrome.dart';
 import 'blob_upload.dart';
 import 'boot_trace.dart';
@@ -734,6 +735,18 @@ class WorkerRepo implements RelicRepo {
   @override
   Future<void> markCoachMarksSeen() async {}
   @override
+  bool get pasteStackOn => false;
+  @override
+  List<Relic> get pasteStack => const [];
+  @override
+  void pushStackAll(Iterable<Relic> rs) {}
+  @override
+  void removeFromStack(String uid) {}
+  @override
+  void reverseStack() {}
+  @override
+  void clearStack() {}
+  @override
   bool get multiCombine => false; // power features are desktop-only
   @override
   bool get snippets => false;
@@ -1308,6 +1321,7 @@ class WorkerRepo implements RelicRepo {
       content: p['content'] as String?,
       preview: p['preview'] as String?,
       attachments: Attachment.listFrom(p['attachments']),
+      rich: RichBody.fromJson(p['rich']),
     );
   }
 
@@ -1602,6 +1616,11 @@ class WorkerRepo implements RelicRepo {
       if (r.preview != null) 'preview': r.preview,
       if (r.attachments.isNotEmpty)
         'attachments': Attachment.listToJson(r.attachments),
+      // Formatting flavors. Optional and additive: a client that does not know
+      // the key ignores it (docs/wire-format.md, "clients ignore unknown fields
+      // within a version"). Capped at 256 KB so the envelope stays well inside
+      // the Worker's caps.item * 1.5 body gate.
+      if (r.rich != null) 'rich': r.rich!.toJson(),
     };
     final sealed = await RelicCrypto.sealRelicPayload(_mk!, r.uid, payload);
     final env = _seal(r, sealed);
@@ -2222,7 +2241,16 @@ class WorkerRepo implements RelicRepo {
       } catch (_) {}
     }
     final t = await textOf(r);
-    if (t != null && !await writeSensitiveTextToClipboard(t)) {
+    if (t == null) return;
+    // Rich paste is the half of this feature that works on mobile: Android has
+    // no clipboard watcher, so almost nothing is captured with formatting
+    // here, but a clip captured on the desktop should still paste styled into
+    // Gmail or Docs. richIfCurrent covers the secret and stale-text cases.
+    final rich = r.richIfCurrent;
+    final wrote = rich == null
+        ? await writeSensitiveTextToClipboard(t)
+        : await writeRichToClipboard(t, rich, sensitive: true);
+    if (!wrote) {
       await Clipboard.setData(ClipboardData(text: t));
     }
   }

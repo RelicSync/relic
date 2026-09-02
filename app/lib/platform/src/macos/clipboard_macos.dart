@@ -58,6 +58,29 @@ Future<bool> writeSensitiveText(String text) async {
   }
 }
 
+/// Replace the pasteboard with [text] plus whatever formatting flavors came
+/// with it, rich types declared ahead of `.string` so apps that understand them
+/// prefer them. [rtf] is raw RTF bytes; [html] is a bare fragment (the Swift
+/// side adds the utf-8 charset marker).
+Future<bool> writeRich(
+  String text, {
+  String? html,
+  Uint8List? rtf,
+  bool sensitive = false,
+}) async {
+  try {
+    return await _ch.invokeMethod<bool>('writeRich', {
+          'text': text,
+          'html': ?html,
+          'rtf': ?rtf,
+          'sensitive': sensitive,
+        }) ??
+        false;
+  } catch (_) {
+    return false;
+  }
+}
+
 /// File paths from a Finder ⌘C (public.file-url pasteboard items), or empty.
 Future<List<String>> filePaths() async {
   try {

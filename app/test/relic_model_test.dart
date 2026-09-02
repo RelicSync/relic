@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:relic_app/models/relic.dart';
+import 'package:relic_app/models/rich_body.dart';
 
 void main() {
   test('relative age is relative for 3 days, then the absolute date', () {
@@ -148,6 +149,60 @@ void main() {
       expect(r.isUserTag('WORK'), isTrue);
       expect(r.isUserTag('recipe'), isTrue);
       expect(r.isUserTag('url'), isFalse);
+    });
+  });
+
+  group('rich text', () {
+    Relic make({String? content, RichBody? rich, List<String> tags = const []}) =>
+        Relic(
+          uid: 'u',
+          createdAt: 0,
+          updatedAt: 0,
+          kind: Kind.string,
+          source: Source.clipboard,
+          promoted: false,
+          byteSize: 0,
+          tags: tags,
+          content: content,
+          rich: rich,
+        );
+
+    test('toJson omits rich when absent and nests it when present', () {
+      expect(make(content: 'hi').toJson().containsKey('rich'), isFalse);
+      final rich = RichBody.capture(plain: 'hi', html: '<b>hi</b>')!;
+      final j = make(content: 'hi', rich: rich).toJson();
+      expect(j['rich'], rich.toJson());
+    });
+
+    test('richIfCurrent returns the body while the text is unchanged', () {
+      final rich = RichBody.capture(plain: 'hi', html: '<b>hi</b>')!;
+      expect(make(content: 'hi', rich: rich).richIfCurrent, rich);
+    });
+
+    test('editing the content makes leftover formatting inert', () {
+      // The relic-cli hazard: its upsert writes `content` and does not list
+      // `rich`, so the stale value survives in the row. It must not be pasted.
+      final rich = RichBody.capture(plain: 'hi', html: '<b>hi</b>')!;
+      final edited = make(content: 'hi', rich: rich).copyWith(content: 'bye');
+      expect(edited.rich, isNotNull, reason: 'still stored');
+      expect(edited.richIfCurrent, isNull, reason: 'but never served');
+    });
+
+    test('a secret never serves formatting, whatever is stored', () {
+      // Second of the three enforcement points. Capture drops rich for a
+      // secret, but a relic can also be marked secret AFTER capture, and
+      // masking can be switched off and back on.
+      final rich = RichBody.capture(plain: 'hi', html: '<b>hi</b>')!;
+      final r = make(content: 'hi', rich: rich, tags: ['secret']);
+      expect(r.isSecret, isTrue);
+      expect(r.richIfCurrent, isNull);
+    });
+
+    test('copyWith carries rich through and clearRich drops it', () {
+      final rich = RichBody.capture(plain: 'hi', html: '<b>hi</b>')!;
+      final r = make(content: 'hi', rich: rich);
+      expect(r.copyWith(title: 't').rich, rich);
+      expect(r.copyWith(clearRich: true).rich, isNull);
     });
   });
 }

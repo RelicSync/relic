@@ -23,9 +23,18 @@ void main() {
       expect(singleLine('already flat'), 'already flat');
     });
 
-    test('menu exposes four transforms in display order', () {
+    test('menu exposes the transforms in display order', () {
+      // "Plain text" leads: it is the escape hatch from rich paste, so it is
+      // the one people reach for most and it must not be buried.
       expect(copyAsTransforms.map((t) => t.$1).toList(),
-          ['UPPERCASE', 'lowercase', 'Title Case', 'Single line']);
+          ['Plain text', 'UPPERCASE', 'lowercase', 'Title Case', 'Single line']);
+    });
+
+    test('plain text is the identity transform', () {
+      // The stripping happens because the Copy-as menu writes through
+      // putTextOnClipboard, which never carries the HTML/RTF flavors.
+      expect(plainText('  Keep me  '), '  Keep me  ');
+      expect(plainText(''), '');
     });
   });
 }

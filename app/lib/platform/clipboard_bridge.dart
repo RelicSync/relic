@@ -2,7 +2,10 @@ import 'dart:io' show Platform;
 import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
+import 'package:super_clipboard/super_clipboard.dart';
 
+import '../models/rich_body.dart';
+import 'rich_formats.dart';
 import 'src/linux/clipboard_linux.dart' as lin;
 import 'src/macos/clipboard_macos.dart' as mac;
 import 'src/windows/clipboard_win.dart' as win;
@@ -69,6 +72,61 @@ Future<bool> markClipboardSensitive() async {
 Future<bool> writeSensitiveTextToClipboard(String text) async {
   if (Platform.isWindows) return win.writeSensitiveTextToClipboard(text);
   if (Platform.isMacOS) return mac.writeSensitiveText(text);
+  return false;
+}
+
+/// Place [text] on the clipboard together with the formatting flavors in
+/// [rich], so pasting into Slack, Word or Notion keeps the styling.
+///
+/// Plain text always goes on too, and it goes on first where the platform lets
+/// us order the write, so a target that understands none of the rich types
+/// still gets a correct paste.
+///
+/// Windows and macOS use their native writes rather than super_clipboard: that
+/// plugin publishes lazily (OLE on Windows, an NSPasteboardWriter promise on
+/// macOS), so the content would die when Relic quits, and its clearContents
+/// would drop the privacy markers. Linux has no native write at all, and
+/// Android has no reason to want one, so both take the plugin path.
+///
+/// Returns false when nothing native handled it; the caller then falls back to
+/// the framework clipboard, losing only the formatting.
+Future<bool> writeRichToClipboard(
+  String text,
+  RichBody rich, {
+  bool sensitive = false,
+}) async {
+  final html = rich.html;
+  final rtf = rich.rtf;
+  if (Platform.isWindows) {
+    return win.writeRichToClipboard(
+      text,
+      cfHtml: html == null ? null : cfHtmlEncode(html),
+      rtf: rtf,
+      sensitive: sensitive,
+    );
+  }
+  if (Platform.isMacOS) {
+    return mac.writeRich(text, html: html, rtf: rtf, sensitive: sensitive);
+  }
+  if (Platform.isLinux || Platform.isAndroid) {
+    try {
+      final clip = SystemClipboard.instance;
+      if (clip == null) return false;
+      // Highest fidelity first: some platforms honour the order as the
+      // author's preference. Android additionally REQUIRES plainText in the
+      // same item or the write can be refused outright.
+      final item = DataWriterItem();
+      if (html != null) item.add(kRelicHtml(html));
+      // Nothing on Android publishes or reads RTF, so leave ClipDescription
+      // clean there.
+      if (rtf != null && !Platform.isAndroid) item.add(kRelicRtf(rtf));
+      item.add(Formats.plainText(text));
+      await clip.write([item]);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
   return false;
 }
 

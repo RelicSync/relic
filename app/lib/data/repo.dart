@@ -194,6 +194,17 @@ abstract class RelicRepo {
   bool get snippets => false;
   bool get reminders => false;
 
+  // The paste stack. Kept to the six members the picker actually binds to:
+  // MemoryRepo `implements` rather than extends, so every addition here costs
+  // a stub in three files. push/pop/peek stay on LocalDeskRepo — only the
+  // desktop shell drains the queue.
+  bool get pasteStackOn => false;
+  List<Relic> get pasteStack => const [];
+  void pushStackAll(Iterable<Relic> rs) {}
+  void removeFromStack(String uid) {}
+  void reverseStack() {}
+  void clearStack() {}
+
   /// Open-vocabulary machine tags that have been seen only once and so have not
   /// earned a facet chip yet (see relic-sift/src/tag_vocab.rs). They remain on
   /// their relics and stay fully searchable — this only suppresses the chip.
@@ -601,6 +612,18 @@ class MemoryRepo implements RelicRepo {
   bool get coachMarksSeen => true;
   @override
   Future<void> markCoachMarksSeen() async {}
+  @override
+  bool get pasteStackOn => false;
+  @override
+  List<Relic> get pasteStack => const [];
+  @override
+  void pushStackAll(Iterable<Relic> rs) {}
+  @override
+  void removeFromStack(String uid) {}
+  @override
+  void reverseStack() {}
+  @override
+  void clearStack() {}
   @override
   bool get multiCombine => false;
   @override

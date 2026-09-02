@@ -60,12 +60,33 @@ AEAD-decrypts (key = MK, AAD = `relic.relic.v1:<uid>`) to:
   "collection": null,
   "note": null,
   "content": "the text itself (string relics; null for blob relics)",
-  "preview": "short list title"
+  "preview": "short list title",
+  "attachments": [{"id": "…", "name": "notes.pdf", "mime": "…", "size": 1234}],
+  "rich": {"h": 123456789, "html": "<b>styled</b>", "rtf": "<base64>"}
 }
 ```
 
+`attachments` is the manifest for the single bundle blob: filenames never reach
+the server, so they ride inside `ct` while only `blob_key` is plaintext.
+
+`rich` holds the formatting flavors of a text relic, so pasting into Slack or
+Word keeps its styling. Both flavors are optional and the whole object is
+capped at **256 KiB** by the writing client, which keeps a maximal item well
+inside the Worker's `caps.item * 1.5` body gate. `h` is a fingerprint of the
+`content` the flavors were derived from: a reader that finds a mismatch (a
+writer edited the text without knowing this field exists) must ignore the
+formatting rather than paste it. A relic tagged `secret` never carries this
+field, and it is stripped from a redacted export.
+
 JSON arrays here; the comma-joined form exists only in the local SQLite FTS
-columns. Optional fields are `null`/omitted. `uid`, timestamps, `byte_size`,
+columns. Optional fields are `null`/omitted.
+
+**"Ignore unknown fields" is read-only, not round-trip.** The web vault re-seals
+the decrypted payload map verbatim, so it preserves keys it does not model. The
+Dart and Rust clients rebuild the payload from their typed structs, so a build
+that predates a field DROPS it on the next push of that relic. New payload
+fields are therefore additive and safe, but an old client touching a relic will
+strip them. `uid`, timestamps, `byte_size`,
 `promoted`, and `blob_key` are NOT duplicated inside `ct` — the envelope is
 authoritative and `uid` is tamper-bound via AAD. (`updated_at`/`promoted` are
 Worker-readable by design; a malicious server rewriting them is within the
