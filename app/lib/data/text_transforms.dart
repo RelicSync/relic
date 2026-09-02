@@ -30,8 +30,15 @@ String titleCase(String t) {
 /// Collapse all whitespace runs (including newlines) to single spaces.
 String singleLine(String t) => t.replaceAll(RegExp(r'\s+'), ' ').trim();
 
+/// Identity. Exists so "Plain text" can sit in the Copy-as menu next to the
+/// real transforms: the whole menu routes through `putTextOnClipboard`, which
+/// never carries the HTML/RTF flavors, so copying through this is exactly
+/// "give me this clip with the formatting stripped".
+String plainText(String t) => t;
+
 /// The menu entries, in display order.
 const copyAsTransforms = <(String, String Function(String))>[
+  ('Plain text', plainText),
   ('UPPERCASE', upperCase),
   ('lowercase', lowerCase),
   ('Title Case', titleCase),

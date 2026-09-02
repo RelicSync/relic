@@ -33,13 +33,15 @@ void main() {
     expect(m.display, 'Ctrl + Shift + Space');
   });
 
-  test('all default chords are distinct (incl. quick-paste)', () {
+  test('all default chords are distinct (incl. quick-paste + paste stack)', () {
     final chords = [
       HotkeyBinding.defaultHistory,
       HotkeyBinding.defaultCapture,
       HotkeyBinding.defaultPromote,
       HotkeyBinding.defaultMini,
       ...HotkeyBinding.defaultQuickPaste,
+      HotkeyBinding.defaultStackPush,
+      HotkeyBinding.defaultStackPop,
     ];
     for (var i = 0; i < chords.length; i++) {
       for (var j = i + 1; j < chords.length; j++) {
@@ -178,6 +180,55 @@ void main() {
           timeStamp: Duration.zero,
         );
         expect(HotkeyBinding.fromEvent(e), isNull, reason: phys.debugName);
+      }
+    });
+  });
+
+  group('paste stack chords', () {
+    test('are Ctrl+Shift+D (add) and Ctrl+Shift+B (paste next)', () {
+      const push = HotkeyBinding.defaultStackPush;
+      expect(push.ctrl, isTrue);
+      expect(push.shift, isTrue);
+      expect(push.alt, isFalse);
+      expect(push.win, isFalse);
+      expect(push.usbUsage, 0x00070007); // 'd'
+      expect(push.label, 'D');
+
+      const pop = HotkeyBinding.defaultStackPop;
+      expect(pop.ctrl, isTrue);
+      expect(pop.shift, isTrue);
+      expect(pop.alt, isFalse);
+      expect(pop.win, isFalse);
+      expect(pop.usbUsage, 0x00070005); // 'b'
+      expect(pop.label, 'B');
+    });
+
+    test('avoid the chords that were deliberately ruled out', () {
+      // Ctrl+Shift+V is legacyHistory (installs may still hold it) and is the
+      // Linux terminal paste chord we ourselves synthesize. A global grab does
+      // not fail on a contested chord, it silently steals the key, so this
+      // stays a test rather than a comment.
+      for (final b in [
+        HotkeyBinding.defaultStackPush,
+        HotkeyBinding.defaultStackPop,
+      ]) {
+        expect(b.sameChordAs(HotkeyBinding.legacyHistory), isFalse);
+        expect(b.usbUsage, isNot(0x00070009), reason: 'F is Find in Files');
+        expect(b.usbUsage, isNot(0x00070015), reason: 'R is browser reload');
+        expect(b.usbUsage, isNot(0x00070017), reason: 'T reopens a tab');
+        expect(b.usbUsage, isNot(0x00070004), reason: 'A is Find Action');
+      }
+    });
+
+    test('both round-trip through JSON', () {
+      for (final orig in [
+        HotkeyBinding.defaultStackPush,
+        HotkeyBinding.defaultStackPop,
+      ]) {
+        final back = HotkeyBinding.fromJson(orig.toJson());
+        expect(back, isNotNull);
+        expect(back!.sameChordAs(orig), isTrue);
+        expect(back.label, orig.label);
       }
     });
   });

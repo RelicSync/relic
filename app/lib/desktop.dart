@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:clipboard_watcher/clipboard_watcher.dart';
@@ -48,6 +49,7 @@ import 'ui/actionable_notification.dart';
 import 'ui/popup.dart';
 import 'ui/settings.dart';
 import 'platform/popup_placement.dart';
+import 'platform/rich_formats.dart';
 import 'widgets/controls.dart';
 import 'widgets/result_row.dart' show MiniResultRow;
 
@@ -438,7 +440,7 @@ class _RealAppState extends State<RealApp>
         isTemplate: true, // ignored off-macOS
       );
     } catch (_) {}
-    await trayManager.setToolTip('Relic: capturing');
+    await _updateTrayTooltip();
     await _rebuildMenu();
   }
 
@@ -507,6 +509,25 @@ class _RealAppState extends State<RealApp>
     } catch (_) {/* offline: non-fatal */}
   }
 
+  /// Depth of the paste stack at the last tray refresh. The repo notifies on
+  /// every capture, sync tick and enrich step, and setContextMenu is not free,
+  /// so the tray is rebuilt only when the number actually changes.
+  int _lastStackDepth = 0;
+
+  /// The tray tooltip has to say two things at once now. Composing it in one
+  /// place stops pause and the stack from overwriting each other, which is what
+  /// two independent setToolTip callers would do.
+  Future<void> _updateTrayTooltip() async {
+    final parts = [
+      _paused ? 'Relic: paused' : 'Relic: capturing',
+      if (widget.repo.pasteStackOn && widget.repo.pasteStackDepth > 0)
+        'stack ${widget.repo.pasteStackDepth}',
+    ];
+    try {
+      await trayManager.setToolTip(parts.join(' · '));
+    } catch (_) {}
+  }
+
   Future<void> _rebuildMenu() async {
     await trayManager.setContextMenu(
       Menu(
@@ -526,6 +547,17 @@ class _RealAppState extends State<RealApp>
                 MenuItem(key: 'pause_inf', label: 'Until I resume it'),
               ]),
             ),
+          // The queue changes what a global chord does while being invisible
+          // everywhere except the picker, so it gets a line here too — the one
+          // surface that is always reachable without summoning anything.
+          if (widget.repo.pasteStackOn && widget.repo.pasteStackDepth > 0) ...[
+            MenuItem(
+              key: 'stack_info',
+              label: 'Paste stack: ${widget.repo.pasteStackDepth} queued',
+              disabled: true,
+            ),
+            MenuItem(key: 'stack_clear', label: 'Clear paste stack'),
+          ],
           MenuItem(
             key: 'connect',
             label: widget.repo.syncEnabled
@@ -561,11 +593,7 @@ class _RealAppState extends State<RealApp>
       _pauseTimer = Timer(duration, () => _setPaused(false));
     }
     _pausedSignal.value = on;
-    try {
-      await trayManager.setToolTip(
-        _paused ? 'Relic: paused' : 'Relic: capturing',
-      );
-    } catch (_) {}
+    await _updateTrayTooltip();
     await _rebuildMenu();
     if (mounted) setState(() {});
   }
@@ -634,6 +662,13 @@ class _RealAppState extends State<RealApp>
       final n = i + 1; // slot 0 → paste #1 (newest)
       await reg('quickPaste$n', quick[i], () => _quickPaste(n));
     }
+    // Only while the feature is on, so an opted-out user keeps both chords for
+    // their own apps. setPasteStack calls onHotkeysChanged, so toggling it
+    // registers or releases them live without a restart.
+    if (widget.repo.pasteStackOn) {
+      await reg('stackPush', widget.repo.stackPushHotkey, _pushToStack);
+      await reg('stackPop', widget.repo.stackPopHotkey, _popStackPaste);
+    }
     widget.repo.setFailedHotkeys(failed);
   }
 
@@ -659,6 +694,13 @@ class _RealAppState extends State<RealApp>
   /// Guards against WM_HOTKEY auto-repeat while the chord is held — the paste
   /// handler is long-running (may fetch+decrypt a blob, then a modifier wait).
   bool _pasteInFlight = false;
+
+  /// Same guard for the paste-stack push, which also synthesizes a chord.
+  bool _stackPushInFlight = false;
+
+  /// Throttles the "stack is empty" notice: holding the pop chord would
+  /// otherwise produce one per auto-repeat. Reset on the next successful push.
+  bool _stackEmptyNoticeShown = false;
 
   /// One "we can't paste for you" notice per run — see [_canSynthesizePaste].
   bool _pasteGrantHintShown = false;
@@ -697,23 +739,113 @@ class _RealAppState extends State<RealApp>
   /// clipboard (decrypting + fetching its blob if needed) and paste it into the
   /// frontmost app. Works straight from the tray — no popup shown. putOnClipboard
   /// arms the echo-suppression guard, so this never re-captures as new history.
-  Future<void> _quickPaste(int n) async =>
-      _pasteRelic(widget.repo.nthMostRecent(n),
-          emptyBody: n == 1
-              ? 'No items in Relic yet.'
-              : "There's no item #$n yet.");
+  Future<void> _quickPaste(int n) async {
+    await _pasteRelic(widget.repo.nthMostRecent(n),
+        emptyBody: n == 1
+            ? 'No items in Relic yet.'
+            : "There's no item #$n yet.");
+  }
+
+  /// Paste-stack push: grab what the user has selected (or, where we cannot
+  /// synthesize a copy, whatever is already on the clipboard) and queue it.
+  ///
+  /// The selection grab is the same shape as [_saveAndAnnotate] — synthesize
+  /// Ctrl+C, wait for the clipboard sequence to move — minus the promote and
+  /// minus summoning the popup. Where injection is unavailable (Wayland, macOS
+  /// without Accessibility) it degrades to "queue what is on the clipboard
+  /// now", which makes the flow Ctrl+C then the push chord.
+  Future<void> _pushToStack() async {
+    if (_stackPushInFlight) return;
+    _stackPushInFlight = true;
+    try {
+      final repo = widget.repo;
+      final srcApp = await foregroundAppTag();
+      final seqBefore = await clipboardSequence();
+      // Ctrl+C into a terminal with no selection is SIGINT; the popup would
+      // copy its own search box.
+      final skipCopy =
+          _visible || srcApp == 'terminal' || !await inputInjectionAvailable();
+      if (!skipCopy) {
+        await sendCopyChordSafe();
+        for (var i = 0;
+            i < 15 && await clipboardSequence() == seqBefore;
+            i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 40));
+        }
+      }
+      final c = await _readClipboardContent();
+      final r = repo.captureForStack(
+        text: c.png == null ? c.text : null,
+        png: c.png,
+        sourceApp: srcApp,
+        html: c.png == null ? c.html : null,
+        rtf: c.png == null ? c.rtf : null,
+      );
+      if (r == null) {
+        _notify('Nothing to queue', 'Select or copy something first.');
+        return;
+      }
+      // Nothing was re-copied and this is already the tail: the user pressed
+      // the chord twice, not once per item. Queuing a genuine duplicate after a
+      // real re-copy stays allowed — the same value twice in a form is normal.
+      final tail = repo.pasteStack.isEmpty ? null : repo.pasteStack.last;
+      if (skipCopy && tail?.uid == r.uid) {
+        _notify('Already queued', 'That item is already last in the stack.');
+        return;
+      }
+      repo.pushStack(r);
+      _stackEmptyNoticeShown = false;
+      _notify('Added to stack', 'Stack: ${repo.pasteStackDepth} items.');
+    } catch (_) {
+      _notify('Could not queue', "That item couldn't be read.");
+    } finally {
+      _stackPushInFlight = false;
+    }
+  }
+
+  /// Paste-stack pop: paste the head and consume it.
+  ///
+  /// Consumes on a successful CLIPBOARD WRITE, not on a successful keystroke —
+  /// see [_pasteRelic]. Never falls back to a normal paste on an empty stack:
+  /// silently pasting something the user did not queue, into a document, with
+  /// no undo, is the one genuinely destructive option here.
+  Future<void> _popStackPaste() async {
+    final repo = widget.repo;
+    final r = repo.peekStack();
+    if (r == null) {
+      if (!_stackEmptyNoticeShown) {
+        _stackEmptyNoticeShown = true;
+        _notify('Paste stack is empty', 'Queue something with the add chord.');
+      }
+      return;
+    }
+    // _pasteRelic owns the auto-repeat guard; do not add a second one here or
+    // a held chord would drain the whole queue.
+    if (await _pasteRelic(r)) {
+      repo.popStack();
+      if (repo.pasteStackDepth == 0) {
+        _notify('Stack empty', 'That was the last item.');
+      }
+    }
+  }
 
   /// Shared body of the quick-paste hotkeys: put [r] on the clipboard
   /// (decrypting + fetching its blob if needed) and synth-paste into the
   /// frontmost app. putOnClipboard arms the echo guard so it never re-captures.
-  Future<void> _pasteRelic(Relic? r,
+  ///
+  /// Returns whether the CLIPBOARD WRITE succeeded, which is deliberately not
+  /// the same as whether the keystroke fired. On Wayland and on macOS without
+  /// the Accessibility grant nothing can be injected, but the item is on the
+  /// clipboard and the user presses their own paste chord — so the paste stack
+  /// must still consume it, or the next pop re-serves it and they paste twice.
+  Future<bool> _pasteRelic(Relic? r,
       {String emptyBody = 'No items in Relic yet.'}) async {
-    if (_pasteInFlight) return;
+    if (_pasteInFlight) return false;
     _pasteInFlight = true;
     try {
       if (r == null) {
         _notify('Nothing to paste', emptyBody);
-        return;
+        return false;
       }
       // Clipboard first, keystroke second: without the macOS Accessibility
       // grant the keystroke never fires, and the item still has to be there.
@@ -727,11 +859,13 @@ class _RealAppState extends State<RealApp>
         final dest = Platform.isLinux ? await foregroundAppKey() : null;
         await sendPasteChordSafe(intoTerminal: dest == 'terminal');
       }
+      return true;
     } catch (_) {
       // Most likely the blob isn't downloaded yet (offline, or the peer hasn't
       // finished uploading). It's on the clipboard only if putOnClipboard got
       // that far; tell the user rather than fail silently.
       _notify('Could not paste', "That item couldn't be loaded yet.");
+      return false;
     } finally {
       _pasteInFlight = false;
     }
@@ -994,6 +1128,15 @@ class _RealAppState extends State<RealApp>
   /// The repo notifies on every result/query change; when the mini picker is
   /// open, debounce a re-hug so the window tracks the match count smoothly.
   void _onRepoTick() {
+    // Before the visibility early-return: the stack changes most often while
+    // the popup is HIDDEN (that is what the push hotkey is for), and the tray
+    // is the only surface showing it then.
+    final depth = widget.repo.pasteStackDepth;
+    if (depth != _lastStackDepth) {
+      _lastStackDepth = depth;
+      unawaited(_updateTrayTooltip());
+      unawaited(_rebuildMenu());
+    }
     if (!_visible || _connecting || _settingsOpen || !_miniMode.value) {
       return;
     }
@@ -1194,10 +1337,14 @@ class _RealAppState extends State<RealApp>
       }
       String? text;
       Uint8List? png;
+      String? html;
+      Uint8List? rtf;
       if (await clipboardSequence() != seqBefore) {
         final c = await _readClipboardContent();
         text = c.text;
         png = c.png;
+        html = c.html;
+        rtf = c.rtf;
       }
       // No new copy → the user meant "annotate what I already copied".
       // NB: deliberately NOT gated on clipboardShouldBeIgnored() — an explicit
@@ -1212,6 +1359,8 @@ class _RealAppState extends State<RealApp>
         text: png == null ? text : null,
         png: png,
         sourceApp: srcApp,
+        html: png == null ? html : null,
+        rtf: png == null ? rtf : null,
       );
       if (res == null) {
         _notify('Nothing to save', 'That item couldn’t be captured.');
@@ -1235,10 +1384,55 @@ class _RealAppState extends State<RealApp>
     }
   }
 
+  /// The formatting flavors sitting alongside the plain text, or nulls.
+  ///
+  /// On the hot path of EVERY text copy, so it is budgeted rather than
+  /// open-ended: Word and Excel render HTML and RTF lazily through OLE and can
+  /// take hundreds of milliseconds on a large selection. Each flavor gets its
+  /// own short timeout and a failure costs only that flavor — the plain
+  /// capture always lands.
+  Future<({String? html, Uint8List? rtf})> _readRichFlavors(
+    ClipboardReader reader,
+    String plain,
+  ) async {
+    const none = (html: null, rtf: null);
+    final repo = widget.repo;
+    if (!repo.captureRichText) return none;
+    // Over the per-item cap the capture is refused anyway, so do not pay for
+    // the reads.
+    if (plain.trim().isEmpty || utf8.encode(plain).length > repo.maxItemBytes) {
+      return none;
+    }
+    const budget = Duration(milliseconds: 400);
+    String? html;
+    Uint8List? rtf;
+    try {
+      if (reader.canProvide(kRelicHtml)) {
+        html = await reader
+            .readValue(kRelicHtml)
+            .timeout(budget, onTimeout: () => null);
+      }
+    } catch (_) {
+      html = null;
+    }
+    try {
+      if (reader.canProvide(kRelicRtf)) {
+        rtf = await reader
+            .readValue(kRelicRtf)
+            .timeout(budget, onTimeout: () => null);
+      }
+    } catch (_) {
+      rtf = null;
+    }
+    return (html: html, rtf: rtf);
+  }
+
   /// Annotate-path clipboard read — the same format ladder as the watcher
   /// (PNG → JPEG → plain text → CF_DIB→PNG → framework text), condensed to a
-  /// value return. Keep in step with [onClipboardChanged].
-  Future<({String? text, Uint8List? png})> _readClipboardContent() async {
+  /// value return. Keep in step with [onClipboardChanged] — including the
+  /// rich flavors, which both ladders read through [_readRichFlavors].
+  Future<({String? text, Uint8List? png, String? html, Uint8List? rtf})>
+      _readClipboardContent() async {
     try {
       final clip = SystemClipboard.instance;
       if (clip != null) {
@@ -1256,21 +1450,27 @@ class _RealAppState extends State<RealApp>
               onTimeout: () => null,
             );
             if (bytes != null && bytes.isNotEmpty) {
-              return (text: null, png: bytes);
+              return (text: null, png: bytes, html: null, rtf: null);
             }
           }
         }
         if (reader.canProvide(Formats.plainText)) {
           final t = await reader.readValue(Formats.plainText);
-          if (t != null && t.trim().isNotEmpty) return (text: t, png: null);
+          if (t != null && t.trim().isNotEmpty) {
+            final rich = await _readRichFlavors(reader, t);
+            return (text: t, png: null, html: rich.html, rtf: rich.rtf);
+          }
         }
       }
       final fallbackPng = await clipboardImageAsPng();
-      if (fallbackPng != null) return (text: null, png: fallbackPng);
+      if (fallbackPng != null) {
+        return (text: null, png: fallbackPng, html: null, rtf: null);
+      }
+      // No reader to ask, so plain only.
       final data = await Clipboard.getData(Clipboard.kTextPlain);
-      return (text: data?.text, png: null);
+      return (text: data?.text, png: null, html: null, rtf: null);
     } catch (_) {
-      return (text: null, png: null);
+      return (text: null, png: null, html: null, rtf: null);
     }
   }
 
@@ -1394,7 +1594,9 @@ class _RealAppState extends State<RealApp>
         if (repo.captureTextEnabled) {
           final text = await reader.readValue(Formats.plainText);
           if (text != null && !_isRecentlyHintedSecret(text)) {
-            repo.captureText(text, sourceApp: srcApp);
+            final rich = await _readRichFlavors(reader, text);
+            repo.captureText(text,
+                sourceApp: srcApp, html: rich.html, rtf: rich.rtf);
           }
         }
         return;
@@ -1495,6 +1697,10 @@ class _RealAppState extends State<RealApp>
         await _setPaused(true);
       case 'resume':
         await _setPaused(false);
+      case 'stack_clear':
+        widget.repo.clearStack();
+      case 'stack_info':
+        break; // disabled status line
       case 'connect':
         setState(() => _connecting = true);
         await _sizeWindow(520, 560);

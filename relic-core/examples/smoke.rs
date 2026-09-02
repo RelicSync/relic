@@ -35,6 +35,7 @@ fn relic(uid: &str, content: &str, ts: i64) -> Relic {
         content: Some(content.into()),
         preview: Some(content.into()),
         attachments: vec![],
+        rich: None,
     }
 }
 

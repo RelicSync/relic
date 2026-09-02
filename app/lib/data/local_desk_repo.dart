@@ -10,6 +10,7 @@ import 'package:super_clipboard/super_clipboard.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/relic.dart';
+import '../models/rich_body.dart';
 import '../platform/clipboard_bridge.dart';
 import '../platform/login_item.dart';
 import '../platform/paths.dart';
@@ -226,6 +227,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   int _queryGen = 0; // discard stale async refines
 
   String? _lastCaptured; // text dedupe guard
+  // Formatting fingerprint of the same guard. Must be assigned wherever
+  // _lastCaptured is, or re-pasting a formatted item captures it again.
+  int? _lastCapturedRichFp;
   Timer? _secretClearTimer; // 30 s post-secret-copy clipboard scrub
   int? _lastBlobHash; // blob dedupe guard
   // uid behind _lastBlobHash — lets save & annotate resolve the relic a
@@ -413,6 +417,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       // Re-copying content that just went into hiding must capture it afresh
       // rather than being swallowed by the dedupe guards.
       _lastCaptured = null;
+      _lastCapturedRichFp = null;
       _lastBlobHash = null;
       _lastBlobUid = null;
     }
@@ -538,6 +543,13 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   bool _captureText = true;
   bool _captureImages = true;
   bool _captureFiles = true;
+  // Rich text, split into capture and paste so either half can be turned off
+  // on its own. Both default ON, but they exist because pasting rich CHANGES
+  // existing behaviour: browsers publish HTML for every copy, so a sentence
+  // taken from a docs page and pasted into Word now arrives in the website's
+  // fonts instead of the document's.
+  bool _captureRichText = true;
+  bool _pasteRichText = true;
   bool _maskSecrets = true;
   bool _clearSecretClip = true; // scrub clipboard 30 s after a secret copy
   int _maxItemMb = 100;
@@ -576,6 +588,10 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   // device. On by default (registered like the other hotkeys), each editable.
   List<HotkeyBinding> _hkQuickPaste =
       List<HotkeyBinding>.from(HotkeyBinding.defaultQuickPaste);
+  // Paste stack (Ctrl+Shift+D / Ctrl+Shift+B). Registered ONLY while
+  // [pasteStackOn], so an opted-out user keeps both chords.
+  HotkeyBinding _hkStackPush = HotkeyBinding.defaultStackPush;
+  HotkeyBinding _hkStackPop = HotkeyBinding.defaultStackPop;
 
   /// desktop.dart installs these so a settings change takes effect live (re-
   /// register hotkeys, show/hide the tray, restyle) without the repo having to
@@ -644,6 +660,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   bool get captureTextEnabled => _captureText;
   bool get captureImagesEnabled => _captureImages;
   bool get captureFilesEnabled => _captureFiles;
+  bool get captureRichText => _captureRichText;
+  bool get pasteRichText => _pasteRichText;
   bool get maskSecrets => _maskSecrets;
   int get maxItemMb => _maxItemMb;
   @override
@@ -711,6 +729,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   HotkeyBinding get miniHotkey => _hkMini;
   // The five quick-paste bindings, slot 0 = Ctrl+Shift+1 (newest) … slot 4.
   List<HotkeyBinding> get quickPasteHotkeys => List.unmodifiable(_hkQuickPaste);
+  HotkeyBinding get stackPushHotkey => _hkStackPush;
+  HotkeyBinding get stackPopHotkey => _hkStackPop;
 
   void setAppearance(Appearance a) {
     _appearance = a;
@@ -808,6 +828,18 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
 
   void setCaptureFiles(bool on) {
     _captureFiles = on;
+    _savePrefs();
+    notifyListeners();
+  }
+
+  void setCaptureRichText(bool on) {
+    _captureRichText = on;
+    _savePrefs();
+    notifyListeners();
+  }
+
+  void setPasteRichText(bool on) {
+    _pasteRichText = on;
     _savePrefs();
     notifyListeners();
   }
@@ -981,6 +1013,20 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     notifyListeners();
   }
 
+  void setStackPushHotkey(HotkeyBinding b) {
+    _hkStackPush = b;
+    _savePrefs();
+    onHotkeysChanged?.call();
+    notifyListeners();
+  }
+
+  void setStackPopHotkey(HotkeyBinding b) {
+    _hkStackPop = b;
+    _savePrefs();
+    onHotkeysChanged?.call();
+    notifyListeners();
+  }
+
   // --- on-device ML (sift) ---
   SiftSidecar? _sift;
   bool _mlEnrich = true;
@@ -1019,7 +1065,20 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   bool _snippets = false; // saved reusable text, surfaced as a picker facet
   bool _reminders = false; // per-item reminders with a native toast
   bool _pasteAtCaret = false; // open the picker near the text cursor (desktop)
+  bool _pasteStack = false; // queue items, then paste them one at a time
   Timer? _reminderTimer; // sweep runs only while _reminders is on
+
+  /// The paste stack: items queued for sequential pasting, head first.
+  ///
+  /// Session state, deliberately not persisted — a machine restart must never
+  /// come up with a stale queue armed, the same reasoning the pause state uses
+  /// (docs/qol-backlog.md). It cannot live in the picker either: the popup
+  /// clears its state on every close, and filling the stack then dismissing to
+  /// drain it elsewhere is the entire flow.
+  ///
+  /// Holds Relic snapshots rather than uids for the reason _multiSel does: the
+  /// list re-sorts and rows scroll out of the loaded window.
+  final List<Relic> _stack = [];
   // Foreground app at the last popup summon (exe stem / bundle id), set by
   // the desktop shell — the "paste destination" for the context prior.
   // Null on mobile and when the summoner is Relic itself.
@@ -1233,6 +1292,79 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   }
 
   @override
+  bool get pasteStackOn => _pasteStack;
+
+  /// Unlike the other power-feature setters this one calls [onHotkeysChanged]:
+  /// turning it on or off has to register or release two global chords, and
+  /// the settings rows for those chords are shown only while it is on. Wiring
+  /// visibility and liveness together is what keeps a live chord from existing
+  /// with nothing in the UI to reveal it.
+  void setPasteStack(bool on) {
+    _pasteStack = on;
+    if (!on) clearStack();
+    _savePrefs();
+    onHotkeysChanged?.call();
+    notifyListeners();
+  }
+
+  // --- the stack itself ---
+  @override
+  List<Relic> get pasteStack => List.unmodifiable(_stack);
+
+  int get pasteStackDepth => _stack.length;
+
+  /// The next item out, without consuming it. The pop handler writes the
+  /// clipboard first and only then calls [popStack], so a failed write leaves
+  /// the queue untouched.
+  Relic? peekStack() => _stack.isEmpty ? null : _stack.first;
+
+  void pushStack(Relic r) {
+    _stack.add(r);
+    notifyListeners();
+  }
+
+  @override
+  void pushStackAll(Iterable<Relic> rs) {
+    if (rs.isEmpty) return;
+    _stack.addAll(rs);
+    notifyListeners();
+  }
+
+  /// FIFO: [pushStack] appends, this takes the head. Copy 1, 2, 3 then paste
+  /// 1, 2, 3. Everyone calls it a stack; it behaves as a queue, which is what
+  /// filling a form actually needs.
+  Relic? popStack() {
+    if (_stack.isEmpty) return null;
+    final r = _stack.removeAt(0);
+    notifyListeners();
+    return r;
+  }
+
+  @override
+  void removeFromStack(String uid) {
+    final before = _stack.length;
+    _stack.removeWhere((r) => r.uid == uid);
+    if (_stack.length != before) notifyListeners();
+  }
+
+  @override
+  void reverseStack() {
+    if (_stack.length < 2) return;
+    final copy = _stack.reversed.toList();
+    _stack
+      ..clear()
+      ..addAll(copy);
+    notifyListeners();
+  }
+
+  @override
+  void clearStack() {
+    if (_stack.isEmpty) return;
+    _stack.clear();
+    notifyListeners();
+  }
+
+  @override
   bool get snippets => _snippets;
   void setSnippets(bool on) {
     _snippets = on;
@@ -1371,6 +1503,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _snippets = j['feature_snippets'] as bool? ?? false;
         _reminders = j['feature_reminders'] as bool? ?? false;
         _pasteAtCaret = j['feature_paste_at_caret'] as bool? ?? false;
+        _pasteStack = j['feature_paste_stack'] as bool? ?? false;
         _appearance = Appearance.byName(j['appearance'] as String?);
         _launchAtLogin = j['launch_at_login'] as bool? ?? true;
         _showTrayIcon = j['show_tray'] as bool? ?? true;
@@ -1390,6 +1523,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _captureText = j['capture_text'] as bool? ?? true;
         _captureImages = j['capture_images'] as bool? ?? true;
         _captureFiles = j['capture_files'] as bool? ?? true;
+        _captureRichText = j['capture_rich_text'] as bool? ?? true;
+        _pasteRichText = j['paste_rich_text'] as bool? ?? true;
         _maskSecrets = j['mask_secrets'] as bool? ?? true;
         _clearSecretClip = j['clear_secret_clip'] as bool? ?? true;
         _maxItemMb = (j['max_item_mb'] as num?)?.toInt().clamp(1, 100) ?? 100;
@@ -1442,6 +1577,10 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
                     : null) ??
                 HotkeyBinding.defaultQuickPaste[i],
         ];
+        _hkStackPush = HotkeyBinding.fromJson(j['hk_stack_push']) ??
+            HotkeyBinding.defaultStackPush;
+        _hkStackPop = HotkeyBinding.fromJson(j['hk_stack_pop']) ??
+            HotkeyBinding.defaultStackPop;
         // Mini picker hotkey (new): no legacy to upgrade, just the default.
         _hkMini =
             HotkeyBinding.fromJson(j['hk_mini']) ?? HotkeyBinding.defaultMini;
@@ -1468,6 +1607,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           'feature_snippets': _snippets,
           'feature_reminders': _reminders,
           'feature_paste_at_caret': _pasteAtCaret,
+          'feature_paste_stack': _pasteStack,
           'appearance': _appearance.name,
           'launch_at_login': _launchAtLogin,
           'show_tray': _showTrayIcon,
@@ -1480,6 +1620,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           'capture_text': _captureText,
           'capture_images': _captureImages,
           'capture_files': _captureFiles,
+          'capture_rich_text': _captureRichText,
+          'paste_rich_text': _pasteRichText,
           'mask_secrets': _maskSecrets,
           'clear_secret_clip': _clearSecretClip,
           'max_item_mb': _maxItemMb,
@@ -1505,6 +1647,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           'hk_promote': _hkPromote.toJson(),
           'hk_mini': _hkMini.toJson(),
           'hk_quick_paste': [for (final b in _hkQuickPaste) b.toJson()],
+          'hk_stack_push': _hkStackPush.toJson(),
+          'hk_stack_pop': _hkStackPop.toJson(),
         }),
       );
     } catch (_) {}
@@ -2224,11 +2368,18 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     String text, {
     Source source = Source.clipboard,
     String? sourceApp,
+    String? html,
+    Uint8List? rtf,
   }) {
     final t = text.trimRight();
     if (t.trim().isEmpty) return false;
-    if (t == _lastCaptured) return false;
+    final rich = RichBody.capture(plain: t, html: html, rtf: rtf);
+    // The echo guard is keyed on the text AND its formatting: re-copying the
+    // same sentence from a styled source after a plain one is a real change
+    // worth recording, not an echo of our own clipboard write.
+    if (t == _lastCaptured && rich?.h == _lastCapturedRichFp) return false;
     _lastCaptured = t;
+    _lastCapturedRichFp = rich?.h;
     final db = _db;
     if (db == null) return false;
     if (utf8.encode(t).length > maxItemBytes) {
@@ -2238,6 +2389,14 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
 
     final existing = db.uidByContent(t);
     if (existing != null) {
+      // Same text, possibly better formatting. Update in place rather than
+      // keying the dedupe on `rich`, which would make every styled-then-plain
+      // re-copy of the same sentence a duplicate row. setRich first: touch
+      // queues the push and the push re-reads the row.
+      if (rich != null && rich.h != db.richOf(existing)?.h) {
+        final row = db.getByUid(existing);
+        if (row != null && !row.isSecret) db.setRich(existing, rich);
+      }
       db.touch(existing, _now, queuePush: syncEnabled);
       if (_personalRank) {
         db.recordUse(existing, _now); // a re-copy is a use (frecency)
@@ -2250,6 +2409,11 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     }
     final tags = _tagsFor(t);
     if (sourceApp != null && !tags.contains(sourceApp)) tags.add(sourceApp);
+    // A secret never carries formatting. The masked plain text would be
+    // scrubbed while the HTML flavor shipped the same value in the clear.
+    // Enforced again on the write path and again on export, because a relic
+    // can be marked secret AFTER capture and masking can be toggled off.
+    final keep = tags.contains('secret') ? null : rich;
     final r = Relic(
       uid: _uuid.v4(),
       createdAt: _now,
@@ -2265,6 +2429,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       tags: tags,
       content: t,
       preview: _preview(t),
+      rich: keep,
     );
     db.upsert(r, queuePush: syncEnabled);
     _enforceRetention();
@@ -2576,7 +2741,49 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     String? text,
     Uint8List? png,
     String? sourceApp,
+    String? html,
+    Uint8List? rtf,
   }) async {
+    final db = _db;
+    final uid = _resolveCapturedUid(
+        text: text, png: png, sourceApp: sourceApp, html: html, rtf: rtf);
+    if (db == null || uid == null) return null;
+    var r = db.getByUid(uid);
+    if (r == null) return null;
+    if (!r.promoted) {
+      await promote(r, true); // tier-cap guarded; no-op on refusal
+      r = db.getByUid(uid) ?? r;
+    }
+    return (r, r.promoted);
+  }
+
+  /// Same capture, without the promote: the paste stack queues an item, it does
+  /// not put it in the vault. Returns the relic, or null when there was nothing
+  /// on the clipboard worth queuing.
+  Relic? captureForStack({
+    String? text,
+    Uint8List? png,
+    String? sourceApp,
+    String? html,
+    Uint8List? rtf,
+  }) {
+    final db = _db;
+    final uid = _resolveCapturedUid(
+        text: text, png: png, sourceApp: sourceApp, html: html, rtf: rtf);
+    return (db == null || uid == null) ? null : db.getByUid(uid);
+  }
+
+  /// Resolve whatever was just read off the clipboard to a relic uid, capturing
+  /// it if it is new. Shared by [captureForAnnotate] and [captureForStack] so
+  /// the dedupe-by-content, echo guards and image `_lastBlobUid` resolution are
+  /// written once.
+  String? _resolveCapturedUid({
+    String? text,
+    Uint8List? png,
+    String? sourceApp,
+    String? html,
+    Uint8List? rtf,
+  }) {
     final db = _db;
     if (db == null) return null;
     String? uid;
@@ -2591,27 +2798,28 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     } else if (text != null) {
       final t = text.trimRight();
       if (t.trim().isEmpty) return null;
+      final rich = RichBody.capture(plain: t, html: html, rtf: rtf);
       final existing = db.uidByContent(t);
       if (existing != null) {
+        // Same in-place formatting upgrade captureText does on its dedupe hit.
+        if (rich != null && rich.h != db.richOf(existing)?.h) {
+          final row = db.getByUid(existing);
+          if (row != null && !row.isSecret) db.setRich(existing, rich);
+        }
         db.touch(existing, _now, queuePush: syncEnabled);
         if (_personalRank) {
         db.recordUse(existing, _now); // a re-copy is a use (frecency)
       }
         uid = existing;
-      } else if (captureText(t, source: Source.hotkey, sourceApp: sourceApp)) {
+      } else if (captureText(t,
+          source: Source.hotkey, sourceApp: sourceApp, html: html, rtf: rtf)) {
         uid = db.uidByContent(t);
       }
       // Either way the watcher must not re-capture this same clipboard event.
       _lastCaptured = t;
+      _lastCapturedRichFp = rich?.h;
     }
-    if (uid == null) return null;
-    var r = db.getByUid(uid);
-    if (r == null) return null;
-    if (!r.promoted) {
-      await promote(r, true); // tier-cap guarded; no-op on refusal
-      r = db.getByUid(uid) ?? r;
-    }
-    return (r, r.promoted);
+    return uid;
   }
 
   /// Deterministic subtype tags for text, honoring the "detect & mask secrets"
@@ -3161,6 +3369,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       if (redact) {
         j.remove('content');
         j.remove('preview'); // preview holds plaintext head — scrub it too
+        j.remove('rich'); // the HTML/RTF flavors hold the SAME secret, unmasked
         j['redacted'] = true;
       }
       items.add(j);
@@ -3613,6 +3822,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   Future<void> putTextOnClipboard(String t, {bool sensitive = false}) async {
     _secretClearTimer?.cancel(); // a newer copy always disarms the scrub
     _lastCaptured = t; // suppress the echo capture
+    _lastCapturedRichFp = null;
     if (!await writeSensitiveTextToClipboard(t)) {
       await Clipboard.setData(ClipboardData(text: t));
     }
@@ -3666,6 +3876,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           // fails.
           if (await writeFileToClipboard(dst.path)) return;
           _lastCaptured = dst.path;
+          _lastCapturedRichFp = null;
           if (!await writeSensitiveTextToClipboard(dst.path)) {
             await Clipboard.setData(ClipboardData(text: dst.path));
           }
@@ -3675,8 +3886,17 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     }
     final t = await textOf(r);
     if (t != null) {
+      // richIfCurrent is the single gate: it returns null for a secret, and
+      // null once the text has been edited away from what the formatting
+      // described. textOf can also answer with a filename, which no stored
+      // formatting will ever fingerprint-match.
+      final rich = _pasteRichText ? r.richIfCurrent : null;
       _lastCaptured = t; // suppress the echo capture
-      if (!await writeSensitiveTextToClipboard(t)) {
+      _lastCapturedRichFp = rich?.h;
+      final wrote = rich == null
+          ? await writeSensitiveTextToClipboard(t)
+          : await writeRichToClipboard(t, rich, sensitive: true);
+      if (!wrote) {
         await Clipboard.setData(ClipboardData(text: t));
       }
     }
@@ -3811,6 +4031,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     _hybridUids?.removeWhere(gone.contains); // active fused ranking
     // Re-copying the same content after a clear should recapture it.
     _lastCaptured = null;
+    _lastCapturedRichFp = null;
     _lastBlobHash = null;
     _lastBlobUid = null;
     _deleteBlobFilesBulk(res.orphanBlobKeys);
@@ -4855,6 +5076,11 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         if (r.note != null) 'note': r.note,
         if (r.content != null) 'content': r.content,
         if (r.preview != null) 'preview': r.preview,
+        // Formatting flavors. Optional and additive: a client that does not
+        // know the key ignores it (docs/wire-format.md, "clients ignore unknown
+        // fields within a version"). Capped at 256 KB so the envelope stays
+        // well inside the Worker's caps.item * 1.5 body gate.
+        if (r.rich != null) 'rich': r.rich!.toJson(),
         // Attachment manifest rides inside the encrypted payload (filenames
         // never reach the server); the bundle is the single blob_key.
         if (r.attachments.isNotEmpty)
@@ -5755,6 +5981,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       content: p['content'] as String?,
       preview: p['preview'] as String?,
       attachments: Attachment.listFrom(p['attachments']),
+      rich: RichBody.fromJson(p['rich']),
     );
   }
 
@@ -5912,6 +6139,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     content: j['content'] as String?,
     preview: j['preview'] as String?,
     attachments: Attachment.listFrom(j['attachments']),
+    rich: RichBody.fromJson(j['rich']),
   );
 }
 

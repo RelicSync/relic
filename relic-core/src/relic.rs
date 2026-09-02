@@ -120,6 +120,12 @@ pub struct Relic {
     /// File attachments packed into the bundle blob (empty for most relics).
     #[serde(default)]
     pub attachments: Vec<Attachment>,
+    /// Formatting flavors (HTML / RTF) for a text relic, capped at 256 KiB by
+    /// the writing client. Opaque here: relic-core never renders or rewrites
+    /// them, it only round-trips them so a re-seal does not drop the field.
+    /// Shape is `{"h": <fingerprint>, "html"?: str, "rtf"?: base64}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rich: Option<serde_json::Value>,
 }
 
 #[cfg(test)]

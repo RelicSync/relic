@@ -192,6 +192,7 @@ mod tests {
             content: Some(content.into()),
             preview: Some(content.into()),
             attachments: vec![],
+            rich: None,
         }
     }
 

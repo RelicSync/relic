@@ -53,6 +53,44 @@ enum ClipboardBridge {
         pb.setData(Data(), forType: transient)
         result(ok)
 
+      // Text plus its formatting flavors, in ONE pasteboard session.
+      //
+      // Deliberately not super_clipboard's writer (which the photo path uses):
+      // that declares a lazy NSPasteboardWriter promise, so the content dies
+      // when Relic quits, and its clearContents() would wipe the privacy
+      // markers we set here. Declaration order is the app's preference order,
+      // so the rich types lead and .string is the fallback every app can take.
+      case "writeRich":
+        guard let args = call.arguments as? [String: Any],
+              let text = args["text"] as? String else {
+          result(false)
+          return
+        }
+        let html = args["html"] as? String
+        let rtf = (args["rtf"] as? FlutterStandardTypedData)?.data
+        let sensitive = (args["sensitive"] as? Bool) ?? false
+
+        var types: [NSPasteboard.PasteboardType] = []
+        if rtf != nil { types.append(.rtf) }
+        if html != nil { types.append(.html) }
+        types.append(.string)
+        if sensitive { types.append(contentsOf: [concealed, transient]) }
+
+        pb.clearContents()
+        pb.declareTypes(types, owner: nil)
+        var wrote = pb.setString(text, forType: .string)
+        if let rtf = rtf { wrote = pb.setData(rtf, forType: .rtf) && wrote }
+        if let html = html {
+          // The charset marker keeps Notes and Mail from assuming latin-1.
+          let marked = "<meta charset='utf-8'>" + html
+          wrote = pb.setString(marked, forType: .html) && wrote
+        }
+        if sensitive {
+          pb.setData(Data(), forType: concealed)
+          pb.setData(Data(), forType: transient)
+        }
+        result(wrote)
+
       case "filePaths":
         let opts: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
         let urls = pb.readObjects(forClasses: [NSURL.self], options: opts) as? [URL] ?? []

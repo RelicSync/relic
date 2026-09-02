@@ -532,8 +532,16 @@ class _SettingsViewState extends State<SettingsView>
                 repo.pasteAtCaret,
                 repo.setPasteAtCaret,
                 sub: 'Summon the picker near your text cursor when we can.',
-                last: true,
               ),
+            _toggleRow(
+              c,
+              'Sequential paste stack',
+              repo.pasteStackOn,
+              repo.setPasteStack,
+              sub: 'Queue several items, then paste them one at a time in '
+                  'order. Adds two shortcuts.',
+              last: true,
+            ),
           ],
         );
       case 1:
@@ -561,6 +569,23 @@ class _SettingsViewState extends State<SettingsView>
               repo.captureFilesEnabled,
               repo.setCaptureFiles,
               leading: LucideIcons.file,
+            ),
+            _toggleRow(
+              c,
+              'Keep formatting',
+              repo.captureRichText,
+              repo.setCaptureRichText,
+              sub: 'Remember bold, links and colours along with the text.',
+              leading: LucideIcons.type,
+            ),
+            _toggleRow(
+              c,
+              'Paste with formatting',
+              repo.pasteRichText,
+              repo.setPasteRichText,
+              sub: 'Off pastes plain text everywhere. '
+                  'Use Copy as > Plain text for a one-off.',
+              leading: LucideIcons.clipboardType,
             ),
             _toggleRow(
               c,
@@ -3300,6 +3325,27 @@ class _SettingsViewState extends State<SettingsView>
             onChanged: (b) => repo.setQuickPasteHotkey(i, b),
             registerFailed: repo.failedHotkeys.contains('quickPaste${i + 1}'),
           ),
+        // Shown only while the feature is on, matching when the chords are
+        // actually registered. Visibility and liveness stay in lockstep so a
+        // live global chord can never exist with nothing in the UI naming it.
+        if (repo.pasteStackOn) ...[
+          _HotkeyRow(
+            repo: repo,
+            title: 'Add to paste stack',
+            sub: 'Queue what you have selected, or what you just copied.',
+            binding: repo.stackPushHotkey,
+            onChanged: repo.setStackPushHotkey,
+            registerFailed: repo.failedHotkeys.contains('stackPush'),
+          ),
+          _HotkeyRow(
+            repo: repo,
+            title: 'Paste next from stack',
+            sub: 'Pastes the next queued item and removes it from the queue.',
+            binding: repo.stackPopHotkey,
+            onChanged: repo.setStackPopHotkey,
+            registerFailed: repo.failedHotkeys.contains('stackPop'),
+          ),
+        ],
       ],
     );
   }

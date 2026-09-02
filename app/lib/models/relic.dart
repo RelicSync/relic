@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'rich_body.dart';
+
 /// Mirrors relic-core's Relic (SPEC §4 / docs/wire-format.md).
 enum Kind { string, photo, file, other }
 
@@ -146,6 +148,12 @@ class Relic {
   final String? preview;
   final List<Attachment> attachments; // files packed into the bundle blob
 
+  /// Formatting flavors (HTML / RTF) captured alongside [content], or null.
+  /// Always read through [richIfCurrent], never directly: the body carries a
+  /// fingerprint of the text it came from, and formatting that no longer
+  /// matches must be ignored rather than pasted. See models/rich_body.dart.
+  final RichBody? rich;
+
   const Relic({
     required this.uid,
     required this.createdAt,
@@ -165,6 +173,7 @@ class Relic {
     this.content,
     this.preview,
     this.attachments = const [],
+    this.rich,
   });
 
   bool get isSecret => tags.contains('secret');
@@ -191,6 +200,7 @@ class Relic {
         if (preview != null) 'preview': preview,
         if (attachments.isNotEmpty)
           'attachments': Attachment.listToJson(attachments),
+        if (rich != null) 'rich': rich!.toJson(),
       };
 
   bool get hasAttachments => attachments.isNotEmpty;
@@ -272,6 +282,15 @@ class Relic {
   /// True when [firstUrl] would return a link — for showing the open action.
   bool get hasLink => firstUrl != null;
 
+  /// The formatting flavors, but only when they still describe [content].
+  ///
+  /// Every paste and export path goes through this rather than [rich]. A writer
+  /// that changes the text without knowing the field exists (relic-cli's
+  /// upsert, an import) leaves formatting behind that no longer matches; the
+  /// fingerprint check makes that leftover inert instead of wrong. Secrets get
+  /// nothing regardless of what is stored.
+  RichBody? get richIfCurrent => isSecret ? null : rich?.forPlain(content);
+
   /// True when this is a blob-backed file/image that can be handed to the OS
   /// default app (excludes secrets and text-only relics).
   bool get hasFile =>
@@ -296,6 +315,8 @@ class Relic {
     int? byteSize,
     String? blobKey,
     bool clearBlobKey = false,
+    RichBody? rich,
+    bool clearRich = false,
   }) =>
       Relic(
         uid: uid,
@@ -316,6 +337,7 @@ class Relic {
         content: content ?? this.content,
         preview: preview ?? this.preview,
         attachments: attachments ?? this.attachments,
+        rich: clearRich ? null : (rich ?? this.rich),
       );
 }
 

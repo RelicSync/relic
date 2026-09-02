@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:sqlite3/sqlite3.dart';
 
 import '../models/relic.dart';
+import '../models/rich_body.dart';
 import '../widgets/chrome.dart';
 import 'file_types.dart';
 import 'heuristic_tags.dart'; // detectTags, for the v4 semantic backfill
@@ -83,6 +84,12 @@ class RelicDb {
     _ensureColumn(db, 'have_blob', 'INTEGER NOT NULL DEFAULT 0');
     _ensureColumn(db, 'enrich_level', 'INTEGER NOT NULL DEFAULT 0');
     _ensureColumn(db, 'attachments', 'TEXT'); // JSON manifest for bundle blobs
+    // Formatting flavors (HTML/RTF) for a text relic, as RichBody JSON.
+    // UNLIKE the local-only columns below, this one SYNCS: it is in the
+    // sealed payload and in both halves of [upsert]. Never indexed — the
+    // markup would poison the FTS body with div/span/style/mso noise, and
+    // detectTags would emit `code` on every browser copy.
+    _ensureColumn(db, 'rich', 'TEXT');
     // Machine tags the user explicitly removed — enrichment must not re-add
     // them. Local-only, like enrich_level (upsert never touches it).
     _ensureColumn(db, 'suppressed_tags', 'TEXT');
@@ -759,8 +766,9 @@ class RelicDb {
         '''INSERT INTO relics
            (uid, created_at, updated_at, kind, source, promoted, byte_size,
             device, mime, filename, blob_key, content_hash, have_blob,
-            tags, user_tags, title, note, content, preview, attachments)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            tags, user_tags, title, note, content, preview, attachments,
+            rich)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(uid) DO UPDATE SET
              created_at=excluded.created_at, updated_at=excluded.updated_at,
              kind=excluded.kind, source=excluded.source, promoted=excluded.promoted,
@@ -769,7 +777,7 @@ class RelicDb {
              content_hash=excluded.content_hash, tags=excluded.tags,
              user_tags=excluded.user_tags, title=excluded.title, note=excluded.note,
              content=excluded.content, preview=excluded.preview,
-             attachments=excluded.attachments''',
+             attachments=excluded.attachments, rich=excluded.rich''',
         [
           r.uid,
           r.createdAt,
@@ -793,6 +801,7 @@ class RelicDb {
           r.attachments.isEmpty
               ? null
               : jsonEncode(Attachment.listToJson(r.attachments)),
+          r.rich == null ? null : jsonEncode(r.rich!.toJson()),
         ],
       );
       final attRs = _db.select(
@@ -862,8 +871,9 @@ class RelicDb {
       '''INSERT OR REPLACE INTO relics
          (uid, created_at, updated_at, kind, source, promoted, byte_size,
           device, mime, filename, blob_key, content_hash, have_blob,
-          tags, user_tags, title, note, content, preview, attachments)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+          tags, user_tags, title, note, content, preview, attachments,
+          rich)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
     );
     final fts = _db.prepare(
       'INSERT INTO relics_fts (uid, named, body, aux, tags) VALUES (?,?,?,?,?)',
@@ -897,6 +907,7 @@ class RelicDb {
           r.attachments.isEmpty
               ? null
               : jsonEncode(Attachment.listToJson(r.attachments)),
+          r.rich == null ? null : jsonEncode(r.rich!.toJson()),
         ]);
         // Same recipe as _writeIndexRows, minus the deletes. Kept in step with
         // it by relic_db_test's bulk-vs-upsert equivalence test.
@@ -1769,6 +1780,25 @@ class RelicDb {
   /// string is stored as-is — it marks "extraction ran, nothing to index" so
   /// the backlog pass (which scans for NULL) doesn't retry forever. Local-only
   /// (each device extracts deterministically).
+  /// Read just the formatting flavors for [uid], without materializing the
+  /// relic. Used by the capture dedupe path to decide whether an incoming copy
+  /// carries better formatting than the row it collapsed onto.
+  RichBody? richOf(String uid) {
+    final rs = _db.select('SELECT rich FROM relics WHERE uid = ?', [uid]);
+    return rs.isEmpty ? null : RichBody.fromJson(rs.first['rich']);
+  }
+
+  /// Replace the formatting flavors for [uid]. Deliberately does NOT queue a
+  /// push or touch `updated_at`: callers pair it with [touch], which does both,
+  /// and the push re-reads the row so the new value rides along. No reindex —
+  /// rich text is never in the FTS body.
+  void setRich(String uid, RichBody? rich) {
+    _db.execute(
+      'UPDATE relics SET rich = ? WHERE uid = ?',
+      [rich == null ? null : jsonEncode(rich.toJson()), uid],
+    );
+  }
+
   void setAttachmentText(String uid, String text) {
     _db.execute(
       'UPDATE relics SET attachment_text = ? WHERE uid = ?',
@@ -3450,6 +3480,7 @@ class RelicDb {
     content: j['content'] as String?,
     preview: j['preview'] as String?,
     attachments: Attachment.listFrom(j['attachments']),
+    rich: RichBody.fromJson(j['rich']),
   );
 
   static List<String> _jsonList(Object? v) {

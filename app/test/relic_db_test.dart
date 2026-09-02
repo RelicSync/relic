@@ -7,6 +7,7 @@ import 'package:relic_app/data/relic_db.dart';
 import 'package:relic_app/data/repo.dart';
 import 'package:relic_app/data/tag_synonyms.dart';
 import 'package:relic_app/models/relic.dart';
+import 'package:relic_app/models/rich_body.dart';
 import 'package:relic_app/widgets/chrome.dart';
 import 'package:sqlite3/sqlite3.dart';
 
@@ -1606,5 +1607,96 @@ void main() {
     final freq = db.tagFrequencies(false);
     expect(freq.user['snippet'], 1,
         reason: 'the Snippets facet counts relics tagged #snippet');
+  });
+
+  group('rich text column', () {
+    RichBody body(String plain, {String html = '<b>x</b>'}) =>
+        RichBody.capture(plain: plain, html: html)!;
+
+    test('round-trips through upsert', () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+
+      final rich = body('hello', html: '<b>hello</b>');
+      db.upsert(_mk('a', content: 'hello').copyWith(rich: rich));
+
+      final back = db.getByUid('a')!;
+      expect(back.rich, rich);
+      expect(back.richIfCurrent, rich);
+    });
+
+    test('a later upsert without rich CLEARS it', () {
+      // The column is synced, so it must be in the ON CONFLICT DO UPDATE set,
+      // not just the INSERT. If it were insert-only this would still return the
+      // old value and a peer could never remove formatting.
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+
+      db.upsert(_mk('a', content: 'hello').copyWith(rich: body('hello')));
+      expect(db.getByUid('a')!.rich, isNotNull);
+
+      db.upsert(_mk('a', content: 'hello'));
+      expect(db.getByUid('a')!.rich, isNull);
+    });
+
+    test('bulkLoad round-trips it too', () {
+      // bulkLoad has its own parallel INSERT. Missing the column there would
+      // make rich text silently vanish on the mobile paste path, which builds
+      // its whole index this way.
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+
+      final rich = body('hello');
+      db.bulkLoad([_mk('a', content: 'hello').copyWith(rich: rich)]);
+      expect(db.getByUid('a')!.rich, rich);
+    });
+
+    test('setRich replaces it and richOf reads it back', () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+
+      db.upsert(_mk('a', content: 'hello'));
+      expect(db.richOf('a'), isNull);
+
+      final rich = body('hello');
+      db.setRich('a', rich);
+      expect(db.richOf('a'), rich);
+      expect(db.getByUid('a')!.rich, rich);
+
+      db.setRich('a', null);
+      expect(db.richOf('a'), isNull);
+    });
+
+    test('setRich does not queue a push on its own', () {
+      // It is always paired with touch(), which owns updated_at and the queue.
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+
+      db.upsert(_mk('a', content: 'hello'));
+      db.clearOpsForUid('a');
+      db.setRich('a', body('hello'));
+      expect(db.pendingCount(), 0);
+    });
+
+    test('markup is never searchable', () {
+      // The stored HTML must stay out of the FTS body: indexing it would make
+      // every browser copy match div/span/style/mso, and would let markup
+      // outrank real text.
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+
+      final rich = RichBody.capture(
+        plain: 'quarterly figures',
+        html: '<div style="mso-pad:0">zzzqmarker</div>',
+      )!;
+      db.upsert(
+          _captured('a', 'quarterly figures').copyWith(rich: rich));
+
+      expect(db.lexicalHybridUids('quarterly', Scope.all), contains('a'));
+      expect(db.lexicalHybridUids('zzzqmarker', Scope.all) ?? const [],
+          isEmpty);
+      expect(db.lexicalHybridUids('mso', Scope.all) ?? const [], isEmpty);
+      expect(db.lexicalHybridUids('div', Scope.all) ?? const [], isEmpty);
+    });
   });
 }

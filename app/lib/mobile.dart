@@ -9,6 +9,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
+import 'package:super_clipboard/super_clipboard.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'data/api.dart';
@@ -22,6 +23,7 @@ import 'data/supabase_auth.dart';
 import 'data/worker_repo.dart';
 import 'onboarding/add_device.dart';
 import 'onboarding/onboarding.dart';
+import 'platform/rich_formats.dart';
 import 'platform/store_safe.dart';
 import 'theme/relic_theme.dart';
 import 'theme/tokens.dart';
@@ -204,6 +206,12 @@ class _Creds {
       (await _s.read(key: _kAppearance)) ?? 'light';
   static Future<void> setAppearance(String v) => _s.write(key: _kAppearance, value: v);
 
+  static const _kPasteRich = 'relic.paste.richText';
+  static Future<bool> pasteRichText() async =>
+      (await _s.read(key: _kPasteRich)) != '0'; // default on
+  static Future<void> setPasteRichText(bool v) =>
+      _s.write(key: _kPasteRich, value: v ? '1' : '0');
+
   static const _kPersonalRank = 'relic.ranking.personalRank';
   static Future<bool> personalRank() async =>
       (await _s.read(key: _kPersonalRank)) != '0'; // default on
@@ -238,6 +246,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   String _deviceName = 'Phone';
   bool _autoVault = true;
   bool _maskSecrets = true;
+  bool _pasteRich = true;
   bool _personalRank = true;
 
   /// Where "Save to device" writes, and which choices this device supports
@@ -331,7 +340,9 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   bool _pendingSharesLive = true;
   final _appLinks = AppLinks();
   StreamSubscription<Uri>? _linkSub;
-  final List<String> _pendingText = []; // captured via link before connect
+  // Captured via the tile/deep link before the repo was connected. Carries the
+  // HTML flavor too, so a queued capture is not quietly poorer than a live one.
+  final List<({String text, String? html})> _pendingText = [];
 
   @override
   void initState() {
@@ -368,12 +379,13 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   Future<void> _loadPrefs() async {
     // All independent, so read them concurrently — in series this was seven
     // more Keystore round trips racing the launch screen.
-    final (dev, av, ms, ap, pr, sm, so) = await (
+    final (dev, av, ms, ap, pr, prt, sm, so) = await (
       _Creds.deviceName(),
       _Creds.autoVault(),
       _Creds.maskSecrets(),
       _Creds.appearance(),
       _Creds.personalRank(),
+      _Creds.pasteRichText(),
       SavePrefs.mode(),
       SavePrefs.options(),
     ).wait;
@@ -385,6 +397,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
       _maskSecrets = ms;
       _appearance = parseAppearance(ap);
       _personalRank = pr;
+      _pasteRich = prt;
       _saveMode = sm;
       _saveOptions = so;
     });
@@ -394,6 +407,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
       repo.autoVault = _autoVault;
       repo.maskSecrets = _maskSecrets;
       repo.personalRank = _personalRank;
+      repo.pasteRichText = _pasteRich;
     }
   }
 
@@ -661,6 +675,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     repo.autoVault = _autoVault;
     repo.maskSecrets = _maskSecrets;
     repo.personalRank = _personalRank;
+    repo.pasteRichText = _pasteRich;
     // Searching during the first seconds of a launch is answered by the
     // degraded matcher while the real index builds; this repaints with the
     // proper ranking the moment it lands.
@@ -1105,7 +1120,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
       _captureShared(repo, batch, live: live);
     }
     if (_pendingText.isNotEmpty) {
-      final batch = List<String>.from(_pendingText);
+      final batch = List<({String text, String? html})>.from(_pendingText);
       _pendingText.clear();
       unawaited(_flushPendingText(repo, batch));
     }
@@ -1113,10 +1128,11 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
 
   /// Drain queued tile captures, counting the ones that actually landed. The
   /// old version fired them off unawaited and toasted `batch.length` regardless.
-  Future<void> _flushPendingText(WorkerRepo repo, List<String> batch) async {
+  Future<void> _flushPendingText(
+      WorkerRepo repo, List<({String text, String? html})> batch) async {
     var added = 0;
-    for (final t in batch) {
-      if (await repo.captureText(t)) added++;
+    for (final q in batch) {
+      if (await repo.captureText(q.text, html: q.html)) added++;
     }
     if (!mounted) return;
     setState(() {});
@@ -1210,21 +1226,73 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   /// during init, before the window has focus — and Android only lets the
   /// FOREGROUND, FOCUSED app read the clipboard, so the first read often returns
   /// null. Poll until the app is focused and a value appears (or give up).
-  Future<String?> _readClipboard() async {
+  Future<({String? text, String? html})> _readClipboard() async {
     for (var i = 0; i < 12; i++) {
-      final t = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
-      if (t != null && t.trim().isNotEmpty) return t;
+      final got = await _readClipboardOnce();
+      final t = got.text;
+      if (t != null && t.trim().isNotEmpty) return got;
       await Future.delayed(const Duration(milliseconds: 250));
     }
-    return null;
+    return (text: null, html: null);
+  }
+
+  /// One clipboard read, plain text plus the HTML flavor when the source app
+  /// published one.
+  ///
+  /// The clipboard triggers are the only mobile capture paths that can carry
+  /// formatting — the Quick Settings tile on Android, and the Action Button /
+  /// Back Tap / Shortcut `relic://capture` routes on iOS. The share sheet on
+  /// both platforms hands `receive_sharing_intent` a bare String, so a share
+  /// can never be styled without forking that plugin. Chrome, Gmail and Docs
+  /// set `ClipData`'s htmlText on copy, which arrives here as `text/html`;
+  /// Safari and most iOS editors publish `public.html` alongside the plain
+  /// text, which is the same read through [kRelicHtml].
+  ///
+  /// Plain text decides everything. The HTML read is a short, separately
+  /// guarded bonus, and losing it costs nothing: no reader (the plugin missing,
+  /// a platform without one), a throw, or a slow provider all fall through to
+  /// the framework clipboard and a plain capture.
+  Future<({String? text, String? html})> _readClipboardOnce() async {
+    try {
+      final clip = SystemClipboard.instance;
+      if (clip != null) {
+        final reader = await clip.read();
+        if (reader.canProvide(Formats.plainText)) {
+          final t = await reader.readValue(Formats.plainText);
+          if (t != null && t.trim().isNotEmpty) {
+            String? html;
+            try {
+              if (reader.canProvide(kRelicHtml)) {
+                html = await reader.readValue(kRelicHtml).timeout(
+                      const Duration(milliseconds: 400),
+                      onTimeout: () => null,
+                    );
+              }
+            } catch (_) {
+              html = null; // one bad flavor never costs us the capture
+            }
+            return (text: t, html: html);
+          }
+        }
+      }
+    } catch (_) {
+      // fall through to the framework clipboard
+    }
+    final t = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+    return (text: t, html: null);
   }
 
   /// Capture from a trigger: use the link's ?text= if present, else read the
   /// system clipboard once the window is focused.
   Future<void> _captureFromTrigger(Uri uri) async {
     var text = uri.queryParameters['text'];
+    String? html;
     if (text == null || text.trim().isEmpty) {
-      text = await _readClipboard();
+      // Only the clipboard read can offer formatting. A ?text= trigger is a
+      // string in a URL and has nowhere to put it.
+      final got = await _readClipboard();
+      text = got.text;
+      html = got.html;
     }
     text = text?.trim();
     if (text == null || text.isEmpty) {
@@ -1239,13 +1307,14 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     }
     final repo = await _repoForCapture();
     if (repo == null) {
-      _pendingText.add(text); // not set up yet — capture once connected
+      // Not set up yet: capture once connected, formatting and all.
+      _pendingText.add((text: text, html: html));
       return;
     }
     // Never claim success we didn't have: captureText returns false when the
     // master key can't be unlocked, and the old unconditional toast made that
     // silent no-op look like a capture.
-    final ok = await repo.captureText(text);
+    final ok = await repo.captureText(text, html: html);
     if (_repo != null && mounted) setState(() {}); // refresh the live list
     _toast(ok ? 'Captured to Relic' : "Couldn't capture — open Relic and retry");
   }
@@ -1440,6 +1509,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
                     _deviceNameTile(colors, setSheet),
                     _autoVaultTile(colors, setSheet),
                     _maskSecretsTile(colors, setSheet),
+                    _pasteRichTile(colors, setSheet),
                     _settingLabel(colors, 'SEARCH'),
                     _personalRankTile(colors, setSheet),
                     if (_personalRank)
@@ -1888,6 +1958,24 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
           _repo?.maskSecrets = v;
           _captureRepo?.maskSecrets = v;
           _Creds.setMaskSecrets(v);
+        },
+      );
+
+  Widget _pasteRichTile(RelicColors c, StateSetter setSheet) => SwitchListTile(
+        value: _pasteRich,
+        activeThumbColor: c.accent,
+        secondary: Icon(LucideIcons.type, color: c.accent, size: 20),
+        title: Text('Paste with formatting',
+            style: RelicTheme.sans(size: 15, color: c.text)),
+        subtitle: Text(
+            'Copies keep bold, links and colours. Off pastes plain text everywhere.',
+            style: RelicTheme.sans(size: 11.5, color: c.textMuted)),
+        onChanged: (v) {
+          setState(() => _pasteRich = v);
+          setSheet(() {});
+          _repo?.pasteRichText = v;
+          _captureRepo?.pasteRichText = v;
+          _Creds.setPasteRichText(v);
         },
       );
 

@@ -98,3 +98,11 @@
 5e58f6efd70880f0300e2214f148d7973d043c01:relic-sift/src/stage_a/text.rs:jwt:728
 5e58f6efd70880f0300e2214f148d7973d043c01:relic-sift/src/stage_a/text.rs:generic-api-key:736
 5e58f6efd70880f0300e2214f148d7973d043c01:relic-sift/src/stage_a/text.rs:twilio-api-key:716
+
+# app/test/mobile_rich_capture_test.dart
+# The fixture for "a secret never carries formatting" on the Android capture
+# path. Verified fake by hand: glpat- followed by AbCdEf0123456789AbCd. It is
+# the input to the assertion that a secret is stored with no rich flavors, so
+# it has to look like a real token shape to trip heuristicTags.
+abdcbf9607501f64fbc614a112e8f4ce6f27b32a:app/test/mobile_rich_capture_test.dart:gitlab-pat:92
+abdcbf9607501f64fbc614a112e8f4ce6f27b32a:app/test/mobile_rich_capture_test.dart:gitlab-pat:93
