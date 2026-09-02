@@ -21,10 +21,14 @@ This doc is the handoff. Read §1 and §2, then go to your platform's section.
 | Android | tile path, HTML only | yes, HTML only | n/a (desktop only) | yes, release AAB |
 | iOS | no | no, falls back to plain | n/a | no |
 
-Nothing here has been pasted into a real app on any platform yet, Windows
-included. The test suite covers the pure logic (CF_HTML framing, the cap, the
-fingerprint, the queue) and the storage and sync round-trip. It cannot cover
-"does Word see it".
+The test suite covers the pure logic (CF_HTML framing, the cap, the fingerprint,
+the queue) and the storage and sync round-trip. It cannot cover "does Word see
+it", so §8 answers that separately with a harness that drives real Office.
+
+As of 2026-09-02 the Windows column of §8 is real: Word round-trips correctly
+through both flavors, and clipboard content survives the writing process
+exiting. Excel is unresolved and needs a human at a keyboard (§8b). No other
+platform has been pasted into a real app yet.
 
 ---
 
@@ -86,7 +90,9 @@ destructive option in this feature. Do not add the fallback.
 
 ## 3. Windows
 
-**Status:** written, analyzed, release-built. Not hand-tested.
+**Status:** written, analyzed, release-built, and verified against real Word
+(§8). Excel is unresolved (§8b). Items 1 and 4 below are covered by the harness;
+2, 3, 5 and 6 still want a human.
 
 The write is raw Win32 in `app/lib/platform/src/windows/clipboard_win.dart`
 (`writeRichToClipboard`), placing plain text, CF_HTML and `Rich Text Format`
@@ -323,19 +329,113 @@ The paste stack is desktop-only and stays that way.
 
 ## 8. The interop matrix
 
-Nobody has filled this in. It is the actual acceptance test.
+The actual acceptance test. Windows was run 2026-09-02 against real Word and
+Excel over COM; see §8a for the harness and §8b for the bug it found.
 
 | Source → target | Win | mac | Linux | Android |
 |---|---|---|---|---|
-| Word → Relic → Word (RTF) | | | n/a | n/a |
-| Browser → Relic → Word or Pages (HTML) | | | | |
-| Excel → Relic → Excel | | | | n/a |
-| Relic → plain text editor | | | | |
-| Copy, quit Relic, paste | | | n/a | n/a |
-| Secret → any target: plain only, marker set | | | | |
+| Word → Relic → Word (RTF) | pass | | n/a | n/a |
+| Word → Relic → Word (HTML) | pass | | | |
+| Browser → Relic → Word or Pages (HTML) | not run | | | |
+| Excel → Relic → Excel | **unresolved, see §8b** | | | n/a |
+| Relic → plain text editor | pass | | | |
+| Copy, quit Relic, paste | pass | | n/a | n/a |
+| Secret → any target: plain only, marker set | not run | | | |
 | Desktop rich capture → phone paste into Gmail | n/a | n/a | n/a | |
 | Phone tile capture in Chrome → paste into Gmail | n/a | n/a | n/a | |
-| Stack of 3 drained into a form | | | | n/a |
+| Stack of 3 drained into a form | not run | | | n/a |
+
+"Copy, quit Relic, paste" passes by construction and was observed: the harness
+is a short-lived `dart run` process, and its clipboard contents outlive it and
+paste correctly into Word. That is the `GlobalAlloc` write from C1 doing its
+job, and it is the thing `super_clipboard` would have broken.
+
+### 8a. The harness
+
+`app/tool/rich_interop_win.dart` and `app/tool/rich_interop_win.ps1`. The Dart
+half drives the real shipping code (`cfHtmlEncode`, `cfHtmlDecode`,
+`RichBody.capture`, `writeRichToClipboard`); the PowerShell half drives real
+Word and Excel over COM. Neither can run in CI, because both need a live
+clipboard and an Office install.
+
+```
+dart run tool/rich_interop_win.dart write       # our payload onto the clipboard
+powershell -File tool/rich_interop_win.ps1      # Word pastes it, per flavor
+dart run tool/rich_interop_win.dart read        # decode what a source published
+dart run tool/rich_interop_win.dart roundtrip   # capture -> JSON -> replay
+dart run tool/rich_interop_win.dart raw         # full CF_HTML vs the fragment
+```
+
+Run the write and the paste in **one** shell session. The clipboard is shared
+machine state and anything else that copies in between invalidates the run.
+
+`PasteSpecial` with an explicit `wdPasteRTF` / `wdPasteHTML` is what makes this
+worth trusting: a plain paste lets Word pick, so a passing plain paste can hide
+a completely broken flavor.
+
+### 8b. Excel is unresolved, and COM cannot settle it
+
+**Do not treat this as a known bug. It is a known unknown.** An earlier pass of
+this section claimed a confirmed design bug here. That claim was wrong and has
+been removed; what follows is what the evidence actually supports.
+
+**What is solid.** Excel's CF_HTML puts the load-bearing parts *outside* the
+fragment markers:
+
+```
+<style> ... .xl63 {font-weight:700;} </style>   <- in <head>, outside
+<table><tr>                                      <- outside
+<!--StartFragment-->
+  <td>plain</td><td class=xl63>bold</td>...      <- all we keep
+<!--EndFragment-->
+```
+
+We store only the fragment and re-wrap it in a bare `<html><body>`, so our
+stored HTML is orphaned `<td>` elements referencing a stylesheet that no longer
+exists. That is a real structural fact, confirmed from a raw dump
+(`dart run tool/rich_interop_win.dart raw` with Excel content on the clipboard).
+Word is not exposed to it because its formatting is inline `style=` attributes
+and a real `<b>` tag.
+
+**What is NOT established: that any user ever sees it.** Excel also receives the
+source's RTF, replayed byte for byte, and RTF carries the table structure and
+the bold. In practice Excel appears to prefer it. Round-tripping through Excel
+gave three correct cells with bold on most runs and one merged cell on some,
+with **identical inputs**, so the failures are not deterministic and cannot be
+pinned on the fragment loss.
+
+**Why COM cannot close this.** `Worksheet.Paste()` depends on Excel's internal
+copy-mode state, which our clipboard write cancels, so it is not a clean proxy
+for a user pressing Ctrl+V. `Worksheet.PasteSpecial("HTML")`, which would
+isolate the HTML flavor the way `wdPasteHTML` does for Word, throws "Unable to
+get the PasteSpecial property" on most invocations. Neither path yields a
+repeatable answer, and the intermittency is in the automation, not visibly in
+our code. Ruled out as causes: nothing else on the machine overwrites the
+clipboard after our write (`dart run tool/rich_interop_win.dart watch` holds the
+sequence number steady for 3s across runs), and the harness's own missing
+`OpenClipboard` retry, which produced a batch of fake "format absent" failures
+before it was fixed.
+
+**How to actually settle it, in about two minutes.** A human, at a keyboard:
+
+1. Copy `A1:C1` from a sheet with one cell bold.
+2. Capture it in Relic, then paste it back into a fresh sheet with Ctrl+V.
+3. Three cells with the bold intact means the fragment loss is masked by RTF and
+   this is a non-issue. One merged unformatted cell means it is real.
+4. Repeat pasting into Google Sheets in a browser, which has no RTF to fall back
+   on and is therefore the case most likely to expose it.
+
+If it turns out to be real, the fix is known and was measured: keep the whole
+CF_HTML document and recompute the offsets from the document's own markers
+(`_cfHtmlFullDocument` in the harness is a working implementation). Two things
+come with it. It must strip the `<link ...file:///C:/Users/<name>/AppData/...>`
+element Office writes into the head, or captures start syncing the user's
+account name and local paths. And it grows stored HTML by about two orders of
+magnitude: Word's fragment for fifteen characters is 289 chars against a 39 KB
+full document, which with Word's 42.5 KB of RTF puts one short styled sentence
+at roughly 82 KB against the 256 KB cap. The cap still degrades correctly, but
+it would start being reached by ordinary selections. §2's derivation of 256 KB
+is about the Worker envelope gate and stays correct either way.
 
 ---
 
