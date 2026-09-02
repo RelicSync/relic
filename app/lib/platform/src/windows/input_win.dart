@@ -43,6 +43,26 @@ const _vkRWin = 0x5C;
 
 bool _isDown(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
 
+/// Whether Ctrl is already down, meaning it is the user's own finger and not
+/// ours. Governs BOTH halves of the synthesized chord: if it is true we neither
+/// press Ctrl nor release it, and the whole chord borrows the key the user is
+/// holding.
+///
+/// SendInput writes to the same key state that GetAsyncKeyState and
+/// RegisterHotKey read, so releasing Ctrl at the end while the key is still
+/// physically held leaves Windows believing Ctrl is up. The hotkey then stops
+/// matching until the user lifts the key and presses it again, which is why
+/// draining a paste stack felt like it needed a full release between items.
+///
+/// Call this AFTER the modifier wait and immediately before the first
+/// injection. Earlier is wrong in the dangerous direction: the answer would be
+/// "the user has Ctrl" from a user who then let go during the wait, and we
+/// would press Ctrl and never release it. A stuck Ctrl is far worse than the
+/// jank this fixes. What remains is a microsecond-wide race where the key is
+/// released between the sample and the V, which types a bare "v"; that window
+/// is the same one the surrounding code already lives with.
+bool _ctrlHeldByUser() => _isDown(_vkControl);
+
 /// Synthesize Ctrl+C into the frontmost application, SAFELY from inside a
 /// global-hotkey handler: when the handler fires the user is still physically
 /// holding the chord's modifiers (Ctrl+Alt+…), and a naive Ctrl+C synthesis
@@ -54,6 +74,8 @@ bool _isDown(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
 /// still held after the timeout, inject KEYUPs — with Ctrl already down FIRST
 /// so the lone Alt-up can't trigger the target app's menu bar (the classic
 /// menu-mask ordering). Best-effort; failures are silent.
+///
+/// The user's own Ctrl is never released on the way out — see [_ctrlHeldByUser].
 Future<void> sendCopyChordSafe() async {
   try {
     for (var i = 0; i < 15; i++) {
@@ -65,14 +87,17 @@ Future<void> sendCopyChordSafe() async {
       }
       await Future<void>.delayed(const Duration(milliseconds: 20));
     }
+    final userCtrl = _ctrlHeldByUser(); // last read before we touch anything
     // Ctrl down first: it doubles as the menu-mask if we must force Alt up.
-    _sendKey(_vkControl, 0);
+    // Skipped when the user is already holding it, so the key state we hand
+    // back matches their fingers.
+    if (!userCtrl) _sendKey(_vkControl, 0);
     for (final vk in [_vkAlt, _vkShift, _vkLWin, _vkRWin]) {
       if (_isDown(vk)) _sendKey(vk, KEYEVENTF_KEYUP);
     }
     _sendKey(_vkC, 0);
     _sendKey(_vkC, KEYEVENTF_KEYUP);
-    _sendKey(_vkControl, KEYEVENTF_KEYUP);
+    if (!userCtrl) _sendKey(_vkControl, KEYEVENTF_KEYUP);
   } catch (_) {}
 }
 
@@ -85,6 +110,13 @@ Future<void> sendCopyChordSafe() async {
 /// any still held — Ctrl DOWN first (it doubles as the menu-mask and is the
 /// modifier we actually want held for the paste). Best-effort; silent on
 /// failure.
+///
+/// The user's own Ctrl is never released on the way out — see [_ctrlHeldByUser].
+/// Alt is a separate problem and is still forced up above: nothing here can
+/// tell a key the user is holding from one we pressed, so re-asserting it after
+/// the paste would strand Alt down if they happened to let go mid-injection.
+/// Fixing that properly wants a low-level keyboard hook (WH_KEYBOARD_LL reports
+/// LLKHF_INJECTED), which is a bigger change than this one.
 Future<void> sendPasteChordSafe() async {
   try {
     for (var i = 0; i < 15; i++) {
@@ -96,13 +128,14 @@ Future<void> sendPasteChordSafe() async {
       }
       await Future<void>.delayed(const Duration(milliseconds: 20));
     }
-    _sendKey(_vkControl, 0);
+    final userCtrl = _ctrlHeldByUser(); // last read before we touch anything
+    if (!userCtrl) _sendKey(_vkControl, 0);
     for (final vk in [_vkAlt, _vkShift, _vkLWin, _vkRWin]) {
       if (_isDown(vk)) _sendKey(vk, KEYEVENTF_KEYUP);
     }
     _sendKey(_vkV, 0);
     _sendKey(_vkV, KEYEVENTF_KEYUP);
-    _sendKey(_vkControl, KEYEVENTF_KEYUP);
+    if (!userCtrl) _sendKey(_vkControl, KEYEVENTF_KEYUP);
   } catch (_) {}
 }
 
