@@ -204,5 +204,16 @@ void main() {
       expect(kRelicHtml.windows!.decodingFormats, ['HTML Format']);
       expect(kRelicHtml.windows!.decodingFormats, isNot(contains('text/html')));
     });
+
+    test('iOS publishes the UTI names, both directions', () {
+      // The iOS write path is the plugin one (clipboard_bridge), so a codec
+      // that quietly lost its ios arm would fall back to MIME names UIKit
+      // apps never look for. public.html / public.rtf are what Pages, Notes,
+      // Mail and Safari read and write.
+      expect(kRelicHtml.ios!.encodingFormats, ['public.html']);
+      expect(kRelicHtml.ios!.decodingFormats, ['public.html']);
+      expect(kRelicRtf.ios!.encodingFormats, ['public.rtf']);
+      expect(kRelicRtf.ios!.decodingFormats, ['public.rtf']);
+    });
   });
 }

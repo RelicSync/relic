@@ -19,7 +19,7 @@ This doc is the handoff. Read §1 and §2, then go to your platform's section.
 | macOS | yes | yes, Swift bridge | yes | **never compiled** |
 | Linux | yes | yes, super_clipboard | yes, degraded on Wayland | yes, release build + runs |
 | Android | tile path, HTML only | yes, HTML only | n/a (desktop only) | yes, release AAB |
-| iOS | no | no, falls back to plain | n/a | no |
+| iOS | trigger paths, HTML only | yes, HTML + RTF | n/a (desktop only) | pending |
 
 Nothing here has been pasted into a real app on any platform yet, Windows
 included. The test suite covers the pure logic (CF_HTML framing, the cap, the
@@ -302,20 +302,41 @@ stale on an edit, and a cache round trip).
 
 ## 7. iOS
 
-**Status: untouched.**
+**Status:** written. Landed 2026-09-02 as the cheap route this section used to
+prescribe: the `Platform.isLinux || Platform.isAndroid` branch in
+`clipboard_bridge.dart` now includes iOS, and that is the entire paste-side
+change. No native code; there is no iOS clipboard bridge and still no reason to
+build one. The lazy-provider lifetime concern does not apply — super_clipboard
+calls the iOS provider eagerly, and we always have the bytes in hand.
 
-`writeRichToClipboard` returns false on iOS, so it falls through to
-`Clipboard.setData` and pastes plain. Nothing is broken, the feature just is not
-there.
+**Paste.** `WorkerRepo.putOnClipboard` was already calling
+`writeRichToClipboard` on mobile; it just returned false here. Now the plugin
+path publishes `public.html` and `public.rtf` (via `kRelicHtml` / `kRelicRtf`,
+whose iOS codecs predate this change) plus plain text. Unlike Android, RTF is
+included: Pages, Notes and Mail all read it. The **Paste with formatting**
+toggle and the row's `Copy as > Plain text` were never platform-gated, so both
+already work.
 
-`Formats.htmlText` and `public.rtf` both work on iOS through super_clipboard
-with no native code, so the cheapest route is extending the
-`Platform.isLinux || Platform.isAndroid` branch in `clipboard_bridge.dart` to
-include iOS. There is no iOS clipboard bridge to add a native case to, and there
-is probably no reason to build one.
+**Capture.** Nothing to change: `_readClipboardOnce` is shared mobile code, so
+the `relic://capture` trigger paths (Action Button, Back Tap, Shortcut) pick up
+`public.html` through the same super_clipboard read the Android tile uses. The
+share sheet stays plain on iOS for exactly the Android reason —
+`receive_sharing_intent` hands over a bare String. RTF capture is skipped on
+mobile (both platforms): `captureText` takes `html:` only, and HTML is the
+flavor that round-trips to every other platform.
 
-One note if you do: super_clipboard's iOS lazy provider is called eagerly, which
-is fine here because we always have the bytes in hand.
+The iOS codec names are pinned in `rich_body_test.dart` ("iOS publishes the UTI
+names") so a lost `ios:` arm fails loudly instead of falling back to MIME names
+UIKit apps never look for.
+
+**To verify on a device or simulator:**
+1. Capture styled text on a desktop, sync, paste into Notes or Mail on the
+   phone. Formatting should survive (that is the HTML flavor; RTF rides along).
+2. Paste the same item into a plain text field. Clean text, not markup.
+3. Copy styled text in Safari, trigger a capture (Shortcut or Action Button),
+   then paste the captured item back into Notes. This is the capture path.
+4. Copy an API key, capture it. The row must mask, no formatting stored.
+5. Settings > Paste with formatting off, copy a styled item, paste. Plain.
 
 The paste stack is desktop-only and stays that way.
 
@@ -325,17 +346,17 @@ The paste stack is desktop-only and stays that way.
 
 Nobody has filled this in. It is the actual acceptance test.
 
-| Source → target | Win | mac | Linux | Android |
-|---|---|---|---|---|
-| Word → Relic → Word (RTF) | | | n/a | n/a |
-| Browser → Relic → Word or Pages (HTML) | | | | |
-| Excel → Relic → Excel | | | | n/a |
-| Relic → plain text editor | | | | |
-| Copy, quit Relic, paste | | | n/a | n/a |
-| Secret → any target: plain only, marker set | | | | |
-| Desktop rich capture → phone paste into Gmail | n/a | n/a | n/a | |
-| Phone tile capture in Chrome → paste into Gmail | n/a | n/a | n/a | |
-| Stack of 3 drained into a form | | | | n/a |
+| Source → target | Win | mac | Linux | Android | iOS |
+|---|---|---|---|---|---|
+| Word → Relic → Word (RTF) | | | n/a | n/a | n/a |
+| Browser → Relic → Word or Pages (HTML) | | | | | |
+| Excel → Relic → Excel | | | | n/a | n/a |
+| Relic → plain text editor | | | | | |
+| Copy, quit Relic, paste | | | n/a | n/a | n/a |
+| Secret → any target: plain only, marker set | | | | | |
+| Desktop rich capture → phone paste into Gmail | n/a | n/a | n/a | | |
+| Phone trigger capture in the browser → paste into Gmail | n/a | n/a | n/a | | |
+| Stack of 3 drained into a form | | | | n/a | n/a |
 
 ---
 

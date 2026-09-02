@@ -1239,10 +1239,14 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   /// One clipboard read, plain text plus the HTML flavor when the source app
   /// published one.
   ///
-  /// The tile is the only Android capture path that can carry formatting: the
-  /// share sheet hands `receive_sharing_intent` a bare String, so a share can
-  /// never be styled without forking that plugin. Chrome, Gmail and Docs all
-  /// set `ClipData`'s htmlText on copy, which arrives here as `text/html`.
+  /// The clipboard triggers are the only mobile capture paths that can carry
+  /// formatting — the Quick Settings tile on Android, and the Action Button /
+  /// Back Tap / Shortcut `relic://capture` routes on iOS. The share sheet on
+  /// both platforms hands `receive_sharing_intent` a bare String, so a share
+  /// can never be styled without forking that plugin. Chrome, Gmail and Docs
+  /// set `ClipData`'s htmlText on copy, which arrives here as `text/html`;
+  /// Safari and most iOS editors publish `public.html` alongside the plain
+  /// text, which is the same read through [kRelicHtml].
   ///
   /// Plain text decides everything. The HTML read is a short, separately
   /// guarded bonus, and losing it costs nothing: no reader (the plugin missing,
