@@ -139,6 +139,28 @@ class WorkerRepo implements RelicRepo {
   /// LocalDeskRepo.emailUnverified.
   final ValueNotifier<bool> emailUnverified = ValueNotifier(false);
 
+  /// Set true when the account's session has been revoked: the worker answered
+  /// 401 `session_revoked` (this token predates a device removal), or GoTrue
+  /// refused the refresh token outright. Both hosts watch this to tell the user
+  /// to sign in again.
+  ///
+  /// This exists because the sync loop turns every non-200 into
+  /// [SyncKind.offline]. A revoked session is indistinguishable from a flaky
+  /// network at that point, so without this flag the app sits on "offline" for
+  /// ever, retrying a token that can never work. Lockstep with
+  /// LocalDeskRepo.sessionRevoked.
+  final ValueNotifier<bool> sessionRevoked = ValueNotifier(false);
+
+  /// True when [body] is the worker's `{"error":"session_revoked",...}` payload.
+  /// Static + pure so the flag logic is unit-testable. Lockstep with LocalDeskRepo.
+  static bool isSessionRevokedBody(String body) {
+    try {
+      return (jsonDecode(body) as Map)['error'] == 'session_revoked';
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// True when [body] is the worker's `{"error":"email_unverified",...}` payload.
   /// Static + pure so the flag logic is unit-testable. Lockstep with LocalDeskRepo.
   static bool isEmailUnverifiedBody(String body) {
@@ -929,6 +951,13 @@ class WorkerRepo implements RelicRepo {
         _refreshToken = s.refreshToken;
         onSupabaseRefresh?.call(this);
       }
+    } on SessionRevoked {
+      // Not retryable, ever. Drop the dead token so _maybeRefresh stops trying
+      // and the host can prompt for a fresh sign-in instead of showing a
+      // permanent "offline".
+      _refreshToken = null;
+      sessionRevoked.value = true;
+      _sync = const SyncState(SyncKind.offline);
     } catch (_) {
       _sync = const SyncState(SyncKind.offline);
     }
@@ -1075,6 +1104,13 @@ class WorkerRepo implements RelicRepo {
           headers: _headers,
         ).timeout(kNetTimeout);
         if (r.statusCode != 200) {
+          // A revoked session looks exactly like a transient failure from here.
+          // Treating it as one is what leaves every device of the account
+          // showing "offline" after somebody removes a device.
+          if (r.statusCode == 401 && isSessionRevokedBody(r.body)) {
+            _refreshToken = null;
+            sessionRevoked.value = true;
+          }
           _sync = const SyncState(SyncKind.offline);
           return;
         }

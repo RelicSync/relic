@@ -280,8 +280,13 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   set _repo(WorkerRepo? r) {
     if (identical(__repo, r)) return;
     __repo?.changes.removeListener(_onRepoChanged);
+    __repo?.sessionRevoked.removeListener(_onRepoChanged);
     __repo = r;
     r?.changes.addListener(_onRepoChanged);
+    // Watched separately from `changes`: a revoked session is discovered by a
+    // pull that, by definition, brought nothing back, so `changes` never fires
+    // and the banner would not appear until something else repainted.
+    r?.sessionRevoked.addListener(_onRepoChanged);
   }
 
   void _onRepoChanged() {
@@ -405,6 +410,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     _shareSub?.cancel();
     _linkSub?.cancel();
     __repo?.changes.removeListener(_onRepoChanged);
+    __repo?.sessionRevoked.removeListener(_onRepoChanged);
     super.dispose();
   }
 
@@ -757,6 +763,31 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
 
   /// Verify-to-sync banner (worker VERIFY_GATE 403 email_unverified). Local use
   /// is unaffected; offer a resend and a session-only dismiss.
+  /// Shown when the account's session was revoked, which is what removing a
+  /// device now does (it signs the account out at the IdP). Without it the sync
+  /// chip reads "offline" for ever: the refresh token is gone, so no retry can
+  /// ever succeed. Not dismissible, because sync stays broken until it is acted
+  /// on.
+  Widget _signedOutBanner(RelicColors c) => Material(
+        color: c.surface,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 6, 8),
+          child: Row(
+            children: [
+              Icon(LucideIcons.logOut, color: c.accent, size: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                    'You were signed out. Sign in again to resume syncing. '
+                    'Your vault is safe on this device.',
+                    style: RelicTheme.sans(
+                        size: 12.5, color: c.text, height: 1.35)),
+              ),
+            ],
+          ),
+        ),
+      );
+
   Widget _verifyBanner(RelicColors c) => Material(
         color: c.surface,
         child: Padding(
@@ -2073,6 +2104,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
       // Stack banners above the list: the add-device promo and the
       // verify-to-sync notice (email not confirmed). Both dismiss per-session.
       final banners = <Widget>[
+        if (_repo!.sessionRevoked.value) _signedOutBanner(colors),
         if (_promo) _addDeviceBanner(colors),
         if (_repo!.emailUnverified.value && !_emailBannerDismissed)
           _verifyBanner(colors),
