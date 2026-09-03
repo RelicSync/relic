@@ -8,6 +8,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart'
     show FontLoader, LogicalKeyboardKey, MissingPluginException, rootBundle;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:relic_app/data/repo.dart';
 import 'package:relic_app/models/relic.dart';
 import 'package:relic_app/theme/relic_theme.dart';
@@ -18,6 +19,7 @@ import 'package:relic_app/ui/onboarding.dart';
 import 'package:relic_app/ui/popup.dart';
 import 'package:relic_app/ui/share_dialog.dart';
 import 'package:relic_app/widgets/controls.dart';
+import 'package:relic_app/widgets/gem_toast.dart';
 import 'package:relic_app/widgets/relic_mark.dart';
 
 import 'shot_seed.dart';
@@ -297,6 +299,121 @@ void main() {
     final copied = ValueNotifier<bool>(false);
     final chipLabel = ValueNotifier<String>('Ctrl+C');
     final editOpen = ValueNotifier<bool>(false);
+    // 0a-pre. AUTO-CAPTURE — the opener. Three things get copied off one
+    // ordinary support page (a serial, a network key, a figure) and each one
+    // simply lands: the only Relic UI on screen is the toast. This is the
+    // "you already copied it" claim the website makes, shown rather than
+    // asserted, and it has to come before any dialog does.
+    final sweepStep = ValueNotifier<int>(0); // 0 none, 1 serial, 2 key
+    final autoChip = ValueNotifier<int>(0);
+    final toastN = ValueNotifier<int>(0);
+    // The folder the download lands in: 0 closed, 1 open, 2 file clicked.
+    final explorer = ValueNotifier<int>(0);
+    final pressing = ValueNotifier<bool>(false); // the download button, clicked
+    final relicIn = ValueNotifier<bool>(false);
+
+    // The opener's own repo, empty of the things it is about to capture, so
+    // the reveal at the end shows them ARRIVING rather than sitting there.
+    final openRepo = StoreShotRepo(extended: true, agedEin: true);
+    await tester.runAsync(() async {
+      await openRepo.preparePhoto();
+      await openRepo.load();
+    });
+    final openTick = ValueNotifier<int>(0);
+    final openNow = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    Relic openItem(String uid, {String? title, String? content,
+            String? filename, Kind kind = Kind.string, int bytes = 64,
+            String? blobKey, List<String> tags = const []}) =>
+        Relic(
+          uid: uid,
+          createdAt: openNow,
+          updatedAt: openNow,
+          kind: kind,
+          source: Source.clipboard,
+          promoted: false,
+          byteSize: bytes,
+          blobKey: blobKey,
+          device: 'Windows PC',
+          tags: tags,
+          userTags: const [],
+          title: title,
+          content: content,
+          filename: filename,
+        );
+
+    await record(
+      name: 'auto-capture',
+      build: (c) => _FakeDocsPage(
+        imagePath: openRepo.manualPath,
+        sweep: sweepStep,
+        chip: autoChip,
+        toast: toastN,
+        explorer: explorer,
+        pressing: pressing,
+        relicIn: relicIn,
+        relic: AnimatedBuilder(
+          animation: openTick,
+          builder: (_, _) => popup(openRepo),
+        ),
+      ),
+      logical: const Size(1100, 780),
+      // Two text copies, then the file. Three toasts inside five seconds read
+      // as popcorn: the beat says "this happens on its own and you stop
+      // thinking about it", which needs air.
+      length: const Duration(milliseconds: 15400),
+      acts: [
+        (const Duration(milliseconds: 800), () async => sweepStep.value = 1),
+        (const Duration(milliseconds: 1450), () async {
+          autoChip.value = 1;
+          toastN.value = 1;
+          await openRepo.restore(openItem('o-serial',
+              content: 'AS2-9F41-77KD', tags: const ['number']));
+          openTick.value++;
+        }),
+        (const Duration(milliseconds: 3900), () async {
+          sweepStep.value = 2;
+          autoChip.value = 0;
+        }),
+        (const Duration(milliseconds: 4550), () async {
+          autoChip.value = 2;
+          toastN.value = 2;
+          await openRepo.restore(openItem('o-key', content: 'sunlit-harbor-42'));
+          openTick.value++;
+        }),
+        // A file, not text. The manual downloads, the folder it landed in
+        // opens, the file gets CLICKED, and Ctrl+C on it is the same gesture
+        // with the same result. That is the whole claim: a clipboard manager
+        // keeps text, and this keeps whatever you copied.
+        (const Duration(milliseconds: 5900), () async {
+          sweepStep.value = 0;
+          pressing.value = true;
+        }),
+        (const Duration(milliseconds: 6400), () async {
+          pressing.value = false;
+          explorer.value = 1;
+        }),
+        (const Duration(milliseconds: 7900), () async => explorer.value = 2),
+        (const Duration(milliseconds: 8600), () async => autoChip.value = 4),
+        (const Duration(milliseconds: 9300), () async {
+          toastN.value = 3;
+          await openRepo.restore(openItem('o-aurora',
+              kind: Kind.file,
+              title: 'Aurora S2 manual',
+              filename: 'aurora-s2-manual.pdf',
+              bytes: 2410000,
+              blobKey: 'demo-aurora',
+              tags: const ['document']));
+          openTick.value++;
+        }),
+        (const Duration(milliseconds: 10400), () async {
+          autoChip.value = 0;
+          explorer.value = 0;
+        }),
+        // ...and here it all is, without anyone having filed anything.
+        (const Duration(milliseconds: 11200), () async => relicIn.value = true),
+      ],
+    );
+
     final einNow = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     // title/preview null => the dialog's title field opens EMPTY (the hotkey
     // flow: your next keystrokes ARE the label); content holds the number.
@@ -364,6 +481,91 @@ void main() {
       ],
     );
 
+    // 13c. INSTANT SYNC — rendered as TWO streams on one shared clock so the
+    // compositor can seat each into the real device art the website hero
+    // uses (macbook.webp / iphone.webp). Both are deterministic, so frame N
+    // of one is genuinely frame N of the other: the arrival is still a
+    // single continuous take, it is just composited into two screens.
+    final syncDesk = StoreShotRepo(extended: true);
+    final syncPhone = StoreShotRepo(extended: true);
+    await tester.runAsync(() async {
+      await syncDesk.preparePhoto();
+      await syncDesk.load();
+      await syncPhone.preparePhoto();
+      await syncPhone.load();
+    });
+    final syncing = ValueNotifier<bool>(false);
+    // PopupView does not repaint on a bare repo mutation in the harness, so
+    // both streams rebuild off an explicit tick.
+    final deskTick = ValueNotifier<int>(0);
+    final phoneTick = ValueNotifier<int>(0);
+    final syncNow = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    Relic syncItem() => Relic(
+          uid: 'syncdemo',
+          createdAt: syncNow,
+          updatedAt: syncNow,
+          kind: Kind.photo,
+          source: Source.clipboard,
+          promoted: false,
+          byteSize: 742000,
+          blobKey: 'demo-manual',
+          device: 'Windows PC',
+          tags: const ['screenshot'],
+          userTags: const [],
+          title: 'Setup guide',
+          content: StoreShotRepo.manualOcrText,
+        );
+    const syncLen = Duration(milliseconds: 6200);
+
+    await record(
+      name: 'sync-desk',
+      build: (c) => _Desktop(
+        child: AnimatedBuilder(
+          animation: deskTick,
+          builder: (_, _) => popup(syncDesk),
+        ),
+      ),
+      // The MacBook cutout's aspect (1.541) so the stream drops into the
+      // screen with no crop, and no larger than it needs to be: every extra
+      // logical pixel here shrinks the popup inside the laptop.
+      logical: const Size(1140, 740),
+      length: syncLen,
+      acts: [
+        (const Duration(milliseconds: 1300), () async {
+          await syncDesk.restore(syncItem());
+          deskTick.value++;
+        }),
+      ],
+    );
+
+    await record(
+      name: 'sync-phone',
+      build: (c) => AnimatedBuilder(
+        animation: Listenable.merge([phoneTick, syncing]),
+        builder: (_, _) => PopupView(
+          repo: syncPhone,
+          onClose: () {},
+          onSettings: () {},
+          syncing: syncing.value,
+        ),
+      ),
+      // 0.4615, the iphone.webp screen aspect.
+      logical: const Size(360, 780),
+      dpr: 3.0,
+      capRatio: 2.0,
+      isMobile: true,
+      length: syncLen,
+      acts: [
+        // The desktop copy landed at 1.3s; the phone wakes and has it by 2.2s.
+        (const Duration(milliseconds: 1900), () async => syncing.value = true),
+        (const Duration(milliseconds: 2200), () async {
+          await syncPhone.restore(syncItem());
+          phoneTick.value++;
+        }),
+        (const Duration(milliseconds: 3100), () async => syncing.value = false),
+      ],
+    );
+
     // Single-scene re-renders: every showcase scene assumes the captured EIN
     // exists (titled) in the main repo. If capture was filtered out, seed it.
     if (!repo.all.any((r) => r.uid == 'einNew')) {
@@ -402,6 +604,92 @@ void main() {
           const Duration(milliseconds: 3600),
           () async => tester.sendKeyEvent(LogicalKeyboardKey.enter)
         ),
+      ],
+    );
+
+    // 0c-bis. The same recall, in a window sized to what it found. The full
+    // popup is a fixed 520x680, so a search with exactly one hit leaves two
+    // thirds of it empty; that is honest but it photographs as an empty app.
+    // Same repo, same query, same toast, in a short window that a still can
+    // use. Video cuts should keep 'recall' above; this one is for stills.
+    await record(
+      name: 'recall-tight',
+      build: (c) => popup(secretRepo),
+      logical: const Size(520, 404),
+      length: const Duration(milliseconds: 5400),
+      acts: [
+        ...typing('EIN', const Duration(milliseconds: 800),
+            seed: 22, baseMs: 170),
+        (
+          const Duration(milliseconds: 2600),
+          () async => tapText('88-1402316', optional: true)
+        ),
+        (
+          const Duration(milliseconds: 3600),
+          () async => tester.sendKeyEvent(LogicalKeyboardKey.enter)
+        ),
+      ],
+    );
+
+    // 0d. THE LOCAL MODELS NAMING THINGS — a screenshot lands with no title
+    // and no tags, the row shows the SHIPPING "Analyzing..." spinner while the
+    // on-device pass runs, and then the title and the tags simply appear.
+    // "It reads your screenshots" was only ever half of it; the half people
+    // care about is never having to name or file anything.
+    final tagRepo = StoreShotRepo(extended: true, agedEin: true);
+    await tester.runAsync(() async {
+      await tagRepo.preparePhoto();
+      await tagRepo.load();
+    });
+    // The seed's own boarding pass has to go: two identical passes stacked on
+    // top of each other reads as a duplicate bug, not as one shot arriving.
+    if (tagRepo.byUid('flight') case final f?) await tagRepo.delete(f);
+    final tagTick = ValueNotifier<int>(0);
+    final tagNow = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    // uid 'flight' on purpose: StoreShotRepo.localImagePath keys the painted
+    // boarding-pass image off that uid, and anything else falls through to the
+    // generic receipt. A row captioned "Boarding pass" over a picture of a
+    // receipt is the kind of detail that makes a promo shot look staged.
+    final rawShot = Relic(
+      uid: 'flight',
+      createdAt: tagNow,
+      updatedAt: tagNow,
+      kind: Kind.photo,
+      source: Source.clipboard,
+      promoted: false,
+      byteSize: 860000,
+      blobKey: 'demo-flight',
+      device: 'Windows PC',
+      tags: const [],
+      userTags: const [],
+      content: null,
+    );
+    await record(
+      name: 'autotag',
+      build: (c) => AnimatedBuilder(
+        animation: tagTick,
+        builder: (_, _) => popup(tagRepo),
+      ),
+      length: const Duration(milliseconds: 6400),
+      acts: [
+        (const Duration(milliseconds: 900), () async {
+          await tagRepo.restore(rawShot);
+          tagRepo.analyzing.add('flight');
+          tagTick.value++;
+        }),
+        // The pass finishes: a generated title, the machine tags, and the OCR
+        // text that makes the picture searchable.
+        (const Duration(milliseconds: 3400), () async {
+          await tagRepo.updateMeta(
+            rawShot,
+            title: 'Boarding pass',
+            tags: const ['screenshot', 'travel', 'document'],
+            content: 'CONDOR AIR boarding pass PDX SEA flight CA 1042 '
+                'gate B12 seat 14C boards 9:10 AM confirmation QX7-4NP',
+          );
+          tagRepo.analyzing.remove('flight');
+          tagTick.value++;
+        }),
       ],
     );
 
@@ -479,8 +767,11 @@ void main() {
       build: (c) => popup(repo),
       length: const Duration(milliseconds: 6600),
       acts: [
-        ...typing('boarding pass', const Duration(milliseconds: 700),
-            seed: 4, baseMs: 80),
+        // Deliberately a phrase that exists ONLY inside the boarding-pass
+        // image (shot_seed.manualOcrText / the painted photo), never in a
+        // title or preview. A title match would prove nothing about OCR.
+        ...typing('gate B12', const Duration(milliseconds: 700),
+            seed: 4, baseMs: 95),
         (
           const Duration(milliseconds: 2800),
           () async {
@@ -494,6 +785,57 @@ void main() {
           }
         ),
       ],
+    );
+
+    // 4b. THE SEARCH ITSELF — three queries that share NO words with the
+    // things they find. This beat runs the SHIPPING ranking rather than the
+    // gallery repo's substring filter: StoreShotRepo.enableHybridSearch puts a
+    // real RelicDb behind setQuery, so what ranks here is
+    // RelicDb.lexicalHybridUids — bm25 FTS, the trigram recall leg, tag-intent
+    // and a recency prior, fused with weighted RRF. Nothing is staged; the
+    // queries are typed and the algorithm answers.
+    //
+    //   "hex"         -> colour swatches (the tag is `color`)
+    //   "money"       -> the dollar amounts (the tag is `currency`)
+    //   "bording pas" -> Boarding pass, off two misspelled words
+    final smartRepo = StoreShotRepo(extended: true, agedEin: true);
+    await tester.runAsync(() async {
+      await smartRepo.preparePhoto();
+      await smartRepo.load();
+      await smartRepo.enableHybridSearch();
+    });
+    addTearDown(smartRepo.disposeHybrid);
+    await record(
+      name: 'search-smart',
+      build: (c) => popup(smartRepo),
+      length: const Duration(milliseconds: 11800),
+      acts: [
+        ...typing('hex', const Duration(milliseconds: 700), seed: 7, baseMs: 105),
+        (const Duration(milliseconds: 3200), () async {
+          final f = find.byType(TextField);
+          if (f.evaluate().isNotEmpty) await tester.enterText(f.first, '');
+        }),
+        ...typing('money', const Duration(milliseconds: 3700), seed: 8, baseMs: 100),
+        (const Duration(milliseconds: 6900), () async {
+          final f = find.byType(TextField);
+          if (f.evaluate().isNotEmpty) await tester.enterText(f.first, '');
+        }),
+        ...typing('bording pas', const Duration(milliseconds: 7400),
+            seed: 9, baseMs: 95),
+      ],
+    );
+
+    // 4c. Dates the way people say them. The box parses a date phrase out of
+    // the query (app/lib/data/temporal_parser.dart), lifts it into a removable
+    // gold chip, and searches only what is left over. Nothing is staged: the
+    // sentence is typed and the parser answers, so the rows that come back are
+    // genuinely the ones from that month.
+    await record(
+      name: 'search-date',
+      build: (c) => popup(smartRepo),
+      length: const Duration(milliseconds: 6600),
+      acts: typing('screenshots from 3 months ago',
+          const Duration(milliseconds: 800), seed: 11, baseMs: 78),
     );
 
     // 5. Operator search: tag: filter typed live.
@@ -654,17 +996,30 @@ void main() {
     // scene 0. The Ctrl+Shift+Space chip pops on the focused field, the
     // picker opens at the caret, typing "EIN" surfaces the named entry,
     // Enter pastes it into the form.
+    // The picker has to SEARCH, not just reveal what is already on top. With
+    // the freshly captured EIN the entry was the first row before a key was
+    // pressed, which made the query decorative. The aged seed buries it ~8
+    // months down, so typing "ein" is what surfaces it.
+    final miniRepo = StoreShotRepo(extended: true, agedEin: true);
+    await tester.runAsync(() async {
+      await miniRepo.preparePhoto();
+      await miniRepo.load();
+    });
     final miniOpen = ValueNotifier<bool>(false);
     final miniChip = ValueNotifier<bool>(false);
     final formValue = ValueNotifier<String>('');
+    // Full list, then the hug as "ein" narrows it: 50px of search field plus
+    // ~32px a row.
+    final miniHeight = ValueNotifier<double>(196);
     await record(
       name: 'mini',
       build: (c) => _FakeEinFormPage(
         formValue: formValue,
         miniOpen: miniOpen,
+        miniHeight: miniHeight,
         hotkeyChip: miniChip,
         mini: PopupView(
-          repo: repo,
+          repo: miniRepo,
           onClose: () {},
           onSettings: () {},
           miniSignal: miniOpen,
@@ -672,6 +1027,7 @@ void main() {
             formValue.value = '88-1402316';
             miniOpen.value = false;
             miniChip.value = false; // the chord did its job; clear the field
+            miniHeight.value = 196; // reset for a single-scene re-render
           },
         ),
       ),
@@ -686,6 +1042,9 @@ void main() {
         ),
         ...typing('ein', const Duration(milliseconds: 2300),
             seed: 13, baseMs: 150),
+        // Hug down as the query narrows, the way the real window does.
+        (const Duration(milliseconds: 2500), () async => miniHeight.value = 140),
+        (const Duration(milliseconds: 2900), () async => miniHeight.value = 86),
         (
           const Duration(milliseconds: 4100),
           () async => tester.sendKeyEvent(LogicalKeyboardKey.enter)
@@ -808,6 +1167,9 @@ class _FakeEmailPage extends StatelessWidget {
   });
 
   static const _ink = Color(0xFF1C2128);
+  // The hotkey chip is Relic UI, not the fake page: brand Ink, and the
+  // mono the app actually ships.
+  static const _chipInk = Color(0xFF111110);
   static const _dim = Color(0xFF6A7280);
   static const _select = Color(0xFFB8D7FB);
 
@@ -938,11 +1300,11 @@ class _FakeEmailPage extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 10, vertical: 5),
                           decoration: BoxDecoration(
-                            color: _ink,
+                            color: _chipInk,
                             borderRadius: BorderRadius.circular(7),
                             boxShadow: const [
                               BoxShadow(
-                                color: Color(0x331C2128),
+                                color: Color(0x33111110),
                                 blurRadius: 12,
                                 offset: Offset(0, 4),
                               ),
@@ -960,10 +1322,10 @@ class _FakeEmailPage extends StatelessWidget {
                                 child: Text(label,
                                     key: ValueKey(label),
                                     style: const TextStyle(
-                                        fontFamily: 'IBMPlexMono',
+                                        fontFamily: 'JetBrainsMono',
                                         fontSize: 13,
                                         fontWeight: FontWeight.w600,
-                                        color: Color(0xFFF2F4F7))),
+                                        color: Color(0xFFF1F1EF))),
                               ),
                             ),
                           ),
@@ -1177,16 +1539,21 @@ class _SnipPainter extends CustomPainter {
 class _FakeEinFormPage extends StatelessWidget {
   final ValueNotifier<String> formValue;
   final ValueNotifier<bool> miniOpen;
+  final ValueNotifier<double> miniHeight;
   final ValueNotifier<bool> hotkeyChip;
   final Widget mini;
   const _FakeEinFormPage({
     required this.formValue,
     required this.miniOpen,
+    required this.miniHeight,
     required this.hotkeyChip,
     required this.mini,
   });
 
   static const _ink = Color(0xFF1C2128);
+  // The hotkey chip is Relic UI, not the fake page: brand Ink, and the
+  // mono the app actually ships.
+  static const _chipInk = Color(0xFF111110);
   static const _dim = Color(0xFF6A7280);
   static const _line = Color(0xFFD4D9E0);
   static const _blue = Color(0xFF2563EB);
@@ -1330,11 +1697,11 @@ class _FakeEinFormPage extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(
-                color: _ink,
+                color: _chipInk,
                 borderRadius: BorderRadius.circular(7),
                 boxShadow: const [
                   BoxShadow(
-                    color: Color(0x331C2128),
+                    color: Color(0x33111110),
                     blurRadius: 12,
                     offset: Offset(0, 4),
                   ),
@@ -1342,19 +1709,37 @@ class _FakeEinFormPage extends StatelessWidget {
               ),
               child: const Text('Ctrl+Shift+Space',
                   style: TextStyle(
-                      fontFamily: 'IBMPlexMono',
+                      fontFamily: 'JetBrainsMono',
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      color: Color(0xFFF2F4F7))),
+                      color: Color(0xFFF1F1EF))),
             ),
           ),
         ),
       ),
-      // The real mini picker, anchored at the focused field's caret.
+      // The real mini picker, anchored at the focused field's caret. The
+      // shipping window RE-HUGS itself to the result count as you type
+      // (app/lib/desktop.dart, "re-hug the window to the result count"), so
+      // the height is animated here too. A fixed box is what the scene used
+      // to do, and it left a dead void under the one surviving row once the
+      // query filtered down, which reads as an unfinished surface.
       ValueListenableBuilder<bool>(
         valueListenable: miniOpen,
         builder: (_, open, _) => open
-            ? Positioned(left: 348, top: 384, width: 340, height: 196, child: mini)
+            ? Positioned(
+                left: 348,
+                top: 384,
+                width: 340,
+                child: ValueListenableBuilder<double>(
+                  valueListenable: miniHeight,
+                  builder: (_, h, _) => AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    curve: Curves.easeOutCubic,
+                    height: h,
+                    child: mini,
+                  ),
+                ),
+              )
             : const SizedBox.shrink(),
       ),
     ]);
@@ -1400,4 +1785,569 @@ class _ProxyToLoopback extends HttpOverrides {
       // would recurse straight back here.
       super.createHttpClient(context)
         ..findProxy = (_) => 'PROXY 127.0.0.1:$port';
+}
+
+
+/// The auto-capture opener's surface: an ordinary third-party support page
+/// with three copyable machine facts on it (a serial, a network key, a
+/// figure). [sweep] selects one region at a time, [chip] pops the Ctrl+C
+/// keycap beside it, and [toast] fires the REAL gem toast, which is the only
+/// piece of Relic in the whole scene.
+class _FakeDocsPage extends StatelessWidget {
+  final String? imagePath;
+  final ValueNotifier<int> sweep;
+  final ValueNotifier<int> chip;
+  final ValueNotifier<int> toast;
+
+  /// The page's download button under the pointer, mid-click.
+  final ValueNotifier<bool> pressing;
+
+  /// The folder the download lands in: 0 closed, 1 open, 2 the file is
+  /// clicked. The manual is a FILE, and copying a file has to look like
+  /// copying a file: you open where it went, you click it, you press Ctrl+C.
+  final ValueNotifier<int> explorer;
+
+  /// Slides the real Relic popup in over the page at the end of the beat: the
+  /// three things that were copied, already there, nothing filed by hand.
+  final ValueNotifier<bool> relicIn;
+  final Widget relic;
+
+  const _FakeDocsPage({
+    required this.imagePath,
+    required this.sweep,
+    required this.chip,
+    required this.toast,
+    required this.explorer,
+    required this.pressing,
+    required this.relicIn,
+    required this.relic,
+  });
+
+  static const _ink = Color(0xFF1C2128);
+  static const _dim = Color(0xFF6A7280);
+  static const _select = Color(0xFFBFDBFE);
+  // The keycap is Relic UI, not the fake page: brand Ink and the app's mono.
+  static const _chipInk = Color(0xFF111110);
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(children: [
+      Column(children: [
+        Container(
+          height: 46,
+          color: const Color(0xFF2A2E35),
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(children: [
+            for (final c in const [
+              Color(0xFFE5655C),
+              Color(0xFFE0A63C),
+              Color(0xFF57B85F)
+            ])
+              Container(
+                width: 12,
+                height: 12,
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+              ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Container(
+                height: 30,
+                alignment: Alignment.centerLeft,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF3A3F47),
+                  borderRadius: BorderRadius.circular(15),
+                ),
+                child: const Text('support.aurora.example/s2/setup',
+                    style: TextStyle(
+                        fontFamily: 'IBMPlexMono',
+                        fontSize: 12.5,
+                        color: Color(0xFFC9CED6))),
+              ),
+            ),
+          ]),
+        ),
+        Expanded(
+          child: Container(
+            color: const Color(0xFFF2F4F7),
+            alignment: const Alignment(0, -0.30),
+            child: Container(
+              width: 560,
+              padding: const EdgeInsets.all(30),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFFFFF),
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x141C2128),
+                    blurRadius: 30,
+                    offset: Offset(0, 10),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Aurora S2 · Finish setup',
+                      style: TextStyle(
+                          fontFamily: 'IBMPlexSans',
+                          fontSize: 20,
+                          fontWeight: FontWeight.w600,
+                          color: _ink)),
+                  const SizedBox(height: 18),
+                  _row('SERIAL NUMBER', 'AS2-9F41-77KD', 1),
+                  const SizedBox(height: 14),
+                  _row('NETWORK KEY', 'sunlit-harbor-42', 2),
+                  const SizedBox(height: 18),
+                  _figure(),
+                  const SizedBox(height: 20),
+                  _downloadButton(),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ]),
+      Positioned.fill(child: _explorer()),
+      // The product itself, sliding in over the page. Everything above this
+      // line is scenery; this is the only Relic UI in the beat besides the
+      // toast.
+      Positioned(
+        right: 0,
+        top: 0,
+        bottom: 0,
+        child: ValueListenableBuilder<bool>(
+          valueListenable: relicIn,
+          builder: (_, inn, child) => AnimatedSlide(
+            offset: inn ? Offset.zero : const Offset(1.06, 0),
+            duration: const Duration(milliseconds: 620),
+            curve: Curves.easeOutCubic,
+            child: child,
+          ),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.only(right: 34),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(2),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x4D000000),
+                      blurRadius: 46,
+                      offset: Offset(0, 18),
+                    ),
+                  ],
+                ),
+                child: SizedBox(width: 468, height: 640, child: relic),
+              ),
+            ),
+          ),
+        ),
+      ),
+      // The real toast, bottom-right the way the desktop one sits over the
+      // corner of the screen. Keyed by fire count so each copy re-runs it.
+      Positioned(
+        right: 34,
+        bottom: 10,
+        width: 150,
+        height: 150,
+        child: ValueListenableBuilder<int>(
+          valueListenable: toast,
+          builder: (_, n, _) => n == 0
+              ? const SizedBox.shrink()
+              : GemToast(key: ValueKey('toast-$n'), onDone: () {}),
+        ),
+      ),
+    ]);
+  }
+
+  /// The page's own download control. Nothing to do with Relic — it is how
+  /// the manual gets onto the machine in the first place.
+  Widget _downloadButton() => ValueListenableBuilder<bool>(
+        valueListenable: pressing,
+        builder: (_, down, _) => Stack(
+          clipBehavior: Clip.none,
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 120),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: down ? const Color(0xFF1D4ED8) : const Color(0xFF2563EB),
+                borderRadius: BorderRadius.circular(7),
+              ),
+              child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(LucideIcons.download, size: 15, color: Colors.white),
+                SizedBox(width: 8),
+                Text('Download the S2 manual (PDF)',
+                    style: TextStyle(
+                        fontFamily: 'IBMPlexSans',
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white)),
+              ]),
+            ),
+            if (down)
+              const Positioned(left: 118, top: 22, child: _Pointer()),
+          ],
+        ),
+      );
+
+  /// The folder the manual landed in, opened over the page. The file gets
+  /// clicked and the Ctrl+C chip pops on the ROW, not on the page: the point
+  /// of the beat is that copying a file is the same gesture as copying a line
+  /// of text, and it has to be shown as the gesture people actually make.
+  Widget _explorer() => ValueListenableBuilder<int>(
+        valueListenable: explorer,
+        builder: (_, v, _) => IgnorePointer(
+          child: AnimatedOpacity(
+            opacity: v == 0 ? 0 : 1,
+            duration: const Duration(milliseconds: 200),
+            child: AnimatedScale(
+              scale: v == 0 ? 0.97 : 1,
+              duration: const Duration(milliseconds: 240),
+              curve: Curves.easeOutCubic,
+              child: Align(
+                alignment: const Alignment(-0.14, 0.30),
+                child: Container(
+                  width: 624,
+                  height: 318,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFBFBFD),
+                    borderRadius: BorderRadius.circular(9),
+                    border: Border.all(color: const Color(0xFFD3D7DE)),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x331C2128),
+                        blurRadius: 46,
+                        offset: Offset(0, 20),
+                      ),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Stack(children: [
+                      Column(children: [
+                        _explorerBar(),
+                        _explorerHead(),
+                        _fileRow('aurora-s2-manual.pdf', 'Just now', '2.4 MB',
+                            badge: 'PDF',
+                            badgeColor: const Color(0xFFE5655C),
+                            selected: v >= 2),
+                        _fileRow('aurora-s2-firmware.zip', '12 Aug', '8.1 MB',
+                            badge: 'ZIP', badgeColor: const Color(0xFF8A93A0)),
+                        _fileRow('invoice-april.pdf', '9 Aug', '118 KB',
+                            badge: 'PDF', badgeColor: const Color(0xFFE5655C)),
+                        _fileRow('setup-notes.txt', '2 Aug', '3 KB',
+                            badge: 'TXT', badgeColor: const Color(0xFF57B85F)),
+                      ]),
+                      // The pointer, parked on the row it just clicked.
+                      Positioned(
+                        left: 212,
+                        top: 88,
+                        child: AnimatedOpacity(
+                          opacity: v >= 2 ? 1 : 0,
+                          duration: const Duration(milliseconds: 140),
+                          child: const _Pointer(),
+                        ),
+                      ),
+                    ]),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+  Widget _explorerBar() => Container(
+        height: 42,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: const BoxDecoration(
+          color: Color(0xFFF1F2F5),
+          border: Border(bottom: BorderSide(color: Color(0xFFE1E4EA))),
+        ),
+        child: Row(children: [
+          const Icon(LucideIcons.arrowLeft, size: 15, color: _dim),
+          const SizedBox(width: 16),
+          const Icon(LucideIcons.arrowRight, size: 15, color: Color(0xFFC0C6CF)),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Container(
+              height: 26,
+              alignment: Alignment.centerLeft,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(5),
+                border: Border.all(color: const Color(0xFFDCE0E6)),
+              ),
+              child: const Row(children: [
+                Icon(LucideIcons.folder, size: 13, color: Color(0xFF8A93A0)),
+                SizedBox(width: 9),
+                Text('This PC  ›  Downloads',
+                    style: TextStyle(
+                        fontFamily: 'IBMPlexSans', fontSize: 12, color: _ink)),
+              ]),
+            ),
+          ),
+        ]),
+      );
+
+  static const _colHead = TextStyle(
+      fontFamily: 'IBMPlexSans',
+      fontSize: 11,
+      fontWeight: FontWeight.w600,
+      color: _dim);
+
+  Widget _explorerHead() => Container(
+        height: 28,
+        padding: const EdgeInsets.symmetric(horizontal: 18),
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: Color(0xFFE8EAEF))),
+        ),
+        child: const Row(children: [
+          Expanded(child: Text('Name', style: _colHead)),
+          SizedBox(width: 108, child: Text('Date modified', style: _colHead)),
+          SizedBox(
+              width: 64,
+              child: Text('Size', style: _colHead, textAlign: TextAlign.right)),
+        ]),
+      );
+
+  Widget _fileRow(String name, String when, String size,
+          {required String badge,
+          required Color badgeColor,
+          bool selected = false}) =>
+      Container(
+        height: 44,
+        margin: const EdgeInsets.fromLTRB(8, 2, 8, 0),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFFCFE3FF) : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+              color: selected
+                  ? const Color(0xFF7FB2F0)
+                  : Colors.transparent),
+        ),
+        child: Row(children: [
+          Container(
+            width: 25,
+            height: 30,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: badgeColor,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(badge,
+                style: const TextStyle(
+                    fontFamily: 'IBMPlexSans',
+                    fontSize: 7.5,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(name,
+                style: TextStyle(
+                    fontFamily: 'IBMPlexSans',
+                    fontSize: 13,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                    color: _ink)),
+          ),
+          SizedBox(
+            width: 108,
+            child: Text(when,
+                style: const TextStyle(
+                    fontFamily: 'IBMPlexSans', fontSize: 12, color: _dim)),
+          ),
+          SizedBox(
+            width: 64,
+            child: Text(size,
+                textAlign: TextAlign.right,
+                style: const TextStyle(
+                    fontFamily: 'IBMPlexSans', fontSize: 12, color: _dim)),
+          ),
+          if (selected) _chipFor(4),
+        ]),
+      );
+
+  Widget _figure() => ValueListenableBuilder<int>(
+        valueListenable: sweep,
+        builder: (_, step, _) => Row(mainAxisSize: MainAxisSize.min, children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 320),
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: step == 3 ? const Color(0xFF2563EB) : Colors.transparent,
+                width: 2,
+              ),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(5),
+              child: imagePath == null
+                  ? const SizedBox(width: 168, height: 112)
+                  : Image.file(File(imagePath!),
+                      width: 168, height: 112, fit: BoxFit.cover),
+            ),
+          ),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Text('Pair the speaker from the Aurora app, then keep this '
+                'page handy for the network key.',
+                style: TextStyle(
+                    fontFamily: 'IBMPlexSans',
+                    fontSize: 12.5,
+                    height: 1.5,
+                    color: _dim)),
+          ),
+          _chipFor(3),
+        ]),
+      );
+
+  Widget _row(String label, String value, int step) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Text(label,
+                style: const TextStyle(
+                    fontFamily: 'IBMPlexSans',
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.8,
+                    color: _dim)),
+          ),
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            ValueListenableBuilder<int>(
+              valueListenable: sweep,
+              builder: (_, cur, _) => TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0, end: cur == step ? 1 : 0),
+                duration: const Duration(milliseconds: 400),
+                curve: Curves.easeInOut,
+                builder: (_, v, _) => Stack(children: [
+                  Positioned.fill(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: FractionallySizedBox(
+                        widthFactor: v,
+                        heightFactor: 1,
+                        child: const ColoredBox(color: _select),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+                    child: Text(value,
+                        style: const TextStyle(
+                            fontFamily: 'IBMPlexMono',
+                            fontSize: 19,
+                            fontWeight: FontWeight.w600,
+                            color: _ink)),
+                  ),
+                ]),
+              ),
+            ),
+            _chipFor(step),
+          ]),
+        ],
+      );
+
+  Widget _chipFor(int step) => ValueListenableBuilder<int>(
+        valueListenable: chip,
+        builder: (_, cur, _) => AnimatedOpacity(
+          opacity: cur == step ? 1 : 0,
+          duration: const Duration(milliseconds: 200),
+          child: Container(
+            margin: const EdgeInsets.only(left: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: _chipInk,
+              borderRadius: BorderRadius.circular(7),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x33111110),
+                  blurRadius: 12,
+                  offset: Offset(0, 4),
+                ),
+              ],
+            ),
+            child: const Text('Ctrl+C',
+                style: TextStyle(
+                    fontFamily: 'JetBrainsMono',
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFFF1F1EF))),
+          ),
+        ),
+      );
+}
+
+/// A mouse pointer, drawn rather than iconified so it stays crisp at the
+/// scale the compositor blows the frame up to.
+class _Pointer extends StatelessWidget {
+  const _Pointer();
+
+  @override
+  Widget build(BuildContext context) => const SizedBox(
+      width: 17, height: 25, child: CustomPaint(painter: _PointerPainter()));
+}
+
+class _PointerPainter extends CustomPainter {
+  const _PointerPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width, h = size.height;
+    final p = Path()
+      ..moveTo(0, 0)
+      ..lineTo(0, h * 0.78)
+      ..lineTo(w * 0.29, h * 0.585)
+      ..lineTo(w * 0.50, h)
+      ..lineTo(w * 0.72, h * 0.905)
+      ..lineTo(w * 0.51, h * 0.505)
+      ..lineTo(w * 0.88, h * 0.475)
+      ..close();
+    canvas.drawPath(
+        p,
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.4
+          ..strokeJoin = StrokeJoin.round);
+    canvas.drawPath(p, Paint()..color = const Color(0xFF111110));
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => false;
+}
+
+/// A plain desktop behind the popup: the Relic window floats on a wallpaper
+/// rather than filling the laptop screen, which is what it actually looks
+/// like. The gradient is a wallpaper, not product UI.
+class _Desktop extends StatelessWidget {
+  final Widget child;
+  const _Desktop({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFF2E2E29), Color(0xFF171714)],
+        ),
+      ),
+      child: Center(
+        child: SizedBox(width: 520, height: 680, child: child),
+      ),
+    );
+  }
 }

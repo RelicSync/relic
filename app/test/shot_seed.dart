@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:relic_app/data/relic_db.dart';
 import 'package:relic_app/data/repo.dart';
 import 'package:relic_app/models/relic.dart';
 import 'package:relic_app/widgets/chrome.dart' show Scope;
@@ -37,6 +38,88 @@ class StoreShotRepo extends MemoryRepo {
     this.extended = false,
     this.agedEin = false,
   });
+
+  /// Video harness only: uids whose on-device analysis pass is still running.
+  /// The shipping repo drives this from its enrich queue; here the scene
+  /// script sets it, so the row shows the SAME "Analyzing…" spinner the
+  /// product shows while the local models write a title and tags.
+  final Set<String> analyzing = <String>{};
+
+  @override
+  Set<String> get analyzingUids => analyzing;
+
+  /// Video harness only: swap MemoryRepo's substring filter for the SHIPPING
+  /// ranking — `RelicDb.lexicalHybridUids`, the bm25 FTS + trigram + tag-intent
+  /// + recency legs fused with weighted RRF. That is what makes "hex" find a
+  /// colour and "bording pas" find the boarding pass, and none of it is
+  /// reproducible with `contains`. Costs one full index build, so it is opt-in.
+  ///
+  /// This is the ML-free core (the same ranking the mobile lens runs). The
+  /// desktop repo layers the vector/tag-expansion legs on top of these exact
+  /// primitives when the sift sidecar is present, which a widget test has no
+  /// way to load.
+  RelicDb? _hdb;
+  List<Relic> _ranked = const [];
+  int _hwin = kRelicPage;
+
+  Future<void> enableHybridSearch() async {
+    final db = RelicDb.memory();
+    for (final r in all) {
+      db.upsert(r);
+    }
+    _hdb = db;
+    await setQuery('', Scope.all);
+  }
+
+  void disposeHybrid() {
+    _hdb?.dispose();
+    _hdb = null;
+  }
+
+  @override
+  Future<void> setQuery(
+    String search,
+    Scope scope, {
+    SortMode sort = SortMode.relevance,
+    int? createdAfter,
+    int? createdBefore,
+  }) async {
+    final db = _hdb;
+    if (db == null) {
+      return super.setQuery(search, scope,
+          sort: sort, createdAfter: createdAfter, createdBefore: createdBefore);
+    }
+    _hwin = kRelicPage;
+    final ranked = search.trim().isEmpty
+        ? null
+        : db.lexicalHybridUids(search, scope,
+            createdAfter: createdAfter, createdBefore: createdBefore);
+    if (ranked == null) {
+      await super.setQuery(search, scope,
+          sort: sort, createdAfter: createdAfter, createdBefore: createdBefore);
+      _ranked = const [];
+      return;
+    }
+    _ranked = [for (final uid in ranked) ?byUid(uid)];
+  }
+
+  @override
+  List<Relic> get visible =>
+      _hdb == null || _ranked.isEmpty ? super.visible : _ranked.take(_hwin).toList();
+
+  @override
+  int get matchCount =>
+      _hdb == null || _ranked.isEmpty ? super.matchCount : _ranked.length;
+
+  @override
+  bool get hasMore =>
+      _hdb == null || _ranked.isEmpty ? super.hasMore : _ranked.length > _hwin;
+
+  @override
+  Future<void> loadMore() async {
+    if (_hdb == null || _ranked.isEmpty) return super.loadMore();
+    _hwin += kRelicPage;
+  }
 
   String? _imagePath;
   String? _flightPath;
