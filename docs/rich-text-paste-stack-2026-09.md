@@ -190,6 +190,22 @@ reading the sandbox `relics.db`:**
    empty stack writes nothing. The chords are ⌃⌥D and ⌃⌥B now; the behaviour
    this pins is unchanged.
 
+**App-level, verified 2026-09-03 on the 1.0.43 release build** (tag `7092a1e`,
+signed and notarized, run against the real vault with the screen unlocked,
+driven by AppleScript):
+
+- TextEdit rich → Relic → TextEdit: capture stores RTF (TextEdit publishes no
+  HTML); quick-paste into a fresh document reproduces the text exactly, and the
+  bold red run reads back as Helvetica-Bold in red with plain Helvetica either
+  side.
+- Safari → Relic → Notes: capture stores Safari's HTML with its colour and font
+  spans; the pasted note carries `<b>` and `<i>` and "café ünïcode naïve résumé"
+  intact, no mojibake, and none of the page's colours (the `8ce0883` skin strip
+  doing its job).
+- Pages and Word are not installed on this Mac, so those two rows stay open.
+  The "press ⌘V yourself" notice cannot fire here because Accessibility is
+  granted.
+
 **Not verified, needs a person:** Pages → Relic → Pages, Safari → Notes (the
 mojibake check), Word → Relic → Word, and the one-per-run "press ⌘V yourself"
 notice, which fires as a notification and was not observed from the shell.
@@ -419,9 +435,9 @@ settle.
 |---|---|---|---|---|---|
 | Word → Relic → Word (RTF) | pass | | n/a | n/a | n/a |
 | Word → Relic → Word (HTML) | pass | | | | |
-| Browser → Relic → Word or Pages (HTML) | not run | | | | |
+| Browser → Relic → Word or Pages (HTML) | not run | Safari → Notes: pass, 1.0.43 | | | |
 | Excel → Relic → Excel | **unresolved, see §8b** | | | n/a | n/a |
-| Relic → plain text editor | pass | | | | |
+| Relic → plain text editor | pass | TextEdit rich round trip (RTF): pass, 1.0.43 | | | |
 | Copy, quit Relic, paste | pass | yes (pasteboard) | n/a | n/a | n/a |
 | Secret → any target: plain only, marker set | not run | | | | |
 | Desktop rich capture → phone paste into Gmail | n/a | n/a | n/a | | |
