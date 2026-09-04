@@ -106,3 +106,10 @@
 # it has to look like a real token shape to trip heuristicTags.
 abdcbf9607501f64fbc614a112e8f4ce6f27b32a:app/test/mobile_rich_capture_test.dart:gitlab-pat:92
 abdcbf9607501f64fbc614a112e8f4ce6f27b32a:app/test/mobile_rich_capture_test.dart:gitlab-pat:93
+
+# app/test/video_frames_harness_test.dart
+# The demo-video harness paints a fake router setup page for one frame. The
+# line is `_row('NETWORK KEY', 'sunlit-harbor-42', 2)`: a made-up wifi name in
+# a picture, next to an equally made-up serial number. Nothing reads it and it
+# opens nothing. generic-api-key fires on the word KEY next to a quoted value.
+31441d5d51613121a3c9a521453f625a71aa40b2:app/test/video_frames_harness_test.dart:generic-api-key:1902
