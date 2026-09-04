@@ -164,7 +164,7 @@ void main() {
       await shot(
         'drill-recovery-kit-$suffix',
         c,
-        RecoveryKitScreen(kitText: kit, requireProof: false),
+        RecoveryKitScreen(kitText: kit, requireDownload: false),
       );
 
       await shot(
@@ -173,7 +173,7 @@ void main() {
         DevicesScreen(bearer: () async => null, masterKey: mk),
       );
 
-      // Post-connect first-save flow: proof quiz enabled, shown in the
+      // Post-connect first-save flow: download gate on, shown in the
       // smaller 520x620 window desktop.dart sizes for the recovery kit.
       tester.view.physicalSize = const Size(1040, 1240);
       await shot(
@@ -205,7 +205,7 @@ void main() {
     await shot(
       'drill-recovery-kit-mobile-dark',
       RelicColors.dark,
-      RecoveryKitScreen(kitText: kit, requireProof: false),
+      RecoveryKitScreen(kitText: kit, requireDownload: false),
       mobile: true,
     );
 

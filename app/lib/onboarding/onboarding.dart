@@ -80,6 +80,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
   bool _viaOAuth = false; // session came from the browser OAuth flow, not email/pw
   SupabaseSession? _session;
   WorkerRepo? _pendingRepo; // create path: connected, awaiting kit-saved
+  bool _kitDownloaded = false; // the recovery-kit step's Continue gate
   NewDevicePairing? _pairing;
   String? _sas;
 
@@ -235,12 +236,13 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
     }
   }
 
-  /// Enter the recovery-kit step. (The old re-type-two-groups proof was cut
-  /// 2026-08-12 as too much friction on a phone keyboard; the copy/download
-  /// buttons and the warning header carry the weight now. Desktop still has
-  /// its own version of the proof — see docs/android-apple-parity.md.)
+  /// Enter the recovery-kit step. Continue stays off until the kit file has
+  /// been saved (the re-type-two-groups proof was cut 2026-08-12 as too much
+  /// friction on a phone keyboard; the download gate replaced "always on"
+  /// 2026-09-04, same rule as the desktop screen in add_device.dart).
   void _enterRecoveryKit(WorkerRepo repo) {
     _pendingRepo = repo;
+    _kitDownloaded = false;
     _go(_Step.recoveryKit);
   }
 
@@ -287,10 +289,11 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
 
   Future<void> _downloadKit(String kit) async {
     try {
-      await downloadRecoveryKit(kit);
+      final saved = await downloadRecoveryKit(kit);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Recovery kit saved')));
+        setState(() => _kitDownloaded = _kitDownloaded || saved);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(saved ? 'Recovery kit saved' : 'Not saved yet')));
       }
     } catch (_) {
       if (mounted) {
@@ -685,8 +688,13 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         const SizedBox(width: Insets.md),
         Expanded(child: _secondaryBtn(c, 'Download', () => _downloadKit(kit))),
       ]),
+      if (!_kitDownloaded) ...[
+        const SizedBox(height: Insets.md),
+        Text('Download the kit to continue.',
+            style: RelicTheme.sans(size: 12.5, color: c.textMuted, height: 1.45)),
+      ],
       const SizedBox(height: Insets.lg),
-      _primaryBtn(c, 'Continue', () => _finish(repo)),
+      _primaryBtn(c, 'Continue', _kitDownloaded ? () => _finish(repo) : null),
     ]);
   }
 

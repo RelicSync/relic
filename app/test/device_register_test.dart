@@ -174,24 +174,29 @@ void main() {
       final mk = Uint8List.fromList(List.generate(32, (i) => i * 7 % 251));
       final kit = RecoveryKit.fromMk(mk, 'jordan@example.com');
       var done = false;
-      final fut = showRecoveryKitOnce(navKey.currentState, kit)
-          .whenComplete(() => done = true);
+      final downloads = <String>[];
+      final fut = showRecoveryKitOnce(navKey.currentState, kit,
+              download: (k) async {
+        downloads.add(k);
+        return true;
+      }).whenComplete(() => done = true);
       await tester.pumpAndSettle();
       expect(find.byType(RecoveryKitScreen), findsOneWidget);
       expect(done, isFalse); // waits for the user, exactly like production
 
-      // Complete the saved-it proof: each field's hint names the group to
-      // re-type ("Type group N", 1-based).
-      final groups = RecoveryKit.groups(kit);
-      final fields = find.byType(TextField);
-      expect(fields, findsNWidgets(2));
-      for (var i = 0; i < 2; i++) {
-        final tf = tester.widget<TextField>(fields.at(i));
-        final hint = tf.decoration!.hintText!;
-        final n = int.parse(RegExp(r'\d+').firstMatch(hint)!.group(0)!);
-        await tester.enterText(fields.at(i), groups[n - 1]);
-      }
-      await tester.pump();
+      // Continue is gated on the download: tapping it before the kit file
+      // exists must not dismiss the screen.
+      await tester.ensureVisible(find.text('Continue'));
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+      expect(find.byType(RecoveryKitScreen), findsOneWidget);
+      expect(done, isFalse);
+
+      expect(downloads, isEmpty);
+      await tester.tap(find.text('Download'));
+      await tester.pumpAndSettle();
+      expect(downloads, [kit]);
+      expect(find.text('Recovery kit saved'), findsOneWidget);
       await tester.ensureVisible(find.text('Continue'));
       await tester.tap(find.text('Continue'));
       await tester.pumpAndSettle();

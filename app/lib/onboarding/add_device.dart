@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
-import 'dart:math';
 
 import 'package:file_saver/file_saver.dart';
 import 'package:flutter/material.dart';
@@ -426,17 +425,6 @@ bool emailConfirmMatches(String typed, String accountEmail) {
 const recoveryKitDownloadWarning =
     'This code IS your vault key. Anyone with it can read your vault. Store it offline.';
 
-/// Pick two distinct group indices to quiz the user on for the re-entry proof.
-/// Degrades gracefully for tiny counts (kits always have 14 groups in practice).
-(int, int) pickTwoGroups(int n) {
-  if (n <= 1) return (0, 0);
-  final rng = Random();
-  final a = rng.nextInt(n);
-  var b = rng.nextInt(n - 1);
-  if (b >= a) b += 1;
-  return (a, b);
-}
-
 /// Write [kitText] to `relic-recovery-kit.txt`. The file leads with
 /// [recoveryKitDownloadWarning]; the kit body already carries the account email
 /// and the groups.
@@ -447,17 +435,20 @@ const recoveryKitDownloadWarning =
 /// vault whose passphrase is lost, so a kit the user cannot find — or that
 /// vanishes with the app — is worse than no kit at all. Mobile therefore uses
 /// the same user-visible destinations as "Save to device".
-Future<void> downloadRecoveryKit(String kitText) async {
+///
+/// Returns true once the file is on disk, false when the user backed out of
+/// the mobile save sheet. Throws when the save itself failed.
+Future<bool> downloadRecoveryKit(String kitText) async {
   final contents = '$recoveryKitDownloadWarning\n\n$kitText';
   final bytes = Uint8List.fromList(utf8.encode(contents));
   if (Platform.isAndroid || Platform.isIOS) {
-    await saveFileOnMobile(
+    final outcome = await saveFileOnMobile(
       bytes: bytes,
       base: 'relic-recovery-kit',
       ext: 'txt',
       mime: 'text/plain',
     );
-    return;
+    return outcome.saved;
   }
   await FileSaver.instance.saveFile(
     name: 'relic-recovery-kit',
@@ -465,6 +456,7 @@ Future<void> downloadRecoveryKit(String kitText) async {
     fileExtension: 'txt',
     mimeType: MimeType.text,
   );
+  return true;
 }
 
 /// Push the one-time recovery-kit screen onto [nav] and wait until the user
@@ -473,33 +465,43 @@ Future<void> downloadRecoveryKit(String kitText) async {
 /// the shell's own context has no Navigator above it to find. (That call
 /// threw for every fresh desktop vault, silently costing the user both this
 /// screen and everything sequenced after it.)
-Future<void> showRecoveryKitOnce(NavigatorState? nav, String kitText) async {
+Future<void> showRecoveryKitOnce(NavigatorState? nav, String kitText,
+    {Future<bool> Function(String kitText)? download}) async {
   if (nav == null) return;
   await nav.push(MaterialPageRoute(
-      builder: (_) => RecoveryKitScreen(kitText: kitText)));
+      builder: (_) => RecoveryKitScreen(
+          kitText: kitText, download: download ?? downloadRecoveryKit)));
 }
 
 /// Shown once right after a vault is first created (docs/cloudflare/13 §2.4).
 /// The kit is the raw master key — the only way back in if the passphrase is
-/// forgotten. On first save ([requireProof] = true) the user must re-type two
-/// random groups to prove they actually captured it before continuing; the
-/// Security-screen re-show passes [requireProof] = false (they already have an
-/// unlocked vault) so it is just a Copy/Download reference.
+/// forgotten. On first save ([requireDownload] = true) Continue stays off
+/// until the user has downloaded the kit file; the Security-screen re-show
+/// passes [requireDownload] = false (they already have an unlocked vault) so
+/// it is just a Copy/Download reference. The re-type-two-groups proof this
+/// used to gate on was cut 2026-09-04 (Jordan): a file the user can find
+/// beats a quiz they can pass from the screen in front of them.
 class RecoveryKitScreen extends StatefulWidget {
   final String kitText;
-  final bool requireProof;
+  final bool requireDownload;
+
+  /// Writes the kit file and resolves true once it is saved. Injectable so
+  /// tests can drive the gate without touching the real Downloads folder.
+  final Future<bool> Function(String kitText) download;
   const RecoveryKitScreen(
-      {super.key, required this.kitText, this.requireProof = true});
+      {super.key,
+      required this.kitText,
+      this.requireDownload = true,
+      this.download = downloadRecoveryKit});
 
   @override
   State<RecoveryKitScreen> createState() => _RecoveryKitScreenState();
 }
 
 class _RecoveryKitScreenState extends State<RecoveryKitScreen> {
-  final _a = TextEditingController();
-  final _b = TextEditingController();
-  late final List<String> _groups = RecoveryKit.groups(widget.kitText);
-  late final (int, int) _picks = pickTwoGroups(_groups.length);
+  /// Set once a download has actually landed; opens Continue when
+  /// [RecoveryKitScreen.requireDownload] is on.
+  bool _downloaded = false;
 
   // inline feedback (the drill card has no Scaffold, so no snackbars):
   // transient Copied flip on the key-block chip + a status line for Download.
@@ -511,8 +513,6 @@ class _RecoveryKitScreenState extends State<RecoveryKitScreen> {
   @override
   void dispose() {
     _copiedT?.cancel();
-    _a.dispose();
-    _b.dispose();
     super.dispose();
   }
 
@@ -525,20 +525,16 @@ class _RecoveryKitScreenState extends State<RecoveryKitScreen> {
     });
   }
 
-  bool get _proofOk {
-    if (!widget.requireProof) return true;
-    if (_groups.isEmpty) return false;
-    return Crockford.normalize(_a.text) == Crockford.normalize(_groups[_picks.$1]) &&
-        Crockford.normalize(_b.text) == Crockford.normalize(_groups[_picks.$2]);
-  }
+  bool get _canContinue => !widget.requireDownload || _downloaded;
 
   Future<void> _download() async {
     try {
-      await downloadRecoveryKit(widget.kitText);
+      final saved = await widget.download(widget.kitText);
       if (mounted) {
         setState(() {
-          _msg = 'Recovery kit saved';
-          _msgError = false;
+          _downloaded = _downloaded || saved;
+          _msg = saved ? 'Recovery kit saved' : 'Not saved yet';
+          _msgError = !saved;
         });
       }
     } catch (_) {
@@ -639,51 +635,24 @@ class _RecoveryKitScreenState extends State<RecoveryKitScreen> {
               ),
             ],
           ]),
-          if (widget.requireProof && _groups.isNotEmpty) ...[
-            const SizedBox(height: Insets.xl),
-            Text('Confirm you saved it: re-type these two groups from your kit.',
+          if (widget.requireDownload && !_downloaded) ...[
+            const SizedBox(height: Insets.md),
+            Text('Download the kit to continue.',
                 style: RelicTheme.sans(
                     size: 12.5, color: c.textMuted, height: 1.45)),
-            const SizedBox(height: Insets.md),
-            _proofField(c, _a, 'Type group ${_picks.$1 + 1}'),
-            const SizedBox(height: Insets.md),
-            _proofField(c, _b, 'Type group ${_picks.$2 + 1}'),
           ],
           const SizedBox(height: Insets.xl),
           Row(children: [
             PrimaryButton(
               label: 'Continue',
               height: 38,
-              onTap: _proofOk ? () => Navigator.of(context).pop() : null,
+              onTap: _canContinue ? () => Navigator.of(context).pop() : null,
             ),
           ]),
         ],
       ),
     );
   }
-
-  /// Re-typing a kit group is a machine fact too: mono, on the recessed well.
-  Widget _proofField(RelicColors c, TextEditingController ctrl, String hint) =>
-      TextField(
-        controller: ctrl,
-        onChanged: (_) => setState(() {}),
-        autocorrect: false,
-        enableSuggestions: false,
-        style: RelicTheme.mono(size: 13, color: c.text, letterSpacing: 2),
-        textCapitalization: TextCapitalization.characters,
-        decoration: InputDecoration(
-          hintText: hint,
-          hintStyle: RelicTheme.sans(size: 12.5, color: c.textFaintest),
-          filled: true,
-          fillColor: c.inset,
-          enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(Radii.input),
-              borderSide: BorderSide(color: c.borderStrong)),
-          focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(Radii.input),
-              borderSide: BorderSide(color: c.accent, width: 1.5)),
-        ),
-      );
 }
 
 /// Settings → Security (docs/cloudflare/13 §7): rotate the passphrase (re-wraps
@@ -968,7 +937,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
                 size: 14, color: c.textFaintest),
             onTap: () => Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => RecoveryKitScreen(
-                    requireProof: false,
+                    requireDownload: false,
                     kitText: RecoveryKit.fromMk(
                         widget.masterKey, widget.accountEmail)))),
           ),
