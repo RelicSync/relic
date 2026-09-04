@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 
+import 'api.dart';
+
 /// One entry in the account's device list (`GET /account/devices`).
 class DeviceEntry {
   final String deviceId;
@@ -67,12 +69,39 @@ class DeviceDirectory {
   final Future<String?> Function() bearer;
   final String deviceId;
   final String? appVersion; // this install's version, reported on register
+
+  /// Injectable for tests. Null means one-shot top-level requests (opened and
+  /// closed per call), which is what every production caller wants.
+  final http.Client? client;
   const DeviceDirectory({
     required this.baseUrl,
     required this.bearer,
     required this.deviceId,
     this.appVersion,
+    this.client,
   });
+
+  Future<http.Response> _post(Uri url,
+          {Map<String, String>? headers, Object? body}) =>
+      client == null
+          ? http.post(url, headers: headers, body: body)
+          : client!.post(url, headers: headers, body: body);
+
+  Future<http.Response> _get(Uri url, {Map<String, String>? headers}) =>
+      client == null
+          ? http.get(url, headers: headers)
+          : client!.get(url, headers: headers);
+
+  Future<http.Response> _delete(Uri url, {Map<String, String>? headers}) =>
+      client == null
+          ? http.delete(url, headers: headers)
+          : client!.delete(url, headers: headers);
+
+  Future<http.Response> _patch(Uri url,
+          {Map<String, String>? headers, Object? body}) =>
+      client == null
+          ? http.patch(url, headers: headers, body: body)
+          : client!.patch(url, headers: headers, body: body);
 
   // Resolved once per process from PackageInfo when the constructor didn't
   // supply one, so the existing factories don't all need threading. Fails
@@ -104,7 +133,7 @@ class DeviceDirectory {
   /// Register/refresh this device. Throws [DeviceCapException] on a 409.
   Future<void> register({required String label, required String platform}) async {
     final v = await _version();
-    final r = await http.post(Uri.parse('$baseUrl/account/devices'),
+    final r = await _post(Uri.parse('$baseUrl/account/devices'),
         headers: await _headers(json: true),
         body: jsonEncode({
           'device_id': deviceId,
@@ -122,22 +151,38 @@ class DeviceDirectory {
   }
 
   Future<List<DeviceEntry>> list() async {
-    final r = await http.get(Uri.parse('$baseUrl/account/devices'),
+    final r = await _get(Uri.parse('$baseUrl/account/devices'),
         headers: await _headers());
     if (r.statusCode != 200) return const [];
     final j = jsonDecode(r.body) as Map<String, dynamic>;
     return _parse(j['devices']);
   }
 
+  /// [list], but with failure distinguishable from an empty registry: null on
+  /// any error, network included. The self-heal register reads through this —
+  /// it must not re-register (and reset the label) over a row it merely
+  /// failed to read.
+  Future<List<DeviceEntry>?> listOrNull() async {
+    try {
+      final r = await _get(Uri.parse('$baseUrl/account/devices'),
+          headers: await _headers());
+      if (r.statusCode != 200) return null;
+      final j = jsonDecode(r.body) as Map<String, dynamic>;
+      return _parse(j['devices']);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> remove(String id) async {
-    await http.delete(Uri.parse('$baseUrl/account/devices/$id'),
+    await _delete(Uri.parse('$baseUrl/account/devices/$id'),
         headers: await _headers());
   }
 
   /// Rename a device (PATCH /account/devices/:id {label}). Throws on failure so
   /// the rename dialog can surface it rather than silently no-op.
   Future<void> rename(String id, String label) async {
-    final r = await http.patch(Uri.parse('$baseUrl/account/devices/$id'),
+    final r = await _patch(Uri.parse('$baseUrl/account/devices/$id'),
         headers: await _headers(json: true),
         body: jsonEncode({'label': label}));
     if (r.statusCode != 200) {
@@ -148,4 +193,51 @@ class DeviceDirectory {
   static List<DeviceEntry> _parse(dynamic devices) => (devices as List? ?? [])
       .map((d) => DeviceEntry.fromJson(d as Map<String, dynamic>))
       .toList();
+}
+
+/// Make sure this install has a row in the account's device registry
+/// (`POST /account/devices` is an idempotent upsert on the worker).
+///
+/// Registration used to be a single unretried shot at connect time, and the
+/// desktop create flow lost even that one (its recovery-kit route threw
+/// first), so real accounts synced daily while "Your devices" showed nothing.
+/// Shells call this at connect AND on every resumed launch, which also heals
+/// installs that missed their shot. Never throws.
+///
+/// [onlyIfMissing] is the resume mode: read the list first and register only
+/// when this device has no row, because a register resets the row's label to
+/// [label] and a background heal must never clobber a name the user chose.
+/// When the list can't be read, do nothing; the next launch retries.
+///
+/// A device-cap 409 goes to [onDeviceCap] when given (connect time, where the
+/// shell can offer remove-or-upgrade). Without it the cap is swallowed like
+/// any other failure — a background heal has no business raising dialogs.
+Future<void> ensureDeviceRegistered({
+  required String? baseUrl,
+  required Future<String?> Function() bearer,
+  required String label,
+  bool onlyIfMissing = false,
+  Future<void> Function(DeviceDirectory dir, DeviceCapException e)? onDeviceCap,
+  Future<String> Function() deviceId = DeviceId.get,
+  http.Client? client,
+}) async {
+  if (baseUrl == null || baseUrl.isEmpty) return;
+  DeviceDirectory? dir;
+  try {
+    final id = await deviceId();
+    dir = DeviceDirectory(
+        baseUrl: baseUrl, bearer: bearer, deviceId: id, client: client);
+    if (onlyIfMissing) {
+      final listed = await dir.listOrNull();
+      if (listed == null) return; // unreadable registry: retry next launch
+      if (listed.any((d) => d.deviceId == id)) return; // row exists, leave it
+    }
+    await dir.register(label: label, platform: DeviceId.platform());
+  } on DeviceCapException catch (e) {
+    if (onDeviceCap != null && dir != null) {
+      try {
+        await onDeviceCap(dir, e);
+      } catch (_) {/* the dialog's trouble is not this function's */}
+    }
+  } catch (_) {/* offline or a server hiccup: harmless, retried next launch */}
 }

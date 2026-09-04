@@ -467,6 +467,18 @@ Future<void> downloadRecoveryKit(String kitText) async {
   );
 }
 
+/// Push the one-time recovery-kit screen onto [nav] and wait until the user
+/// completes it. The desktop shell hands in its navigator KEY's state, and
+/// must: the shell State builds the MaterialApp itself, so Navigator.of on
+/// the shell's own context has no Navigator above it to find. (That call
+/// threw for every fresh desktop vault, silently costing the user both this
+/// screen and everything sequenced after it.)
+Future<void> showRecoveryKitOnce(NavigatorState? nav, String kitText) async {
+  if (nav == null) return;
+  await nav.push(MaterialPageRoute(
+      builder: (_) => RecoveryKitScreen(kitText: kitText)));
+}
+
 /// Shown once right after a vault is first created (docs/cloudflare/13 §2.4).
 /// The kit is the raw master key — the only way back in if the passphrase is
 /// forgotten. On first save ([requireProof] = true) the user must re-type two

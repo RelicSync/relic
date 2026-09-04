@@ -41,7 +41,6 @@ import 'data/update_check.dart';
 import 'models/relic.dart';
 import 'onboarding/add_device.dart';
 import 'onboarding/install_offer.dart';
-import 'services/onboarding_service.dart';
 import 'theme/relic_theme.dart';
 import 'theme/tokens.dart';
 import 'onboarding/desktop_onboarding.dart';
@@ -380,6 +379,18 @@ class _RealAppState extends State<RealApp>
         await _dismiss();
       }
     });
+    // Self-heal the device registry: connect-time registration is a single
+    // shot, and desktop creates historically lost it entirely, so a long-lived
+    // install can be syncing daily with no row in "Your devices" (and no
+    // remote-remove handle). Reads before writing, so a renamed label is
+    // never clobbered. tryAutoConnect already ran (runRealApp), so a bound
+    // repo has a fresh bearer by now; unbound repos no-op on the null URL.
+    unawaited(ensureDeviceRegistered(
+      baseUrl: widget.repo.syncUrl,
+      bearer: () async => widget.repo.syncBearer,
+      label: Platform.localHostname,
+      onlyIfMissing: true,
+    ));
   }
 
   @override
@@ -456,8 +467,10 @@ class _RealAppState extends State<RealApp>
     }
   }
 
-  /// After a desktop connect: show the recovery kit once on a fresh create, and
-  /// register this device in the account's device list (best-effort).
+  /// After a desktop connect: register this device in the account's device
+  /// list, then show the recovery kit once on a fresh create. Registration
+  /// goes first on purpose — it is one quick POST, while the kit waits on the
+  /// user, and nothing user-paced may stand between a connect and its row.
   Future<void> _afterDesktopConnect() async {
     final repo = widget.repo;
     // An account switch just held the previous account's items back: they are
@@ -465,13 +478,33 @@ class _RealAppState extends State<RealApp>
     // in Settings. Say so out loud once — the popup banner carries it from
     // here, but without this the history just looks like it lost items.
     if (repo.mergeOfferCount > 0) {
-      LocalNotification(
-        title: 'Your previous items are tucked away',
-        body:
-            '${repo.mergeOfferCount} items from your last account are hidden '
-            'on this device, not uploaded here. Choose what to do in Settings.',
-      ).show();
+      try {
+        LocalNotification(
+          title: 'Your previous items are tucked away',
+          body:
+              '${repo.mergeOfferCount} items from your last account are hidden '
+              'on this device, not uploaded here. Choose what to do in Settings.',
+        ).show();
+      } catch (_) {/* a failed toast must not block the steps below */}
     }
+    // repo.syncUrl, not the cloud default: a self-host connect registers on
+    // the self-host server. The cap dialog needs a context that is INSIDE the
+    // MaterialApp this State builds — its own `context` is above it.
+    await ensureDeviceRegistered(
+      baseUrl: repo.syncUrl,
+      bearer: () async => repo.syncBearer,
+      label: Platform.localHostname,
+      onDeviceCap: (dir, e) async {
+        final ctx = _navKey.currentContext;
+        if (!mounted || ctx == null) return;
+        await showDeviceCapDialog(ctx,
+            directory: dir,
+            devices: e.devices,
+            label: Platform.localHostname,
+            platform: DeviceId.platform(),
+            onUpgrade: _upgradeToPro);
+      },
+    );
     if (repo.vaultJustCreated && repo.masterKey != null) {
       repo.vaultJustCreated = false;
       final kit = RecoveryKit.fromMk(repo.masterKey!, repo.accountEmail ?? '');
@@ -482,31 +515,14 @@ class _RealAppState extends State<RealApp>
       // The one screen the user must actually read and save: app mode.
       await _present(foreground: true);
       _visible = true;
-      if (mounted) {
-        await Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => RecoveryKitScreen(kitText: kit)));
-      }
+      // Through _navKey: this State builds the MaterialApp, so Navigator.of on
+      // its own context has nothing to find. (It threw here for every fresh
+      // desktop vault, silently skipping the kit — and, before the reorder
+      // above, the device registration behind it.)
+      await showRecoveryKitOnce(_navKey.currentState, kit);
       if (mounted) setState(() => _showingKit = false);
       await _sizeWindow(_popupDims.width, _popupDims.height);
     }
-    try {
-      final id = await DeviceId.get();
-      final dir =
-          OnboardingService(deviceId: id).devicesWith(() async => repo.syncBearer);
-      try {
-        await dir.register(
-            label: Platform.localHostname, platform: DeviceId.platform());
-      } on DeviceCapException catch (e) {
-        if (mounted) {
-          await showDeviceCapDialog(context,
-              directory: dir,
-              devices: e.devices,
-              label: Platform.localHostname,
-              platform: DeviceId.platform(),
-              onUpgrade: _upgradeToPro);
-        }
-      }
-    } catch (_) {/* offline: non-fatal */}
   }
 
   /// Depth of the paste stack at the last tray refresh. The repo notifies on
@@ -1856,8 +1872,8 @@ class _RealAppState extends State<RealApp>
   }
 
   /// Run a desktop connect action: rebuild the tray menu, dismiss the onboarding
-  /// surface, and run the post-connect steps (recovery kit on create + device
-  /// registration). Returns an error string for the onboarding UI, or null.
+  /// surface, and run the post-connect steps (device registration + recovery
+  /// kit on create). Returns an error string for the onboarding UI, or null.
   Future<String?> _doDesktopConnect(Future<void> Function() connect) async {
     try {
       await connect();

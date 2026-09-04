@@ -14,6 +14,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'data/api.dart';
 import 'data/boot_trace.dart';
+import 'data/device_directory.dart';
 import 'data/oauth_flow.dart';
 import 'data/repo.dart';
 import 'data/save_prefs.dart';
@@ -898,6 +899,9 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     try {
       await repo.syncDelta();
       _prefetch(repo);
+      // After a successful sync, never before: the launch binds with a
+      // deliberately expired access token, and syncDelta is what refreshes it.
+      unawaited(_healDeviceRow(repo));
     } catch (_) {
       // transient network hiccup — next tick retries
     } finally {
@@ -915,6 +919,21 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     await repo.syncDelta();
     if (mounted) setState(() {});
     _prefetch(repo);
+  }
+
+  /// One check per launch: make sure this install has a row in the account's
+  /// device registry. Onboarding registers exactly once, so an install whose
+  /// single shot failed used to stay missing from "Your devices" forever.
+  bool _deviceRowChecked = false;
+  Future<void> _healDeviceRow(WorkerRepo repo) async {
+    if (_deviceRowChecked) return;
+    _deviceRowChecked = true;
+    await ensureDeviceRegistered(
+      baseUrl: repo.baseUrl,
+      bearer: () async => repo.token,
+      label: _deviceName,
+      onlyIfMissing: true,
+    );
   }
 
   /// Pull photo blobs in the background; rebuild once they're cached so the
