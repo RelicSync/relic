@@ -117,6 +117,20 @@ Source sourceFromStr(String s) => switch (s) {
       _ => Source.api,
     };
 
+/// The declared size of a blob-less text relic: the plain body plus whatever
+/// formatting travels with it.
+///
+/// The rich flavors are stored, sealed and uploaded exactly like the body is,
+/// so they belong inside the number the quota is charged against. They also
+/// have to be inside the number the Worker measures its plausibility floor
+/// against: it refuses a push whose body exceeds `byte_size * 4 + 16 KiB`,
+/// on the reasoning that a client under-declaring `byte_size` is buying free
+/// storage. A four-byte sentence copied off a web page carries 47 KB of HTML,
+/// so counting the plain text alone made every such capture look like exactly
+/// that and it came back `400 invalid_envelope`. See worker/src/index.ts.
+int textByteSize(String plain, RichBody? rich) =>
+    utf8.encode(plain).length + (rich?.encodedLength ?? 0);
+
 /// A pending clip reminder (local-only, never synced). `remindAt` is epoch
 /// milliseconds (DateTime.millisecondsSinceEpoch), independent of the
 /// seconds-based relic timestamps.

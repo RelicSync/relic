@@ -42,9 +42,28 @@ and styled text, choose plain.
 
 **The fingerprint rule.** `RichBody.h` is a hash of the plain text the flavors
 came from. Every read goes through `Relic.richIfCurrent`, never `Relic.rich`. A
-writer that changes `content` without knowing the field exists (`relic-cli`'s
-upsert, an import) leaves formatting behind that no longer matches, and the
-mismatch makes it inert. If you add a read path, use the accessor.
+writer that changes `content` without knowing the field exists (an import, say)
+leaves formatting behind that no longer matches, and the mismatch makes it
+inert. If you add a read path, use the accessor. The writers we do know about
+(the edit dialog, `relic-cli`'s upsert) clear the field outright, because an
+inert flavor is still bytes that get sealed, uploaded and charged for.
+
+**`byte_size` counts the formatting.** `textByteSize(plain, rich)` in
+models/relic.dart is the one place that number is derived, and every writer
+must go through it. The flavors are sealed and uploaded exactly like the body
+is, so they belong in the size the quota is charged against.
+
+This was wrong when rich text first shipped in 1.0.42 and it broke syncing.
+The Worker refuses a push whose body runs past `byte_size * 4 + 16 KiB`, which
+is how it catches a client under-declaring its way to free storage
+(worker/src/index.ts). A four-byte sentence copied off a web page carries 47 KB
+of HTML, so every formatted capture looked like exactly that abuse and came
+back `400 invalid_envelope`; the items sat in the vault marked "Not synced"
+with no way forward. Three write paths had it (capture, the dedupe upgrade in
+`RelicDb.setRich`, and `WorkerRepo` on mobile) and two more could produce it:
+a body edit left the stale flavors attached while the size shrank to the new
+text, and `relic-cli`'s upsert did the same. Both now clear the field instead.
+The v12 migration repairs existing rows and re-queues the pushes that failed.
 
 **Secrets never carry formatting.** Enforced in three places, and all three are
 load-bearing: capture drops it, `richIfCurrent` refuses to serve it, and

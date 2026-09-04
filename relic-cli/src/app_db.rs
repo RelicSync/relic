@@ -27,6 +27,9 @@ pub enum Order {
 
 pub struct AppDb {
     conn: Connection,
+    /// Whether this vault has the app's `rich` column (1.0.42 and later). The
+    /// CLI never migrates, so it has to work against an older schema too.
+    has_rich: bool,
 }
 
 impl AppDb {
@@ -42,7 +45,10 @@ impl AppDb {
         }
         let conn = Connection::open(&path).with_context(|| format!("opening {}", path.display()))?;
         conn.busy_timeout(Duration::from_secs(5))?;
-        Ok(AppDb { conn })
+        let has_rich = conn
+            .prepare("SELECT 1 FROM pragma_table_info('relics') WHERE name = 'rich'")?
+            .exists([])?;
+        Ok(AppDb { conn, has_rich })
     }
 
     // --- reads ---
@@ -244,6 +250,13 @@ impl AppDb {
     /// Insert or update a relic plus its FTS + trigram rows, atomically. New
     /// inserts get `enrich_level = 0` (column default) so the app's background
     /// enrichment upgrades their tags/OCR/vector on its next run.
+    ///
+    /// `rich` (the app's HTML/RTF flavors) is cleared, never carried. The CLI
+    /// never produces formatting, and an edit here would otherwise leave the
+    /// old markup attached to new text: the app ignores it (it is fingerprinted
+    /// against the body it came from) but `byte_size` would still be written
+    /// from the plain text alone, and the sync Worker rejects a row whose
+    /// declared size is that far under its sealed body.
     pub fn upsert(&self, r: &Relic, have_blob: bool, queue_push: bool) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         let content_hash: Option<i64> = r.content.as_deref().map(content_hash);
@@ -252,8 +265,12 @@ impl AppDb {
         } else {
             Some(serde_json::to_string(&r.attachments).unwrap_or_default())
         };
+        // Clearing `rich` is part of the same statement so an edit can never
+        // leave markup behind that outlives the text it came from.
+        let clear_rich = if self.has_rich { ", rich=NULL" } else { "" };
         tx.execute(
-            "INSERT INTO relics
+            &format!(
+                "INSERT INTO relics
                (uid, created_at, updated_at, kind, source, promoted, byte_size,
                 device, mime, filename, blob_key, content_hash, have_blob,
                 tags, user_tags, title, note, content, preview, attachments)
@@ -266,7 +283,8 @@ impl AppDb {
                content_hash=excluded.content_hash, tags=excluded.tags,
                user_tags=excluded.user_tags, title=excluded.title, note=excluded.note,
                content=excluded.content, preview=excluded.preview,
-               attachments=excluded.attachments",
+               attachments=excluded.attachments{clear_rich}"
+            ),
             params![
                 r.uid,
                 r.created_at,

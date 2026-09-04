@@ -754,8 +754,9 @@ void main() {
     final check = sqlite3.open(path);
     addTearDown(check.dispose);
     // The chain runs to the CURRENT latest version (v8-v10 reconcile stale
-    // detector tags on the way, v11 splits the named FTS column).
-    expect(check.select('PRAGMA user_version').first.values.first, 11);
+    // detector tags on the way, v11 splits the named FTS column, v12 repairs
+    // byte_size on formatted rows).
+    expect(check.select('PRAGMA user_version').first.values.first, 12);
   });
 
   test('v8 migration strips stale value-shape tags, keeps real ones', () async {
@@ -865,6 +866,59 @@ void main() {
     addTearDown(db.dispose);
     expect(db.getByUid('photo1')!.tags, ['photo']); // stale `code` gone
     expect(db.getByUid('file1')!.tags, ['Document', 'Markdown']);
+  });
+
+  test('v12 migration repairs byte_size on formatted rows and re-queues them',
+      () async {
+    final dir = await Directory.systemTemp.createTemp('relicdb-v12');
+    addTearDown(() => dir.delete(recursive: true));
+    final path = '${dir.path}${Platform.pathSeparator}relics.db';
+
+    const plain = 'load';
+    final body = RichBody.capture(plain: plain, html: '<p>${'x' * 4000}</p>')!;
+
+    final seeded = RelicDb.open(path);
+    seeded.upsert(_mk('rich1', content: plain));
+    seeded.setRich('rich1', body);
+    // A blob-backed row: byte_size there is the bundle length, not the body,
+    // so the migration must leave it alone even though it carries formatting.
+    seeded.upsert(_mk('photo1', content: 'caption', kind: Kind.photo,
+        blobKey: 'b/1'));
+    seeded.setRich('photo1', body);
+    seeded.dispose();
+
+    final raw = sqlite3.open(path);
+    // Rewind to what the shipped 1.0.42/1.0.43 build wrote: the plain length
+    // alone, and the Worker's 400 recorded against it.
+    raw.execute("UPDATE relics SET byte_size = 4 WHERE uid = 'rich1'");
+    raw.execute(
+      "INSERT INTO sync_rejections (uid, op, status, rejected_at) "
+      "VALUES ('rich1', 'push', 400, 1)",
+    );
+    // A rejection with a real cause must not be woken up to fail again.
+    raw.execute(
+      "INSERT INTO sync_rejections (uid, op, status, rejected_at) "
+      "VALUES ('photo1', 'push', 402, 1)",
+    );
+    raw.execute('PRAGMA user_version = 11');
+    raw.dispose();
+
+    final db = RelicDb.open(path);
+    addTearDown(db.dispose);
+
+    expect(db.getByUid('rich1')!.byteSize, 4 + body.encodedLength);
+    expect(db.getByUid('photo1')!.byteSize, 7, reason: 'blob rows keep theirs');
+
+    final check = sqlite3.open(path);
+    addTearDown(check.dispose);
+    final queued = check
+        .select("SELECT uid FROM pending_ops WHERE op = 'push'")
+        .map((r) => r['uid'] as String);
+    expect(queued, ['rich1']);
+    final left = check
+        .select('SELECT uid, status FROM sync_rejections')
+        .map((r) => '${r['uid']}:${r['status']}');
+    expect(left, ['photo1:402'], reason: 'only the repaired 400 is cleared');
   });
 
   group('lexicalHybridUids (shared ML-free hybrid — powers mobile search)', () {

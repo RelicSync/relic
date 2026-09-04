@@ -118,6 +118,75 @@ void main() {
     expect(rows.first.richIfCurrent!.html, '<i>$text</i>');
   });
 
+  // byte_size is what the quota is charged against AND what the Worker
+  // measures its plausibility floor against, so formatting has to be inside
+  // it. A four-byte sentence declaring four bytes while carrying 47 KB of
+  // HTML came back `400 invalid_envelope` and never synced.
+  test('byte_size counts the formatting that travels with the text', () async {
+    if (guarded) {
+      markTestSkipped('RELIC_DATA_DIR sandbox not set');
+      return;
+    }
+    final r = await repo();
+    addTearDown(r.dispose);
+
+    final text = uniq('sized');
+    final html = '<p style="color:#fff">${'padding ' * 500}</p>';
+    r.captureText(text, html: html);
+    await settle();
+
+    final rel = only(r, text);
+    expect(rel.rich, isNotNull, reason: 'precondition');
+    expect(rel.byteSize, utf8.encode(text).length + rel.rich!.encodedLength);
+    // The Worker's floor: body <= byte_size * 4 + 16 KiB. The declared size
+    // now scales with the payload instead of staying at the plain length.
+    expect(rel.byteSize, greaterThan(4000));
+  });
+
+  test('the dedupe upgrade moves byte_size with the formatting', () async {
+    if (guarded) {
+      markTestSkipped('RELIC_DATA_DIR sandbox not set');
+      return;
+    }
+    final r = await repo();
+    addTearDown(r.dispose);
+
+    final text = uniq('grew later');
+    r.captureText(text);
+    await settle();
+    expect(only(r, text).byteSize, utf8.encode(text).length);
+
+    r.captureText(text, html: '<i>${'wide ' * 400}</i>');
+    await settle();
+
+    final rel = only(r, text);
+    expect(rel.byteSize, utf8.encode(text).length + rel.rich!.encodedLength);
+  });
+
+  test('editing the body drops the formatting it no longer matches', () async {
+    if (guarded) {
+      markTestSkipped('RELIC_DATA_DIR sandbox not set');
+      return;
+    }
+    final r = await repo();
+    addTearDown(r.dispose);
+
+    final text = uniq('before');
+    r.captureText(text, html: '<b>${'long ' * 400}</b>');
+    await settle();
+    final captured = only(r, text);
+    expect(captured.rich, isNotNull, reason: 'precondition');
+
+    final edited = uniq('after');
+    await r.updateMeta(captured, content: edited);
+    await settle();
+
+    final rel = only(r, edited);
+    expect(rel.rich, isNull,
+        reason: 'the fingerprint no longer matches, so it was dead weight');
+    expect(rel.byteSize, utf8.encode(edited).length);
+  });
+
   test('the echo guard still suppresses an identical re-capture', () async {
     if (guarded) {
       markTestSkipped('RELIC_DATA_DIR sandbox not set');

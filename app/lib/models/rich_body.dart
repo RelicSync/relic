@@ -27,10 +27,9 @@ import 'dart:typed_data';
 ///
 /// The binding constraint is the Worker's envelope gate, which rejects a push
 /// when the request body exceeds `caps.item * 1.5` (10 MB * 1.5 on the free
-/// tier). `byte_size` is computed from the plain content alone, so everything
-/// here is pure headroom consumption: a maximal 10 MB text relic already seals
-/// to roughly 13.34 MB of base64 against a 15 MB ceiling. 256 KB of rich adds
-/// about 341 KB of base64 and stays comfortable; 1 MB would not.
+/// tier). [encodedLength] counts toward `byte_size` (see `textByteSize`), so a
+/// maximal 10 MB text relic plus 256 KB of rich seals to roughly 13.7 MB of
+/// base64 against a 15 MB ceiling and stays comfortable; 1 MB would not.
 ///
 /// It is also the right product number. A styled paragraph or a small table is
 /// 2-30 KB of HTML and 5-60 KB of RTF. What 256 KB excludes is exactly what you
@@ -85,11 +84,11 @@ class RichBody {
 
     final fp = richFingerprint(plain);
     final both = RichBody._(h: fp, html: h, rtf: r);
-    if (both._encodedLength <= kRichMaxBytes) return both;
+    if (both.encodedLength <= kRichMaxBytes) return both;
 
     if (h == null) return null; // RTF alone was already too big
     final htmlOnly = RichBody._(h: fp, html: h);
-    return htmlOnly._encodedLength <= kRichMaxBytes ? htmlOnly : null;
+    return htmlOnly.encodedLength <= kRichMaxBytes ? htmlOnly : null;
   }
 
   /// Wire/DB shape. RTF is base64 because it is bytes, not text.
@@ -123,7 +122,7 @@ class RichBody {
         html: (html != null && html.isNotEmpty) ? html : null,
         rtf: (rtf != null && rtf.isNotEmpty) ? rtf : null,
       );
-      return body._encodedLength <= kRichMaxBytes ? body : null;
+      return body.encodedLength <= kRichMaxBytes ? body : null;
     } catch (_) {
       return null; // malformed JSON, bad base64 — treat as absent
     }
@@ -134,7 +133,10 @@ class RichBody {
   RichBody? forPlain(String? plain) =>
       plain != null && richFingerprint(plain) == h ? this : null;
 
-  int get _encodedLength => utf8.encode(jsonEncode(toJson())).length;
+  /// Serialized size of this body, in bytes: what it costs in the DB row, in
+  /// the sealed payload, and therefore in `byte_size`. Base64 for RTF is
+  /// included because that is the form that is actually stored.
+  int get encodedLength => utf8.encode(jsonEncode(toJson())).length;
 
   @override
   bool operator ==(Object other) =>

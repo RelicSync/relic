@@ -43,6 +43,13 @@ more** (the "minimal metadata" of SPEC §13):
 `promoted` being visible is a deliberate, documented metadata leak (the
 operator can see *which* items you marked, not what they are).
 
+`byte_size` is the whole stored payload, not just the body: for a text relic
+it is the plain content plus the `rich` flavors, and for a blob relic it is
+the bundle length. Declaring less is what the Worker's plausibility floor
+catches (it refuses a push whose body exceeds `byte_size * 4 + 16 KiB`),
+because a client that under-declares is getting storage it is not charged
+for.
+
 ## Private payload (inside `ct`)
 
 AEAD-decrypts (key = MK, AAD = `relic.relic.v1:<uid>`) to:

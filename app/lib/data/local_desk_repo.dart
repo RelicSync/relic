@@ -2427,7 +2427,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _autoVault || source != Source.clipboard,
         utf8.encode(t).length,
       ),
-      byteSize: utf8.encode(t).length,
+      byteSize: textByteSize(t, keep),
       device: _deviceLabel,
       tags: tags,
       content: t,
@@ -4174,6 +4174,12 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
             t,
       ];
     }
+    // Editing the body makes the captured formatting stale: its fingerprint
+    // stops matching, so richIfCurrent already ignores it everywhere. Drop it
+    // instead of syncing dead weight, which also keeps byte_size honest.
+    final staleRich = newContent != null &&
+        cur.rich != null &&
+        cur.rich!.forPlain(newContent) == null;
     final u = cur.copyWith(
       title: title,
       note: note,
@@ -4183,8 +4189,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       preview: newContent == null ? null : _preview(newContent),
       // Blob-less string relics: the body IS the payload, so its size follows.
       byteSize: newContent != null && cur.blobKey == null
-          ? utf8.encode(newContent).length
+          ? textByteSize(newContent, staleRich ? null : cur.rich)
           : null,
+      clearRich: staleRich,
       updatedAt: _now,
     );
     _db?.upsert(u, queuePush: syncEnabled);

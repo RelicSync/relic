@@ -1787,7 +1787,15 @@ class WorkerRepo implements RelicRepo {
       // took plain a duplicate row. Never the other way round — an existing
       // body already matches this text, so replacing it buys nothing.
       if (rich != null && bumped.rich == null && !bumped.isSecret) {
-        bumped = bumped.copyWith(rich: rich);
+        // byte_size moves with it: the formatting is part of the sealed
+        // payload, and a row that declares only its plain length is what the
+        // Worker rejects as an implausible envelope.
+        bumped = bumped.copyWith(
+          rich: rich,
+          byteSize: bumped.blobKey == null && bumped.content != null
+              ? textByteSize(bumped.content!, rich)
+              : null,
+        );
       }
       _items.removeAt(i);
       _items.insert(0, bumped);
@@ -1795,6 +1803,11 @@ class WorkerRepo implements RelicRepo {
       return true;
     }
     final tags = _tagsFor(t); // same deterministic facets as desktop
+    // A secret never carries formatting: the masked plain text would be
+    // scrubbed while the HTML flavor shipped the same value in the clear.
+    // Mirrors LocalDeskRepo.captureText; richIfCurrent and exportVault
+    // enforce it again, because an item can be marked secret after capture.
+    final keep = tags.contains('secret') ? null : rich;
     final r = Relic(
       uid: _uuid.v4(),
       createdAt: now,
@@ -1802,16 +1815,12 @@ class WorkerRepo implements RelicRepo {
       kind: Kind.string,
       source: Source.share,
       promoted: autoVault,
-      byteSize: utf8.encode(t).length,
+      byteSize: textByteSize(t, keep),
       device: deviceLabel,
       tags: tags,
       content: t,
       preview: _previewLine(t),
-      // A secret never carries formatting: the masked plain text would be
-      // scrubbed while the HTML flavor shipped the same value in the clear.
-      // Mirrors LocalDeskRepo.captureText; richIfCurrent and exportVault
-      // enforce it again, because an item can be marked secret after capture.
-      rich: tags.contains('secret') ? null : rich,
+      rich: keep,
     );
     _items.insert(0, r);
     await _push(r);

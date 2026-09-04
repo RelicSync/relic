@@ -740,6 +740,48 @@ class RelicDb {
         return;
       }
     }
+    if (uv < 12) {
+      // v12: `byte_size` on a formatted text row was the plain body alone, so
+      // a four-byte sentence carrying 47 KB of HTML declared four bytes. The
+      // Worker refuses a push whose body runs past `byte_size * 4 + 16 KiB`
+      // (it is how an under-declaring client is caught buying free storage),
+      // so those captures came back `400 invalid_envelope` and sat unsynced.
+      //
+      // Recompute it. `length(CAST(x AS BLOB))` is the UTF-8 byte length, and
+      // the stored `rich` string is exactly what `textByteSize` measures, so
+      // this lands on the same number every write from here on will.
+      // Blob-backed rows keep theirs: there it is the bundle length.
+      db.execute('BEGIN');
+      try {
+        db.execute('''
+          UPDATE relics
+             SET byte_size = length(CAST(content AS BLOB))
+                           + length(CAST(rich AS BLOB))
+           WHERE rich IS NOT NULL AND content IS NOT NULL AND blob_key IS NULL
+        ''');
+        // Re-queue the pushes that failed for this reason. Scoped to 400s on
+        // rows that carry formatting, so an item parked for a real cause (402
+        // vault full, 413 too large) is not woken up to be refused again.
+        db.execute('''
+          INSERT INTO pending_ops (uid, op, queued_at)
+          SELECT r.uid, 'push', strftime('%s','now')
+            FROM sync_rejections r
+            JOIN relics x ON x.uid = r.uid
+           WHERE r.op = 'push' AND r.status = 400 AND x.rich IS NOT NULL
+          ON CONFLICT(uid, op) DO UPDATE SET queued_at = excluded.queued_at
+        ''');
+        db.execute('''
+          DELETE FROM sync_rejections
+           WHERE op = 'push' AND status = 400 AND uid IN (
+                 SELECT uid FROM relics WHERE rich IS NOT NULL)
+        ''');
+        db.execute('PRAGMA user_version = 12');
+        db.execute('COMMIT');
+      } catch (_) {
+        db.execute('ROLLBACK');
+        return;
+      }
+    }
   }
 
   static void _ensureColumn(Database db, String col, String decl) {
@@ -1792,10 +1834,27 @@ class RelicDb {
   /// push or touch `updated_at`: callers pair it with [touch], which does both,
   /// and the push re-reads the row so the new value rides along. No reindex —
   /// rich text is never in the FTS body.
+  ///
+  /// `byte_size` moves with it. This is the upgrade path where a plain capture
+  /// gains formatting later, so it is also the path where a 600-byte row can
+  /// silently become a 75 KB one; leaving the size behind is what the Worker
+  /// rejects as an implausible envelope. Blob-backed rows are left alone —
+  /// there `byte_size` is the bundle length, not the body.
   void setRich(String uid, RichBody? rich) {
+    final rs = _db.select(
+      'SELECT content, blob_key FROM relics WHERE uid = ?',
+      [uid],
+    );
+    if (rs.isEmpty) return;
+    final encoded = rich == null ? null : jsonEncode(rich.toJson());
+    final content = rs.first['content'] as String?;
+    if (rs.first['blob_key'] != null || content == null) {
+      _db.execute('UPDATE relics SET rich = ? WHERE uid = ?', [encoded, uid]);
+      return;
+    }
     _db.execute(
-      'UPDATE relics SET rich = ? WHERE uid = ?',
-      [rich == null ? null : jsonEncode(rich.toJson()), uid],
+      'UPDATE relics SET rich = ?, byte_size = ? WHERE uid = ?',
+      [encoded, textByteSize(content, rich), uid],
     );
   }
 

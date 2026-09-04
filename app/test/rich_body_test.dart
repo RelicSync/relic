@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:relic_app/models/relic.dart';
 import 'package:relic_app/models/rich_body.dart';
 import 'package:relic_app/platform/rich_formats.dart';
 
@@ -318,6 +319,37 @@ void main() {
       expect(out, contains('padding: 2px'));
       expect(out, isNot(contains('Arial')));
       expect(out, isNot(contains('#eee')));
+    });
+  });
+
+  group('textByteSize', () {
+    test('with no formatting it is the plain utf8 length', () {
+      expect(textByteSize('load', null), 4);
+      expect(textByteSize('café', null), 5); // e-acute is two bytes
+    });
+
+    test('formatting is counted, because it is stored and synced', () {
+      final body = RichBody.capture(plain: 'load', html: '<b>load</b>')!;
+      expect(textByteSize('load', body), 4 + body.encodedLength);
+    });
+
+    test('it clears the Worker floor a plain count fails', () {
+      // The real shape of the bug: four bytes of text off a web page with
+      // 47 KB of HTML behind it. The Worker refuses a push whose body runs
+      // past byte_size * 4 + 16 KiB, and the sealed body is roughly 1.34x
+      // the payload.
+      final body =
+          RichBody.capture(plain: 'load', html: '<p>${'x' * 47000}</p>')!;
+      final sealed = ((4 + body.encodedLength) * 1.34).round();
+      expect(sealed, greaterThan(4 * 4 + 16384), reason: 'the old number');
+      expect(sealed, lessThan(textByteSize('load', body) * 4 + 16384));
+    });
+
+    test('rtf counts as the base64 it is stored as', () {
+      final rtf = bytes(r'{\rtf1\ansi hello}');
+      final body = RichBody.capture(plain: 'hello', html: '<b>h</b>', rtf: rtf);
+      expect(textByteSize('hello', body), 5 + body!.encodedLength);
+      expect(body.encodedLength, greaterThan(rtf.length));
     });
   });
 }
