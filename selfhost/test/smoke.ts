@@ -12,6 +12,7 @@ import Database from "better-sqlite3";
 import * as workerModule from "../../worker/src/index";
 import { makeEnv } from "../src/adapters/env";
 import { handleEnroll } from "../src/enroll";
+import { applyColumnUpgrades } from "../src/schema-upgrade";
 
 function pickHandler(m: any): any {
   let cur = m;
@@ -55,9 +56,17 @@ function authed(method: string, p: string, body?: unknown): Promise<Response> {
   return worker.fetch(new Request("http://local" + p, { method, headers, body: b }), env);
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "relic-smoke-"));
+// Normally a throwaway directory. Point RELIC_SMOKE_DATA_DIR at an existing one
+// to run the whole smoke against a database that was created by an OLDER
+// schema, which is how the column upgrade below gets exercised end to end.
+const tmp = process.env.RELIC_SMOKE_DATA_DIR ||
+  fs.mkdtempSync(path.join(os.tmpdir(), "relic-smoke-"));
 const db = new Database(path.join(tmp, "relic.db"));
 db.pragma("journal_mode = WAL");
+// Same order as src/server.ts: upgrade an existing database first, then apply
+// the fresh-install schema.
+const upgraded = applyColumnUpgrades(db);
+if (upgraded.length) console.log("  upgraded:", upgraded.join(", "));
 const schemaSql = fs.readFileSync(path.resolve(import.meta.dirname, "../../worker/schema.sql"), "utf8");
 db.exec(schemaSql);
 const env = makeEnv(db, path.join(tmp, "blobs"));
@@ -158,6 +167,15 @@ const run = async () => {
   const acct = await authed("GET", "/account");
   const acctJson = (await acct.json()) as any;
   check(acct.status === 200 && acctJson.tier === "max", "GET /account reports max tier");
+  // The history ring never applies here: max has no ring, so nothing is ever
+  // hidden and nothing is ever waiting.
+  check(acctJson.history_cap === null, "GET /account reports no history cap on max");
+  check(acctJson.evicted_count === 0, "GET /account reports nothing evicted on max");
+  check(acctJson.devices_cap === null, "GET /account reports no device cap on max");
+  const evicted = db
+    .prepare("SELECT COUNT(*) AS n FROM relic_meta WHERE evicted = 1")
+    .get() as { n: number };
+  check(evicted.n === 0, "nothing was evicted (the ring never runs on max)");
 
   // --- devices ---
   const devs = await authed("GET", "/account/devices");
