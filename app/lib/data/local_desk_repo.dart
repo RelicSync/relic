@@ -574,6 +574,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   Timer? _backupTimer;
   final Set<String> _customTags =
       {}; // reusable tags the user created (Tags pane)
+  // Which one-time history-ring notices this install has already shown, keyed
+  // by account id so switching accounts starts fresh. Set once, kept forever.
+  final Set<String> _ringNotified = {};
   // Exe stems (lowercase, no .exe) whose copies the watcher ignores. The
   // save & annotate hotkey is NOT gated by this — explicit action wins.
   final Set<String> _captureBlocklist = {};
@@ -655,6 +658,20 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   Future<void> markCoachMarksSeen() async {
     if (_coachSeen) return;
     _coachSeen = true;
+    _savePrefs();
+  }
+
+  /// The history-ring notices already shown, as a copy the caller can edit.
+  /// Hand the edited set back to [setRingNotified] to persist it.
+  Set<String> get ringNotified => {..._ringNotified};
+  void setRingNotified(Set<String> flags) {
+    if (flags.length == _ringNotified.length &&
+        flags.every(_ringNotified.contains)) {
+      return;
+    }
+    _ringNotified
+      ..clear()
+      ..addAll(flags);
     _savePrefs();
   }
   bool get captureTextEnabled => _captureText;
@@ -1549,6 +1566,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _customTags
           ..clear()
           ..addAll((j['custom_tags'] as List?)?.cast<String>() ?? const []);
+        _ringNotified
+          ..clear()
+          ..addAll((j['ring_notified'] as List?)?.cast<String>() ?? const []);
         _captureBlocklist
           ..clear()
           ..addAll((j['capture_blocklist'] as List?)?.cast<String>() ?? const []);
@@ -1644,6 +1664,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           // "don't ask again" answer needs persisting.
           if (_mergeOfferDismissed) 'merge_offer_dismissed': true,
           'custom_tags': _customTags.toList(),
+          if (_ringNotified.isNotEmpty) 'ring_notified': _ringNotified.toList(),
           'capture_blocklist': _captureBlocklist.toList(),
           'hk_history': _hkHistory.toJson(),
           'hk_capture': _hkCapture.toJson(),
@@ -2241,9 +2262,10 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     if (pending > 0) return SyncState(SyncKind.pending, pending: pending);
     final rejected = _db?.rejectionCount() ?? 0;
     if (rejected > 0) return SyncState(SyncKind.quotaFull, pending: rejected);
-    return _online
-        ? const SyncState(SyncKind.synced)
-        : const SyncState(SyncKind.offline);
+    if (!_online) return const SyncState(SyncKind.offline);
+    // Copies waiting behind the free ring. Ranked last of the unhealthy states
+    // because it is the only one nothing is actually wrong with.
+    return ringSyncState(_remoteAccount) ?? const SyncState(SyncKind.synced);
   }
 
   @override
@@ -6006,6 +6028,12 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           quotaBytes: (j['storage_quota'] as num).toInt(),
           vaultCount: (j['vault_count'] as num).toInt(),
           vaultCap: (j['vault_cap'] as num?)?.toInt(),
+          // Optional: a server from before the history ring, and every
+          // self-hosted server, sends none of these.
+          historyCount: (j['history_count'] as num?)?.toInt() ?? 0,
+          historyCap: (j['history_cap'] as num?)?.toInt(),
+          evictedCount: (j['evicted_count'] as num?)?.toInt() ?? 0,
+          devicesCap: (j['devices_cap'] as num?)?.toInt(),
         );
       }
     } catch (_) {}
@@ -6029,13 +6057,26 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   }
 
   @override
-  Future<String?> checkoutUrl(String priceId) async {
+  Future<String?> upgradeUrl([String? source]) async {
+    final plans = await billingPlans();
+    // No plans means nothing to sell: sync is off, the server is a self-hosted
+    // one with no Stripe, or we are offline. Say nothing rather than fail.
+    if (plans.isEmpty) return null;
+    final pick = plans.firstWhere(
+      (p) => p.tier == 'pro' && p.interval == 'month',
+      orElse: () => plans.first,
+    );
+    return checkoutUrl(pick.priceId, source: source);
+  }
+
+  @override
+  Future<String?> checkoutUrl(String priceId, {String? source}) async {
     if (_syncUrl == null) return null;
     await _maybeRefresh();
     final r = await _billingPost(
       '/stripe/checkout',
       headers: {..._h, 'Content-Type': 'application/json'},
-      body: jsonEncode({'price_id': priceId}),
+      body: jsonEncode({'price_id': priceId, 'source': ?source}),
     );
     final url = (jsonDecode(r.body) as Map<String, dynamic>)['url'] as String?;
     if (url == null) {

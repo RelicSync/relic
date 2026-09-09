@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../platform/clipboard_bridge.dart';
 import '../models/relic.dart';
+import '../platform/store_safe.dart';
 import '../widgets/chrome.dart';
 
 /// Result ordering for the popup list. `relevance` uses hybrid ranking when a
@@ -20,13 +21,55 @@ class AccountInfo {
   final int quotaBytes; // 0 == unmetered (paid text)
   final int vaultCount;
   final int? vaultCap;
+
+  /// Copies still in view: unpromoted rows inside the free history ring.
+  final int historyCount;
+
+  /// How many copies the plan keeps in view. Null when nothing ages out: paid
+  /// plans, a self-hosted server, and any server too old to send the field.
+  final int? historyCap;
+
+  /// Copies that aged past the ring. The server still has them and an upgrade
+  /// brings them back, so this is a count of what is waiting, not what is lost.
+  /// Always 0 on a plan with no ring.
+  final int evictedCount;
+
+  /// How many devices the plan allows. Null on Max and on a self-hosted server.
+  final int? devicesCap;
   const AccountInfo({
     required this.tier,
     required this.usedBytes,
     required this.quotaBytes,
     required this.vaultCount,
     this.vaultCap,
+    this.historyCount = 0,
+    this.historyCap,
+    this.evictedCount = 0,
+    this.devicesCap,
   });
+
+  /// True only when a ring is actually in force. A self-hosted server enrolls
+  /// at max, so it lands here as false and every ring surface stays away.
+  bool get isFree => historyCap != null;
+
+  /// Close to the cap, nothing dropped yet.
+  bool get ringWarming =>
+      isFree && evictedCount == 0 && historyCount >= (historyCap! * 0.9).ceil();
+
+  /// Past the cap: copies are waiting behind the plan.
+  bool get ringCapped => isFree && evictedCount > 0;
+
+  /// The plan line for Settings, or null when there is no ring to describe:
+  /// a paid plan, a self-hosted server, a server too old to send the numbers.
+  ///
+  /// Store-safe builds get null too. The line names no price, but "waiting"
+  /// implies something can be bought, and Apple reads it that way.
+  String? get historyLine {
+    final cap = historyCap;
+    if (cap == null || storeSafeBuild) return null;
+    final tail = evictedCount == 0 ? '' : ' · $evictedCount waiting';
+    return 'History $historyCount / $cap$tail';
+  }
 
   static String _fmt(int bytes) {
     if (bytes < 1024 * 1024) return '${(bytes / 1024).round()} KB';
@@ -40,10 +83,47 @@ class AccountInfo {
     final vault = vaultCap == null
         ? 'Vault $vaultCount'
         : 'Vault $vaultCount/$vaultCap';
-    if (quotaBytes == 0) return '$tier · ${_fmt(usedBytes)} · $vault';
+    // Only a plan with a ring has a history line to add.
+    final history = historyLine == null ? '' : ' · $historyLine';
+    if (quotaBytes == 0) return '$tier · ${_fmt(usedBytes)} · $vault$history';
     final quotaMb = (quotaBytes / (1024 * 1024)).round();
-    return '$tier · ${_fmt(usedBytes)}/$quotaMb MB · $vault';
+    return '$tier · ${_fmt(usedBytes)}/$quotaMb MB · $vault$history';
   }
+}
+
+/// The sync chip's history-ring state, or null when the chip has nothing to
+/// say about the ring. Store-safe builds always get null: the chip is a tap
+/// into a checkout page, which iOS does not allow.
+SyncState? ringSyncState(AccountInfo? a) {
+  if (a == null || !a.ringCapped || storeSafeBuild) return null;
+  return SyncState(
+    SyncKind.historyFull,
+    historyCount: a.historyCount,
+    historyCap: a.historyCap,
+  );
+}
+
+/// The one ring notification a finished pull should raise, or null for silence.
+///
+/// [sent] is the account's persisted flag set; a raised notice adds its key so
+/// it is only ever shown once. Crossing straight past 100 consumes the first
+/// flag too, so nobody gets two toasts in the same second.
+///
+/// Lives here, away from the desktop shell, so the rule is testable on its own.
+String? ringNoticeBody(AccountInfo? a, String accountId, Set<String> sent) {
+  if (a == null || !a.ringCapped) return null;
+  final first = 'ring_notified_1:$accountId';
+  final hundred = 'ring_notified_100:$accountId';
+  if (a.evictedCount >= 100 && !sent.contains(hundred)) {
+    sent.add(hundred);
+    sent.add(first);
+    return '100 of your copies are now out of reach. Open Relic to keep them.';
+  }
+  if (a.evictedCount >= 1 && !sent.contains(first)) {
+    sent.add(first);
+    return 'Relic stopped showing your oldest copies. Open Relic to keep them.';
+  }
+  return null;
 }
 
 /// One purchasable plan, from the Worker `GET /stripe/plans`.
@@ -96,7 +176,17 @@ abstract interface class BillingRepo {
 
   /// Hosted Stripe Checkout URL for [priceId]. Null only while sync is off;
   /// any other failure throws [BillingException] with a user-facing message.
-  Future<String?> checkoutUrl(String priceId);
+  ///
+  /// [source] tags which button started the purchase (`ring_strip`,
+  /// `ring_search`, and the rest of the list in the plan). It rides through to
+  /// Stripe as session metadata and is the whole conversion measurement.
+  Future<String?> checkoutUrl(String priceId, {String? source});
+
+  /// Checkout URL for the plan an "Upgrade" button should sell: Pro monthly,
+  /// or the first plan on offer. Null when there is nothing to sell, which is
+  /// every self-hosted server (no Stripe) and every offline moment. Callers
+  /// show nothing at all on null.
+  Future<String?> upgradeUrl([String? source]);
 
   /// Hosted Stripe Customer Portal URL. Null only while sync is off; any other
   /// failure (including "no subscription to manage") throws [BillingException].

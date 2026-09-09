@@ -1079,19 +1079,22 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   /// upgrades happen on desktop or the web. Fine on Play; on iOS this exact
   /// shape is the Guideline 3.1.1 violation, so [storeSafeBuild] builds never
   /// reach it (call sites pass null) and it refuses defensively if one does.
-  Future<void> _openUpgradeGuidance() async {
+  Future<void> _openUpgradeGuidance({String source = 'ring_settings'}) async {
     if (storeSafeBuild) return;
+    // [source] names the button that sent us here. The web page forwards it to
+    // checkout, which is how we learn which surface sells.
+    final url = '$_upgradeUrl?source=$source';
     final ctx = _navKey.currentContext;
     final messenger = ctx == null ? null : ScaffoldMessenger.of(ctx);
     var ok = false;
     try {
-      ok = await launchUrl(Uri.parse(_upgradeUrl),
+      ok = await launchUrl(Uri.parse(url),
           mode: LaunchMode.externalApplication);
     } catch (_) {
       ok = false;
     }
     if (ok) return;
-    await Clipboard.setData(const ClipboardData(text: _upgradeUrl));
+    await Clipboard.setData(ClipboardData(text: url));
     if (!mounted) return;
     messenger?.showSnackBar(const SnackBar(
         content: Text('Upgrade link copied. Open it on your computer.')));
@@ -2207,6 +2210,10 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
             setState(() => _popupModal = open);
           }
         },
+        // The one gate for every history-ring surface in the popup.
+        onUpgrade: storeSafeBuild
+            ? null
+            : (source) => _openUpgradeGuidance(source: source),
       );
       // Stack banners above the list: the add-device promo and the
       // verify-to-sync notice (email not confirmed). Both dismiss per-session.

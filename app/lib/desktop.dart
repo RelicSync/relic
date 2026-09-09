@@ -26,6 +26,7 @@ import 'platform/gem_toast.dart';
 import 'platform/input_injector.dart';
 import 'platform/global_hotkeys.dart';
 import 'platform/sound.dart';
+import 'platform/store_safe.dart';
 import 'platform/tray_support.dart';
 import 'platform/src/linux/clipboard_watch_linux.dart';
 import 'platform/src/linux/hotkeys_linux.dart' as lin_hk;
@@ -35,6 +36,7 @@ import 'data/device_directory.dart';
 import 'data/hotkeys.dart';
 import 'data/local_desk_repo.dart';
 import 'data/recovery.dart';
+import 'data/repo.dart' show ringNoticeBody;
 import 'data/self_update.dart';
 import 'data/supabase_auth.dart';
 import 'data/update_check.dart';
@@ -1087,7 +1089,20 @@ class _RealAppState extends State<RealApp>
   // --- mini picker: cursor-anchored, hug-the-results sizing ---
 
   double _miniHeightFor(int rows) =>
-      _kMiniSearchH + _kMiniListPad + rows * MiniResultRow.height;
+      _kMiniSearchH +
+      _kMiniListPad +
+      rows * MiniResultRow.height +
+      // The history strip sits above the list in the mini picker too, so the
+      // window has to be that much taller or the last row is clipped.
+      (_miniRingStrip ? kHistoryStripHeight : 0);
+
+  /// True when the popup will draw the history strip: the same condition the
+  /// popup itself uses, from this side of the prop.
+  bool get _miniRingStrip {
+    if (storeSafeBuild) return false;
+    final a = widget.repo.account;
+    return a != null && (a.ringWarming || a.ringCapped);
+  }
 
   /// Current mini window size: width fixed, height sized to the visible rows
   /// (>=1, capped) so the list never scrolls.
@@ -1144,6 +1159,9 @@ class _RealAppState extends State<RealApp>
   /// The repo notifies on every result/query change; when the mini picker is
   /// open, debounce a re-hug so the window tracks the match count smoothly.
   void _onRepoTick() {
+    // Before the visibility early-return too: a pull that lands while the
+    // window is hidden is exactly when this needs to be heard.
+    _maybeNotifyRing();
     // Before the visibility early-return: the stack changes most often while
     // the popup is HIDDEN (that is what the push hotkey is for), and the tray
     // is the only surface showing it then.
@@ -1894,18 +1912,49 @@ class _RealAppState extends State<RealApp>
 
   /// Open Stripe checkout for the Pro monthly plan in the browser — the
   /// device-cap dialog's "Upgrade" action. Best-effort; the dialog surfaces a
-  /// failure. Reuses the Settings billing wiring (billingPlans + checkoutUrl).
-  Future<void> _upgradeToPro() async {
-    final plans = await widget.repo.billingPlans();
-    if (plans.isEmpty) throw StateError('Upgrade is unavailable right now.');
-    final pick = plans.firstWhere(
-      (p) => p.tier == 'pro' && p.interval == 'month',
-      orElse: () => plans.first,
-    );
-    final url = await widget.repo.checkoutUrl(pick.priceId);
-    if (url != null) {
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-    }
+  /// failure. [source] tags which button started it, for the ring surfaces.
+  Future<void> _upgradeToPro({String? source}) async {
+    final url = await widget.repo.upgradeUrl(source);
+    // Nothing to sell: no plans came back (self-hosted server, sync off, or
+    // offline). The device-cap dialog wants to say so; the ring surfaces stay
+    // quiet, which is what _ringUpgrade does with this.
+    if (url == null) throw StateError('Upgrade is unavailable right now.');
+    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    _afterBillingOpened();
+  }
+
+  /// The popup's ring buttons. Same checkout, but a failure is silent: a strip
+  /// that pops an error is worse than one that does nothing.
+  Future<void> _ringUpgrade(String source) async {
+    try {
+      await _upgradeToPro(source: source);
+    } catch (_) {}
+  }
+
+  /// Get out of the browser's way once a billing page is open: hide the window
+  /// and leave the next summon on the plain popup, not Settings.
+  void _afterBillingOpened() {
+    _hide();
+    if (mounted) setState(() => _settingsOpen = false);
+    _sizeWindow(_popupDims.width, _popupDims.height);
+  }
+
+  /// One-time toasts when the free ring starts holding copies back. Driven off
+  /// the repo tick, which fires after every pull, so the numbers are fresh.
+  /// The flags are per account and persist, so each notice is shown once ever.
+  void _maybeNotifyRing() {
+    if (storeSafeBuild) return;
+    final repo = widget.repo;
+    // The cheap check first: this runs on every repo tick, and almost every
+    // tick has nothing to do with the ring.
+    if (repo.account?.ringCapped != true) return;
+    final sent = repo.ringNotified;
+    final body = ringNoticeBody(repo.account, repo.supabaseUserId ?? '', sent);
+    if (body == null) return;
+    repo.setRingNotified(sent);
+    // Linux never delivers a click on a notification body, so the copy has to
+    // stand on its own. It does; there is no click handler here.
+    _notify('Relic', body);
   }
 
   /// Guided "switch account": disconnect, then re-open onboarding on the main
@@ -2006,13 +2055,7 @@ class _RealAppState extends State<RealApp>
         onSelfHostPostConnect: _afterDesktopConnect,
         onUpgrade: _upgradeToPro,
         onRenameThisDevice: (label) async => widget.repo.setDeviceName(label),
-        onBillingOpened: () {
-          // Get out of the browser's way: hide the window and leave the next
-          // summon on the plain popup, not Settings.
-          _hide();
-          setState(() => _settingsOpen = false);
-          _sizeWindow(_popupDims.width, _popupDims.height);
-        },
+        onBillingOpened: _afterBillingOpened,
       );
     }
     final popup = PopupView(
@@ -2034,6 +2077,8 @@ class _RealAppState extends State<RealApp>
       capturePaused: _pausedSignal,
       pausedUntil: () => _pausedUntil,
       onResumeCapture: () => _setPaused(false),
+      // The one gate for every history-ring surface in the popup.
+      onUpgrade: storeSafeBuild ? null : _ringUpgrade,
       globalShortcuts: [
         (widget.repo.historyHotkey.display, 'open your history'),
         (widget.repo.miniHotkey.display, 'open the mini picker'),

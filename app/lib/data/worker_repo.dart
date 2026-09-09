@@ -1106,6 +1106,12 @@ class WorkerRepo implements RelicRepo {
             quotaBytes: (j['storage_quota'] as num).toInt(),
             vaultCount: (j['vault_count'] as num).toInt(),
             vaultCap: (j['vault_cap'] as num?)?.toInt(),
+            // Optional: an older server, and every self-hosted one, sends
+            // none of these.
+            historyCount: (j['history_count'] as num?)?.toInt() ?? 0,
+            historyCap: (j['history_cap'] as num?)?.toInt(),
+            evictedCount: (j['evicted_count'] as num?)?.toInt() ?? 0,
+            devicesCap: (j['devices_cap'] as num?)?.toInt(),
           );
         }
       } catch (_) {}
@@ -1429,6 +1435,10 @@ class WorkerRepo implements RelicRepo {
           quotaBytes: (a['quotaBytes'] as num?)?.toInt() ?? 0,
           vaultCount: (a['vaultCount'] as num?)?.toInt() ?? 0,
           vaultCap: (a['vaultCap'] as num?)?.toInt(),
+          historyCount: (a['historyCount'] as num?)?.toInt() ?? 0,
+          historyCap: (a['historyCap'] as num?)?.toInt(),
+          evictedCount: (a['evictedCount'] as num?)?.toInt() ?? 0,
+          devicesCap: (a['devicesCap'] as num?)?.toInt(),
         );
       }
     } catch (_) {
@@ -1597,6 +1607,10 @@ class WorkerRepo implements RelicRepo {
             'quotaBytes': _account!.quotaBytes,
             'vaultCount': _account!.vaultCount,
             'vaultCap': _account!.vaultCap,
+            'historyCount': _account!.historyCount,
+            'historyCap': _account!.historyCap,
+            'evictedCount': _account!.evictedCount,
+            'devicesCap': _account!.devicesCap,
           },
       }));
     } catch (_) {}

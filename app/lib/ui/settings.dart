@@ -28,6 +28,7 @@ import '../data/hotkeys.dart';
 import '../platform/input_injector.dart';
 import '../platform/running_apps.dart';
 import '../platform/shell.dart';
+import '../platform/store_safe.dart';
 import '../platform/tray_support.dart';
 import '../data/self_update.dart';
 import '../data/sift.dart' show SiftSidecar;
@@ -642,10 +643,20 @@ class _SettingsViewState extends State<SettingsView>
     // Self-host shows a "Self-hosted" chip instead of the managed Plan + billing
     // rows; cloud shows Plan (+ billing when applicable).
     final showPlanRow = connected && (selfHost || acct != null);
+    final showBillingRow =
+        !selfHost && acct != null && _showBilling(acct.tier);
+    // Copies are already waiting behind the free ring: the way out belongs at
+    // the top of the section, not below five rows of device settings.
+    final ringFirst =
+        showBillingRow && acct.ringCapped && !storeSafeBuild;
+    // Null unless a ring is actually in force, and never on a store-safe
+    // build (the getter carries both rules).
+    final historyLine = acct?.historyLine;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _paneTitle(c, 'Sync and account'),
+        if (ringFirst) _row(c, _billingActions(c, acct.tier)),
         _row(
           c,
           Row(
@@ -846,11 +857,29 @@ class _SettingsViewState extends State<SettingsView>
           _row(
             c,
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                  child: Text(
-                    'Plan',
-                    style: RelicTheme.sans(size: 13, color: c.text),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Plan',
+                        style: RelicTheme.sans(size: 13, color: c.text),
+                      ),
+                      // What the plan is doing to your history, in numbers.
+                      // Only a plan with a ring has anything to say, so paid
+                      // plans and self-hosted servers add nothing. Store-safe
+                      // builds skip it too: "waiting" implies a purchase.
+                      if (historyLine != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          historyLine,
+                          style:
+                              RelicTheme.sans(size: 11.5, color: c.textMuted),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
                 Text(
@@ -859,9 +888,9 @@ class _SettingsViewState extends State<SettingsView>
                 ),
               ],
             ),
-            last: !_showBilling(acct.tier),
+            last: !showBillingRow || ringFirst,
           ),
-          if (_showBilling(acct.tier))
+          if (showBillingRow && !ringFirst)
             _row(c, _billingActions(c, acct.tier), last: true),
         ],
       ],
@@ -2323,8 +2352,8 @@ class _SettingsViewState extends State<SettingsView>
   Future<List<BillingPlan>> _loadPlans() =>
       _plansFuture ??= widget.repo.billingPlans();
 
-  Future<void> _openCheckout(String priceId) =>
-      _billingAction(() => widget.repo.checkoutUrl(priceId));
+  Future<void> _openCheckout(String priceId, {String? source}) =>
+      _billingAction(() => widget.repo.checkoutUrl(priceId, source: source));
 
   Future<void> _openPortal() => _billingAction(widget.repo.portalUrl);
 
@@ -2394,7 +2423,11 @@ class _SettingsViewState extends State<SettingsView>
         ],
       );
     }
-    // Free tier → show upgrade options pulled from the Worker.
+    // Free tier → show upgrade options pulled from the Worker. When copies are
+    // already waiting behind the ring, tag the checkout with that source so we
+    // learn which surface sold it.
+    final source =
+        widget.repo.account?.ringCapped == true ? 'ring_settings' : null;
     return FutureBuilder<List<BillingPlan>>(
       future: _loadPlans(),
       builder: (ctx, snap) {
@@ -2423,7 +2456,9 @@ class _SettingsViewState extends State<SettingsView>
                     p.label,
                     LucideIcons.zap,
                     accent: p.tier == 'pro' && p.interval == 'month',
-                    onTap: _billingBusy ? null : () => _openCheckout(p.priceId),
+                    onTap: _billingBusy
+                        ? null
+                        : () => _openCheckout(p.priceId, source: source),
                   ),
               ],
             ),
