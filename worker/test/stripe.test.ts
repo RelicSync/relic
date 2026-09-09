@@ -1,7 +1,9 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { applyStripeEvent, graceSweep, verifySig } from "../src/stripe";
+import { afterEach, vi } from "vitest";
+
+import { applyStripeEvent, createCheckout, graceSweep, verifySig } from "../src/stripe";
 import { setupSchema, hmacHex } from "./helpers";
 
 // deno-lint-ignore no-explicit-any
@@ -269,5 +271,136 @@ describe("verifySig (Stripe webhook HMAC)", () => {
     const good = await hmacHex(secret, `${t}.${payload}`);
     // Header lists a stale signature first (old secret) then the valid one.
     expect(await verifySig(payload, `t=${t},v1=deadbeef,v1=${good}`, secret)).toBe(true);
+  });
+});
+
+// --- checkout source attribution ---------------------------------------------
+// The tag on the button someone pressed is the only conversion measurement in
+// the product, so it has to reach Stripe on both the session and the
+// subscription, and an unknown tag must never block a sale.
+describe("createCheckout source", () => {
+  // deno-lint-ignore no-explicit-any
+  let fetchMock: any;
+  const realFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    fetchMock = vi.fn(async () => new Response(JSON.stringify({ url: "https://pay" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    globalThis.fetch = fetchMock;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const withKey = () => ({ ...E, STRIPE_SECRET_KEY: "sk_test" });
+
+  async function checkout(body: unknown) {
+    const res = await createCheckout(
+      new Request("https://x/stripe/checkout", { method: "POST", body: JSON.stringify(body) }),
+      withKey(),
+      { account: "acct_src", tier: "free" } as never,
+    );
+    const sent = new URLSearchParams(fetchMock.mock.calls[0]?.[1]?.body ?? "");
+    return { res, sent };
+  }
+
+  it("carries an allowed source onto the session and the subscription", async () => {
+    const { res, sent } = await checkout({ price_id: "price_pro", source: "ring_search" });
+    expect(res.status).toBe(200);
+    expect(sent.get("metadata[source]")).toBe("ring_search");
+    expect(sent.get("subscription_data[metadata][source]")).toBe("ring_search");
+  });
+
+  it("drops an unknown source and still sells the plan", async () => {
+    const { res, sent } = await checkout({ price_id: "price_pro", source: "not_a_surface" });
+    expect(res.status).toBe(200);
+    expect(sent.get("metadata[source]")).toBeNull();
+    expect(sent.get("subscription_data[metadata][source]")).toBeNull();
+    expect(sent.get("line_items[0][price]")).toBe("price_pro");
+  });
+
+  it("omits the metadata entirely when no source is sent", async () => {
+    const { sent } = await checkout({ price_id: "price_pro" });
+    expect(sent.get("metadata[source]")).toBeNull();
+  });
+});
+
+// --- un-evict on upgrade ------------------------------------------------------
+describe("upgrade restores evicted rows", () => {
+  async function seedEvicted(account: string) {
+    await E.DB.batch([
+      E.DB.prepare(
+        `INSERT INTO relic_meta (account_id, uid, created_at, updated_at, byte_size, promoted, evicted)
+         VALUES (?1, 'old1', 1, 1, 10, 0, 1), (?1, 'old2', 2, 2, 10, 0, 1),
+                (?1, 'live', 3, 3, 10, 0, 0)`,
+      ).bind(account),
+      E.DB.prepare(
+        "INSERT INTO tombstones (account_id, uid, deleted_at) VALUES (?1,'old1',5),(?1,'old2',5)",
+      ).bind(account),
+      E.DB.prepare(
+        `INSERT INTO account_usage
+           (account_id, bytes_used, vault_count, history_count, evicted_count, ring_evicted)
+         VALUES (?1, 30, 0, 1, 2, 2)`,
+      ).bind(account),
+    ]);
+  }
+
+  const ringRow = (account: string) =>
+    E.DB.prepare(
+      `SELECT history_count, evicted_count, ring_evicted
+         FROM account_usage WHERE account_id = ?1`,
+    ).bind(account).first();
+
+  it("flips the rows back, bumps updated_at, and clears their tombstones", async () => {
+    await seedEvicted("acct_1");
+    await applyStripeEvent(E, {
+      id: "evt_restore", type: "customer.subscription.created", created: 1000, data: sub(),
+    });
+
+    const rows = await E.DB.prepare(
+      "SELECT uid, evicted, updated_at FROM relic_meta WHERE account_id='acct_1' ORDER BY uid",
+    ).all();
+    const byUid = Object.fromEntries(
+      rows.results.map((r: { uid: string }) => [r.uid, r]),
+    );
+    expect(byUid.old1.evicted).toBe(0);
+    expect(byUid.old2.evicted).toBe(0);
+    expect(byUid.old1.updated_at).toBeGreaterThan(1); // what puts it in the next pull
+    expect(byUid.live.updated_at).toBe(3); // untouched
+
+    const tombs = await E.DB.prepare(
+      "SELECT COUNT(*) AS n FROM tombstones WHERE account_id='acct_1'",
+    ).first();
+    expect(tombs.n).toBe(0);
+
+    // The count moves across; the lifetime total is a record, so it stays.
+    expect(await ringRow("acct_1")).toEqual({
+      history_count: 3, evicted_count: 0, ring_evicted: 2,
+    });
+  });
+
+  it("is inert the second time (Stripe replays events)", async () => {
+    await seedEvicted("acct_1");
+    await applyStripeEvent(E, {
+      id: "evt_r1", type: "customer.subscription.created", created: 1000, data: sub(),
+    });
+    const after = await ringRow("acct_1");
+    await applyStripeEvent(E, {
+      id: "evt_r2", type: "customer.subscription.updated", created: 2000, data: sub(),
+    });
+    expect(await ringRow("acct_1")).toEqual(after);
+  });
+
+  it("does not restore on a past_due grace grant", async () => {
+    await seedEvicted("acct_1");
+    await applyStripeEvent(E, {
+      id: "evt_pd", type: "customer.subscription.updated", created: 1000,
+      data: sub({ status: "past_due" }),
+    });
+    expect(await ringRow("acct_1")).toEqual({
+      history_count: 1, evicted_count: 2, ring_evicted: 2,
+    });
   });
 });

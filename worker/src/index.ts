@@ -16,7 +16,7 @@ import {
   mpuPart,
   sizedBody,
 } from "./blob";
-import { readUsage, usageDelta } from "./usage";
+import { readUsage, ringDelta, usageDelta } from "./usage";
 import { type Auth, authenticate, REV_TTL, revKey } from "./auth";
 import { clampLimit, CORS, err, json } from "./http";
 import { clientIp, rateLimit } from "./ratelimit";
@@ -36,6 +36,7 @@ import {
   graceSweep,
   listPlans,
   reconcile,
+  ringNudgeSweep,
   stripeWebhook,
 } from "./stripe";
 import { sweepAbandonedMpus, sweepOrphanBlobs, sweepTombstones } from "./sweep";
@@ -171,6 +172,9 @@ export interface DeletedMeta {
   blob_key: string | null;
   byte_size: number;
   promoted: number;
+  /** 1 when the row is already outside the free history ring. Optional so the
+   *  callers that only ever see live rows can leave it off. */
+  evicted?: number;
 }
 
 export async function deleteRelic(env: Env, acct: string, uid: string, meta: DeletedMeta | null, deletedAt: number) {
@@ -188,7 +192,15 @@ export async function deleteRelic(env: Env, acct: string, uid: string, meta: Del
   // Same batch as the row it accounts for, so the cache cannot drift from the
   // table. No base: a delete never needs to seed a missing row (the next read
   // recomputes it), it only adjusts one that already exists.
-  if (meta) stmts.push(usageDelta(env, acct, -meta.byte_size, -meta.promoted, null));
+  // history_count only counts live unpromoted rows and evicted_count only
+  // counts evicted ones, so a delete takes the row out of whichever it was in.
+  if (meta) {
+    const wasEvicted = (meta.evicted ?? 0) === 1 ? 1 : 0;
+    const wasHistory = meta.promoted === 0 && !wasEvicted ? 1 : 0;
+    stmts.push(
+      usageDelta(env, acct, -meta.byte_size, -meta.promoted, null, -wasHistory, -wasEvicted),
+    );
+  }
   await env.DB.batch(stmts);
 }
 
@@ -222,8 +234,10 @@ export async function putRelic(req: Request, env: Env, auth: Auth, uid: string, 
   if (tomb) return json({ stale: true });
 
   const stored = await env.DB.prepare(
-    "SELECT updated_at, promoted, byte_size FROM relic_meta WHERE account_id = ?1 AND uid = ?2",
-  ).bind(auth.account, uid).first<{ updated_at: number; promoted: number; byte_size: number }>();
+    "SELECT updated_at, promoted, byte_size, evicted FROM relic_meta WHERE account_id = ?1 AND uid = ?2",
+  ).bind(auth.account, uid).first<
+    { updated_at: number; promoted: number; byte_size: number; evicted: number }
+  >();
   if (stored && stored.updated_at >= envelope.updated_at) return json({ stale: true });
 
   // Both caps come off one cached row. These were two separate full scans of
@@ -244,6 +258,13 @@ export async function putRelic(req: Request, env: Env, auth: Auth, uid: string, 
   ) {
     return err(402, "storage_quota", "storage quota exceeded");
   }
+
+  // history_count follows the row in and out of "live and unpromoted". The
+  // ON CONFLICT below leaves `evicted` alone, so rewriting an already-evicted
+  // row keeps it out of the count (only paying brings it back), while promote
+  // and demote move it by one in either direction.
+  const wasHistory = stored && stored.promoted === 0 && stored.evicted === 0 ? 1 : 0;
+  const nowHistory = envelope.promoted || stored?.evicted === 1 ? 0 : 1;
 
   await env.STORE.put(relicKey(auth.account, uid), body);
   await env.DB.batch([
@@ -266,12 +287,20 @@ export async function putRelic(req: Request, env: Env, auth: Auth, uid: string, 
       envelope.byte_size - (stored?.byte_size ?? 0),
       (envelope.promoted ? 1 : 0) - (stored?.promoted ?? 0),
       usage,
+      nowHistory - wasHistory,
     ),
   ]);
 
-  // history ring: lazily prune the oldest unpromoted past the tier's ring (with
-  // tombstones, so other devices drop them too). Free = 500; pro/max = null
-  // (no ring, keep everything).
+  // history ring: lazily push the oldest unpromoted past the tier's ring out of
+  // view (with tombstones, so other devices drop them too). Free = 500; pro/max
+  // = null (no ring, keep everything).
+  //
+  // Text rows are SOFT-evicted: the row and its R2 envelope stay, free pulls
+  // skip them, and paying flips them back (restoreEvicted in stripe.ts). A
+  // sealed text envelope is about a kilobyte, so keeping them costs nothing
+  // worth measuring, and it lets the upsell offer them back instead of
+  // reporting a loss. Rows with a blob keep the hard delete: blob bytes are the
+  // only real storage cost.
   //
   // DOWNGRADE SAFETY (docs/cloudflare/05-billing.md §4): a paid->free account is
   // read-only, NEVER deleted. The ring only bounds accounts that have ALWAYS
@@ -284,14 +313,48 @@ export async function putRelic(req: Request, env: Env, auth: Auth, uid: string, 
       "SELECT 1 FROM subscriptions WHERE account_id = ?1",
     ).bind(auth.account).first();
     if (!everBilled) {
+      // `AND evicted = 0` so a row already pushed out never counts against the
+      // ring a second time.
       const over = await env.DB.prepare(
-        `SELECT uid, blob_key, byte_size, promoted FROM relic_meta
-         WHERE account_id = ?1 AND promoted = 0
+        `SELECT uid, blob_key, byte_size, promoted, evicted FROM relic_meta
+         WHERE account_id = ?1 AND promoted = 0 AND evicted = 0
          ORDER BY created_at DESC LIMIT -1 OFFSET ?2`,
       ).bind(auth.account, ring).all<{ uid: string } & DeletedMeta>();
-      const now = Math.floor(Date.now() / 1000);
-      for (const row of over.results) {
-        await deleteRelic(env, auth.account, row.uid, row, now);
+      const rows = over.results;
+      if (rows.length) {
+        const now = Math.floor(Date.now() / 1000);
+        const text = rows.filter((r) => !r.blob_key);
+        const blobs = rows.filter((r) => r.blob_key);
+
+        // One batch: flip the text rows, write the same tombstone deleteRelic
+        // writes so every device drops them on its next pull, and move the
+        // counters. ring_evicted counts BOTH kinds, because it is the lifetime
+        // "this account has outgrown the free plan" signal that the nudge email
+        // and the funnel query read.
+        const stmts = [];
+        for (const r of text) {
+          stmts.push(
+            env.DB.prepare(
+              `UPDATE relic_meta SET evicted = 1, updated_at = ?3
+                WHERE account_id = ?1 AND uid = ?2`,
+            ).bind(auth.account, r.uid, now),
+          );
+          stmts.push(
+            env.DB.prepare(
+              "INSERT OR REPLACE INTO tombstones (account_id, uid, deleted_at) VALUES (?1, ?2, ?3)",
+            ).bind(auth.account, r.uid, now),
+          );
+        }
+        stmts.push(ringDelta(env, auth.account, -text.length, text.length, rows.length));
+        await env.DB.batch(stmts);
+
+        // Blobs keep the old path, which maintains its own counters.
+        for (const row of blobs) {
+          await deleteRelic(env, auth.account, row.uid, row, now);
+        }
+        console.log(JSON.stringify({
+          evt: "ring_evict", account: auth.account, text: text.length, blobs: blobs.length,
+        }));
       }
     }
   }
@@ -309,6 +372,11 @@ export async function listRelics(url: URL, env: Env, auth: Auth): Promise<Respon
 
   let sql =
     "SELECT uid, updated_at FROM relic_meta WHERE account_id = ?1 AND updated_at > ?2";
+  // Rows past the free history ring are still here, they just do not sync while
+  // the account is on a ringed tier. Paid tiers have no ring, so they pull
+  // everything, which is what makes an upgrade hand the old copies straight
+  // back on the next pull.
+  if (TIERS[auth.tier].ring !== null) sql += " AND evicted = 0";
   const binds: (string | number)[] = [auth.account, since];
   if (cursor) {
     const sep = cursor.lastIndexOf(":");
@@ -693,6 +761,14 @@ export default {
         storage_quota: caps.storage,
         vault_count: usage.vault,
         vault_cap: caps.vault,
+        // History ring. `history_cap` is null on pro and max, which is how a
+        // client knows there is no ring to warn about, and `evicted_count` is
+        // pinned to 0 there for the same reason: nothing is hidden, so nothing
+        // is waiting. Older clients ignore all four.
+        history_count: usage.history,
+        history_cap: caps.ring,
+        evicted_count: caps.ring === null ? 0 : usage.evicted,
+        devices_cap: caps.devices,
       });
     }
     // Irreversible: cancels billing + wipes all R2/D1/KV state for the account.
@@ -726,6 +802,13 @@ export default {
   // is fenced so a sweep failure can't starve the billing sweeps.
   async scheduled(_event: ScheduledController, env: Env): Promise<void> {
     await graceSweep(env);
+    // Fenced on its own: one nudge email must never be able to fail the billing
+    // sweeps behind it.
+    try {
+      await ringNudgeSweep(env);
+    } catch (e) {
+      console.error(JSON.stringify({ evt: "ring_email_error", err: String(e) }));
+    }
     await reconcile(env);
     await sweepShares(env);
     try {

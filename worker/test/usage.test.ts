@@ -2,7 +2,9 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { deleteRelic, putRelic } from "../src/index";
-import { computeUsage, readUsage, usageDelta } from "../src/usage";
+import { restoreEvicted } from "../src/stripe";
+import { TIERS } from "../src/tiers";
+import { computeUsage, readUsage, ringDelta, usageDelta } from "../src/usage";
 import { setupSchema } from "./helpers";
 
 // deno-lint-ignore no-explicit-any
@@ -27,6 +29,14 @@ const cached = () =>
   E.DB.prepare("SELECT bytes_used, vault_count FROM account_usage WHERE account_id = ?1")
     .bind("A").first();
 
+// The two history-ring counters, read on their own so the storage/vault cases
+// above stay readable.
+const ringCached = () =>
+  E.DB.prepare(
+    `SELECT history_count, evicted_count, ring_evicted
+       FROM account_usage WHERE account_id = ?1`,
+  ).bind("A").first();
+
 describe("account_usage: the cache tracks the table", () => {
   beforeEach(async () => {
     await setupSchema(E.DB);
@@ -35,7 +45,9 @@ describe("account_usage: the cache tracks the table", () => {
   it("seeds on first write and matches a full recount", async () => {
     await put("u1", 100, true);
     expect(await cached()).toEqual({ bytes_used: 100, vault_count: 1 });
-    expect(await computeUsage(E, "A")).toEqual({ bytes: 100, vault: 1 });
+    expect(await computeUsage(E, "A")).toEqual({
+      bytes: 100, vault: 1, history: 0, evicted: 0,
+    });
   });
 
   it("follows adds, size changes, promote/demote and deletes", async () => {
@@ -55,7 +67,9 @@ describe("account_usage: the cache tracks the table", () => {
     expect(await cached()).toEqual({ bytes_used: 20, vault_count: 0 });
 
     // the cache still agrees with the table it is standing in for
-    expect(await computeUsage(E, "A")).toEqual({ bytes: 20, vault: 0 });
+    expect(await computeUsage(E, "A")).toEqual({
+      bytes: 20, vault: 0, history: 1, evicted: 0,
+    });
   });
 
   it("a stale write that loses LWW moves neither counter", async () => {
@@ -76,7 +90,9 @@ describe("account_usage: recovery and edge cases", () => {
     await put("u1", 100, true);
     await put("u2", 40, true);
     await E.DB.prepare("DELETE FROM account_usage").run(); // simulate never-seeded
-    expect(await readUsage(E, "A")).toEqual({ bytes: 140, vault: 2 });
+    expect(await readUsage(E, "A")).toEqual({
+      bytes: 140, vault: 2, history: 0, evicted: 0,
+    });
   });
 
   it("re-seeds itself on the next write after the row is lost", async () => {
@@ -91,7 +107,10 @@ describe("account_usage: recovery and edge cases", () => {
     await E.DB.prepare("DELETE FROM account_usage").run();
     await deleteRelic(E, "A", "u1", { blob_key: null, byte_size: 100, promoted: 0 }, 10);
     expect(await cached()).toBeNull();
-    expect(await readUsage(E, "A")).toEqual({ bytes: 0, vault: 0 }); // recount agrees
+    // recount agrees
+    expect(await readUsage(E, "A")).toEqual({
+      bytes: 0, vault: 0, history: 0, evicted: 0,
+    });
   });
 
   it("never lets a counter go negative", async () => {
@@ -102,7 +121,106 @@ describe("account_usage: recovery and edge cases", () => {
   });
 
   it("an unseeded account reads as empty", async () => {
-    expect(await readUsage(E, "NOBODY")).toEqual({ bytes: 0, vault: 0 });
+    expect(await readUsage(E, "NOBODY")).toEqual({
+      bytes: 0, vault: 0, history: 0, evicted: 0,
+    });
+  });
+});
+
+// The two counters GET /account reports as history_count and evicted_count.
+// Every path that can move a row in or out of "live and unpromoted" is here,
+// because a counter that drifts is a client showing a number that is not true.
+describe("account_usage: the history-ring counters", () => {
+  beforeEach(async () => {
+    await setupSchema(E.DB);
+  });
+
+  it("counts an unpromoted put and ignores a promoted one", async () => {
+    await put("h1", 10, false);
+    expect(await ringCached()).toMatchObject({ history_count: 1, evicted_count: 0 });
+    await put("h2", 10, true);
+    expect(await ringCached()).toMatchObject({ history_count: 1, evicted_count: 0 });
+  });
+
+  it("follows promote and demote of the same row", async () => {
+    await put("h1", 10, false);
+    expect(await ringCached()).toMatchObject({ history_count: 1 });
+    await put("h1", 10, true, 2000); // promote
+    expect(await ringCached()).toMatchObject({ history_count: 0 });
+    await put("h1", 10, false, 3000); // demote
+    expect(await ringCached()).toMatchObject({ history_count: 1 });
+  });
+
+  it("a delete takes the row back out", async () => {
+    await put("h1", 10, false);
+    await deleteRelic(E, "A", "h1", { blob_key: null, byte_size: 10, promoted: 0 }, 10);
+    expect(await ringCached()).toMatchObject({ history_count: 0, evicted_count: 0 });
+  });
+
+  it("deleting an evicted row moves evicted_count, not history_count", async () => {
+    await put("h1", 10, false);
+    await E.DB.prepare(
+      "UPDATE relic_meta SET evicted = 1 WHERE account_id = 'A' AND uid = 'h1'",
+    ).run();
+    await E.DB.prepare(
+      "UPDATE account_usage SET history_count = 0, evicted_count = 1 WHERE account_id = 'A'",
+    ).run();
+
+    await deleteRelic(
+      E, "A", "h1", { blob_key: null, byte_size: 10, promoted: 0, evicted: 1 }, 10,
+    );
+    expect(await ringCached()).toMatchObject({ history_count: 0, evicted_count: 0 });
+  });
+
+  it("an evict moves the count across and bumps the lifetime total", async () => {
+    const ring = TIERS.free.ring as number;
+    const stmts = [];
+    for (let i = 1; i <= ring; i++) {
+      stmts.push(
+        E.DB.prepare(
+          `INSERT INTO relic_meta (account_id, uid, created_at, updated_at, byte_size, promoted)
+           VALUES ('A', ?1, ?2, ?2, 1, 0)`,
+        ).bind(`r${i}`, i),
+      );
+    }
+    await E.DB.batch(stmts);
+    await E.DB.prepare(
+      `INSERT INTO account_usage (account_id, bytes_used, vault_count, history_count)
+       VALUES ('A', ?1, 0, ?1)`,
+    ).bind(ring).run();
+
+    // One more capture puts the account one over the ring.
+    await put("rnew", 1, false, 10_000);
+    // +1 for the new row, -1 for the one pushed out.
+    expect(await ringCached()).toEqual({
+      history_count: ring, evicted_count: 1, ring_evicted: 1,
+    });
+    // The cache still agrees with a full recount of the table.
+    const scan = await computeUsage(E, "A");
+    expect(scan.history).toBe(ring);
+    expect(scan.evicted).toBe(1);
+  }, 30_000);
+
+  it("a restore moves the count back and leaves the lifetime total alone", async () => {
+    await put("h1", 10, false);
+    await E.DB.prepare(
+      "UPDATE relic_meta SET evicted = 1 WHERE account_id = 'A' AND uid = 'h1'",
+    ).run();
+    await E.DB.prepare(
+      `UPDATE account_usage SET history_count = 0, evicted_count = 1, ring_evicted = 1
+        WHERE account_id = 'A'`,
+    ).run();
+
+    expect(await restoreEvicted(E, "A", 9000)).toBe(1);
+    expect(await ringCached()).toEqual({
+      history_count: 1, evicted_count: 0, ring_evicted: 1,
+    });
+  });
+
+  it("never lets the ring counters go negative", async () => {
+    await put("h1", 10, false);
+    await E.DB.batch([ringDelta(E, "A", -50, -50, 0)]);
+    expect(await ringCached()).toMatchObject({ history_count: 0, evicted_count: 0 });
   });
 });
 

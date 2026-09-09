@@ -74,13 +74,21 @@ CREATE TABLE IF NOT EXISTS relic_meta (
     byte_size  INTEGER NOT NULL,
     promoted   INTEGER NOT NULL,
     blob_key   TEXT,
+    -- 1 = past the free history ring (migrations/0012). The row and its R2
+    -- envelope stay; free pulls skip it and paying flips it back. Only text
+    -- rows are ever evicted. Rows with a blob_key keep the old hard delete,
+    -- because blob bytes are the only real storage cost.
+    evicted    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (account_id, uid)
 );
 CREATE INDEX IF NOT EXISTS idx_meta_updated ON relic_meta(account_id, updated_at, uid);
 CREATE INDEX IF NOT EXISTS idx_meta_stream  ON relic_meta(account_id, promoted, created_at);
--- Covers the account_usage seed scan (SUM(byte_size) + SUM(promoted) by account)
--- end to end, so it reads index entries only. See migrations/0008.
-CREATE INDEX IF NOT EXISTS idx_meta_usage   ON relic_meta(account_id, byte_size, promoted);
+-- The ring prune's own query: oldest unpromoted, not-yet-evicted rows by age.
+CREATE INDEX IF NOT EXISTS idx_meta_ring    ON relic_meta(account_id, promoted, evicted, created_at);
+-- Covers the account_usage seed scan (SUM(byte_size) + SUM(promoted) + the two
+-- ring counts, by account) end to end, so it reads index entries only.
+-- See migrations/0008 and 0012.
+CREATE INDEX IF NOT EXISTS idx_meta_usage   ON relic_meta(account_id, byte_size, promoted, evicted);
 
 -- Cached aggregates over relic_meta, so the storage/vault caps stop scanning it
 -- on every write (migrations/0008_account_usage.sql has the rationale). A
@@ -89,7 +97,15 @@ CREATE INDEX IF NOT EXISTS idx_meta_usage   ON relic_meta(account_id, byte_size,
 CREATE TABLE IF NOT EXISTS account_usage (
     account_id  TEXT PRIMARY KEY,
     bytes_used  INTEGER NOT NULL,
-    vault_count INTEGER NOT NULL
+    vault_count INTEGER NOT NULL,
+    -- History ring counters (migrations/0012). history_count and evicted_count
+    -- are live counts maintained on every write; ring_evicted is a lifetime
+    -- total that is never decremented; ring_email_at is when the one nudge
+    -- email went out (NULL = never).
+    history_count INTEGER NOT NULL DEFAULT 0,
+    evicted_count INTEGER NOT NULL DEFAULT 0,
+    ring_evicted  INTEGER NOT NULL DEFAULT 0,
+    ring_email_at INTEGER
 );
 
 -- AI records + the work lease (migrations/0007_ai_meta.sql has the rationale).

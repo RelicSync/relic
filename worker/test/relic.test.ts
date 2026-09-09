@@ -88,6 +88,30 @@ async function hasMeta(uid: string): Promise<boolean> {
   return !!r;
 }
 
+async function evictedOf(uid: string): Promise<number | null> {
+  const r = await E.DB.prepare(
+    "SELECT evicted FROM relic_meta WHERE account_id = 'A' AND uid = ?1",
+  )
+    .bind(uid)
+    .first<{ evicted: number }>();
+  return r ? r.evicted : null;
+}
+
+// Every uid a pull at this tier would deliver, following the cursor to the end
+// the way a real client does (the ring cases run past one page).
+async function pulledUids(auth: { account: string; tier: string }): Promise<string[]> {
+  const uids: string[] = [];
+  let cursor: string | null = null;
+  do {
+    const q = cursor ? `?limit=500&cursor=${cursor}` : "?limit=500";
+    const res = await listRelics(new URL(`http://x/relics${q}`), E, auth as never);
+    const body = await res.json<{ items: { uid: string }[]; next_cursor: string | null }>();
+    for (const i of body.items) uids.push(i.uid);
+    cursor = body.next_cursor;
+  } while (cursor);
+  return uids;
+}
+
 async function tombstoneOf(uid: string): Promise<number | null> {
   const r = await E.DB.prepare(
     "SELECT deleted_at FROM tombstones WHERE account_id = 'A' AND uid = ?1",
@@ -291,9 +315,16 @@ describe("deleteRelic", () => {
 });
 
 describe("putRelic — history ring GC (free, never-billed)", () => {
-  it("prunes the oldest unpromoted past the ring; keeps promoted and recent", async () => {
+  // Seed `n` unpromoted rows, created_at = 1..n (u1 = oldest), through the real
+  // handler so the R2 envelopes exist and a pull can read them back.
+  async function seedRing(n: number) {
+    for (let i = 1; i <= n; i++) {
+      await put(FREE, `u${i}`, { created_at: i, updated_at: i });
+    }
+  }
+
+  it("soft-evicts the oldest text past the ring; keeps promoted and recent", async () => {
     const ring = TIERS.free.ring; // 500
-    // Seed ring+1 unpromoted rows, created_at = 1..ring+1 (u1 = oldest).
     const stmts = [];
     for (let i = 1; i <= ring + 1; i++) {
       stmts.push(
@@ -305,16 +336,73 @@ describe("putRelic — history ring GC (free, never-billed)", () => {
     }
     await E.DB.batch(stmts);
 
-    // Pushing one more newest relic makes it ring+2 unpromoted → prune the 2 oldest.
+    // Pushing one more newest relic makes it ring+2 unpromoted -> the 2 oldest
+    // go. Text rows are kept, not deleted: the row stays, flagged.
     const res = await put(FREE, "unew", { created_at: 10_000, updated_at: 10_000 });
     expect(res.status).toBe(200);
 
-    expect(await hasMeta("u1")).toBe(false);
-    expect(await tombstoneOf("u1")).not.toBeNull();
-    expect(await hasMeta("u2")).toBe(false);
-    expect(await hasMeta("u3")).toBe(true); // just inside the ring
-    expect(await hasMeta("unew")).toBe(true);
-  });
+    expect(await hasMeta("u1")).toBe(true);
+    expect(await evictedOf("u1")).toBe(1);
+    expect(await tombstoneOf("u1")).not.toBeNull(); // devices still drop it
+    expect(await evictedOf("u2")).toBe(1);
+    expect(await evictedOf("u3")).toBe(0); // just inside the ring
+    expect(await evictedOf("unew")).toBe(0);
+    // The envelope is still in R2, which is what makes the restore possible.
+    expect(await E.STORE.get(relicR2Key("A", "unew"))).not.toBeNull();
+  }, 30_000);
+
+  it("evicted rows are gone from a free pull and back on a paid one", async () => {
+    const ring = TIERS.free.ring;
+    await seedRing(ring);
+    await put(FREE, "unew", { created_at: 10_000, updated_at: 10_000 });
+
+    expect(await evictedOf("u1")).toBe(1);
+    const free = await pulledUids(FREE);
+    expect(free).not.toContain("u1");
+    expect(free).toContain("unew");
+    // Same rows, paid tier: no ring, so the pull carries everything.
+    expect(await pulledUids(PRO)).toContain("u1");
+  }, 60_000);
+
+  it("an image past the ring is deleted outright, blob and all", async () => {
+    const ring = TIERS.free.ring;
+    // The oldest row carries a blob; everything after it is plain text.
+    await E.STORE.put(blobR2Key("A", "blobold"), "bytes");
+    await put(FREE, "uimg", { created_at: 1, updated_at: 1, blob_key: "blobold" });
+    for (let i = 2; i <= ring + 1; i++) {
+      await put(FREE, `u${i}`, { created_at: i, updated_at: i });
+    }
+
+    expect(await hasMeta("uimg")).toBe(false); // hard deleted, not flagged
+    expect(await tombstoneOf("uimg")).not.toBeNull();
+    expect(await E.STORE.get(blobR2Key("A", "blobold"))).toBeNull();
+    expect(await E.STORE.get(relicR2Key("A", "uimg"))).toBeNull();
+  }, 60_000);
+
+  it("an already-evicted row never counts against the ring twice", async () => {
+    const ring = TIERS.free.ring;
+    const stmts = [];
+    for (let i = 1; i <= ring + 1; i++) {
+      stmts.push(
+        E.DB.prepare(
+          `INSERT INTO relic_meta (account_id, uid, created_at, updated_at, byte_size, promoted)
+           VALUES ('A', ?1, ?2, ?2, 1, 0)`,
+        ).bind(`u${i}`, i),
+      );
+    }
+    await E.DB.batch(stmts);
+
+    await put(FREE, "unew1", { created_at: 10_000, updated_at: 10_000 });
+    expect(await evictedOf("u1")).toBe(1);
+    expect(await evictedOf("u2")).toBe(1);
+    expect(await evictedOf("u3")).toBe(0);
+
+    // The next capture is over the ring again by exactly one, so exactly one
+    // more row goes. If evicted rows still counted, u3 and u4 would both go.
+    await put(FREE, "unew2", { created_at: 10_001, updated_at: 10_001 });
+    expect(await evictedOf("u3")).toBe(1);
+    expect(await evictedOf("u4")).toBe(0);
+  }, 30_000);
 
   it("DOWNGRADE SAFETY: an ever-billed account is exempt from ring prune", async () => {
     await E.DB.prepare(

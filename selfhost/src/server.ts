@@ -22,6 +22,7 @@ import Database from "better-sqlite3";
 // Unwrap until we find the object that actually has fetch().
 import * as workerModule from "../../worker/src/index";
 import { makeEnv } from "./adapters/env";
+import { applyColumnUpgrades } from "./schema-upgrade";
 
 function pickHandler(m: any): any {
   let cur = m;
@@ -43,6 +44,14 @@ fs.mkdirSync(BLOBS, { recursive: true });
 const db = new Database(path.join(DATA, "relic.db"));
 db.pragma("journal_mode = WAL");
 db.pragma("busy_timeout = 5000");
+
+// Existing databases first: schema.sql can create tables but never change one,
+// so a column the worker code now reads has to be ALTERed in here. It runs
+// BEFORE the schema exec because schema.sql indexes relic_meta.evicted, and a
+// CREATE INDEX over a column an old database lacks would throw and abort the
+// whole exec. See selfhost/src/schema-upgrade.ts.
+const upgraded = applyColumnUpgrades(db);
+if (upgraded.length) console.log("[relic] schema upgrade added:", upgraded.join(", "));
 
 // Fresh-install schema (idempotent: every statement is CREATE TABLE IF NOT
 // EXISTS). Shares the same file the Cloudflare deploy applies via migrations.
