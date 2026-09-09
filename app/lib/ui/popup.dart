@@ -31,6 +31,11 @@ import 'dialogs.dart';
 import 'share_dialog.dart';
 import 'toast.dart';
 
+/// How tall the history strip is in the mini picker, where it is always one
+/// row. The host sizes that window to its contents, so it has to be able to
+/// add this on ([RealApp] `_miniSize`).
+const double kHistoryStripHeight = 40;
+
 /// "2 days, 3 hours from now" — the two largest non-zero units of the gap
 /// between now and [remindAtMs], up to months. Used in the reminder-set toast.
 String _relativeFromNow(int remindAtMs) {
@@ -137,6 +142,16 @@ class PopupView extends StatefulWidget {
   final DateTime? Function()? pausedUntil;
   final VoidCallback? onResumeCapture;
 
+  /// Start an upgrade from one of the history-ring surfaces. [source] names the
+  /// button that was pressed (`ring_strip`, `ring_search`, `ring_footer`,
+  /// `ring_chip`) and rides through to Stripe, which is how we learn which
+  /// surface sells.
+  ///
+  /// Null hides every ring surface in this file: the strip, the search line,
+  /// the list footer and the chip's upgrade tap. That single null is the whole
+  /// iOS gate, so there is no second store-safe check in here.
+  final Future<void> Function(String source)? onUpgrade;
+
   const PopupView({
     super.key,
     required this.repo,
@@ -158,6 +173,7 @@ class PopupView extends StatefulWidget {
     this.capturePaused,
     this.pausedUntil,
     this.onResumeCapture,
+    this.onUpgrade,
   });
 
   @override
@@ -227,6 +243,12 @@ class _PopupViewState extends State<PopupView> {
 
   /// True while the ⋯ menu shows the Copy-as sub-list instead of the actions.
   bool _rowMenuSub = false;
+
+  /// The history strip, folded to its short line. Null means "whatever this
+  /// mode starts at" (folded in the mini picker and on a phone, open on the
+  /// desktop popup). It lives in State only, so it comes back on every launch.
+  /// There is no way to dismiss it while copies are waiting.
+  bool? _ringStripCollapsed;
 
   /// The live "Deleted" undo toast and its restore action, set on delete and
   /// cleared when the toast leaves the queue. Drives Ctrl/Cmd+Z — undo works
@@ -599,6 +621,130 @@ class _PopupViewState extends State<PopupView> {
             onTap: widget.onResumeCapture,
           ),
       ]),
+    );
+  }
+
+  /// The account whose history ring this build should shout about, or null for
+  /// silence. Null covers a store-safe build (no [PopupView.onUpgrade]), a paid
+  /// plan, a self-hosted server (no cap, so no ring) and a plan with plenty of
+  /// room left.
+  AccountInfo? get _ringAccount {
+    if (widget.onUpgrade == null) return null;
+    final a = widget.repo.account;
+    if (a == null || (!a.ringWarming && !a.ringCapped)) return null;
+    return a;
+  }
+
+  /// The free history ring, said out loud. Nearly full is one warning line;
+  /// full names how many copies are waiting behind the plan. The chevron folds
+  /// it to a short line for this session. It cannot be dismissed.
+  Widget _historyStrip(RelicColors c, AccountInfo a, {required bool mini}) {
+    final mob = RelicTheme.isMobileOf(context);
+    final n = a.evictedCount;
+    final cap = a.historyCap;
+    final capped = a.ringCapped;
+    // Only the full state has a short line to fold down to, so it is the only
+    // one with a chevron. The mini picker and phones start folded: one is all
+    // list, the other has no room to spare.
+    final collapsed = capped && (_ringStripCollapsed ?? (mini || mob));
+    // The mini picker sizes its window to the rows it holds, so the strip has
+    // to be exactly one row high there, whatever it is saying.
+    final oneLine = collapsed || mini;
+    final String text;
+    if (!capped) {
+      text = 'History is nearly full. After $cap copies the oldest ones '
+          'stop showing.';
+    } else if (collapsed) {
+      text = n == 1 ? '1 older copy waiting' : '$n older copies waiting';
+    } else {
+      text = n == 1
+          ? '1 older copy is waiting for you. The free plan shows your '
+                'last $cap.'
+          : '$n older copies are waiting for you. The free plan shows your '
+                'last $cap.';
+    }
+    return Container(
+      width: double.infinity,
+      height: mini ? kHistoryStripHeight : null,
+      padding: EdgeInsets.fromLTRB(
+          Insets.lg, mob ? Insets.sm : 6, Insets.sm, mob ? Insets.sm : 6),
+      decoration: BoxDecoration(
+        color: c.warningBg,
+        border: Border(bottom: BorderSide(color: c.border, width: 1)),
+      ),
+      child: Row(children: [
+        Icon(LucideIcons.history, size: 13, color: c.warning),
+        const SizedBox(width: 9),
+        Expanded(
+          child: Text(
+            text,
+            maxLines: oneLine ? 1 : 2,
+            overflow: TextOverflow.ellipsis,
+            style: RelicTheme.sans(
+                size: mob ? 12.5 : 11.5, color: c.textSecondary),
+          ),
+        ),
+        const SizedBox(width: Insets.sm),
+        GhostButton(
+          label: 'Upgrade',
+          style: GhostStyle.filled,
+          size: mob ? 34 : 26,
+          fontSize: mob ? 12.5 : 11,
+          onTap: () => widget.onUpgrade?.call('ring_strip'),
+        ),
+        if (capped) ...[
+          const SizedBox(width: 4),
+          GhostButton(
+            icon: collapsed ? LucideIcons.chevronDown : LucideIcons.chevronUp,
+            size: mob ? 34 : 26,
+            tooltip: collapsed ? 'Show the whole line' : 'Fold this down',
+            onTap: () => setState(() => _ringStripCollapsed = !collapsed),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  /// The last row of a full result list when copies are waiting: the end of
+  /// what the free plan will show, and what is behind it.
+  Widget _ringFooter(RelicColors c, int n) {
+    final mob = RelicTheme.isMobileOf(context);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          Insets.sm, Insets.sm, Insets.sm, mob ? Insets.xxl : Insets.md),
+      child: GestureDetector(
+        onTap: () => widget.onUpgrade?.call('ring_footer'),
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: SizedBox(
+            height: mob ? 48 : 34,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Flexible(
+                  child: Text(
+                    n == 1
+                        ? 'End of your free history. 1 more is waiting.'
+                        : 'End of your free history. $n more are waiting.',
+                    overflow: TextOverflow.ellipsis,
+                    style: RelicTheme.sans(
+                        size: mob ? 12.5 : 11.5, color: c.textMuted),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Upgrade',
+                  style: RelicTheme.sans(
+                    size: mob ? 12.5 : 11.5,
+                    weight: FontWeight.w600,
+                    color: c.accentMuted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -2666,6 +2812,14 @@ class _PopupViewState extends State<PopupView> {
     // The mode is per-summon (set by the host from which hotkey fired).
     final mini =
         (widget.miniSignal?.value ?? false) && !RelicTheme.isMobileOf(context);
+    // Copies waiting behind the free plan, for the row at the foot of the full
+    // list. Zero means no footer. The mini picker gets none: the strip above it
+    // already says the same thing, in less room.
+    final ringAcct = _ringAccount;
+    final ringFooter =
+        (!mini && ringAcct != null && ringAcct.ringCapped)
+            ? ringAcct.evictedCount
+            : 0;
 
     return Focus(
       focusNode: _rootFocus,
@@ -2702,14 +2856,21 @@ class _PopupViewState extends State<PopupView> {
                   onSyncTap: !widget.repo.syncEnabled
                       ? null
                       : () {
-                          if (widget.repo.sync.kind == SyncKind.quotaFull) {
+                          final kind = widget.repo.sync.kind;
+                          if (kind == SyncKind.quotaFull) {
                             _openSyncIssues();
+                          } else if (kind == SyncKind.historyFull &&
+                              widget.onUpgrade != null) {
+                            widget.onUpgrade!('ring_chip');
                           } else {
                             widget.repo.syncNow();
                           }
                         },
-                  syncTooltip:
-                      widget.repo.syncEnabled ? _lastSyncLabel() : null,
+                  syncTooltip: !widget.repo.syncEnabled
+                      ? null
+                      : widget.repo.sync.kind == SyncKind.historyFull
+                      ? 'Oldest copies stop showing on the free plan.'
+                      : _lastSyncLabel(),
                 ),
                 if (!mini &&
                     widget.onConnect != null &&
@@ -2747,6 +2908,10 @@ class _PopupViewState extends State<PopupView> {
                     widget.repo.pasteStack.isNotEmpty)
                   _stackBar(c),
                 if (!mini && _multiSel.isNotEmpty) _bulkBar(c),
+                // The history strip rides above the list in every mode: the
+                // mini picker is where most people meet their history, so
+                // hiding it there would hide it from the people it is for.
+                if (ringAcct != null) _historyStrip(c, ringAcct, mini: mini),
                 Expanded(
                   child: mini
                       ? _miniList(c, results, searching)
@@ -2760,6 +2925,9 @@ class _PopupViewState extends State<PopupView> {
                                                 .map((t) => '#$t')
                                                 .join(' ')
                                           : (_dateChipLabel ?? '')),
+                                evictedCount:
+                                    widget.repo.account?.evictedCount ?? 0,
+                                onUpgrade: widget.onUpgrade,
                               )
                             : (_showCoach ? _coachSampleTile(c) : const _Empty()))
                       : _maybeRefresh(
@@ -2775,18 +2943,23 @@ class _PopupViewState extends State<PopupView> {
                             // equidistant between the window edge and the
                             // icon. Change both together.
                             padding: const EdgeInsets.symmetric(horizontal: 12),
-                            itemCount:
-                                results.length + (widget.repo.hasMore ? 1 : 0),
+                            itemCount: results.length +
+                                (widget.repo.hasMore ? 1 : 0) +
+                                (ringFooter > 0 ? 1 : 0),
                             itemBuilder: (_, i) {
                               if (i >= results.length) {
-                                return _LoadMore(
-                                  shown: results.length,
-                                  total: widget.repo.matchCount,
-                                  onTap: () {
-                                    widget.repo.loadMore();
-                                    if (mounted) setState(() {});
-                                  },
-                                );
+                                if (widget.repo.hasMore &&
+                                    i == results.length) {
+                                  return _LoadMore(
+                                    shown: results.length,
+                                    total: widget.repo.matchCount,
+                                    onTap: () {
+                                      widget.repo.loadMore();
+                                      if (mounted) setState(() {});
+                                    },
+                                  );
+                                }
+                                return _ringFooter(c, ringFooter);
                               }
                               final r = results[i];
                               final mob = RelicTheme.isMobileOf(context);
@@ -3433,7 +3606,17 @@ class _HelpSheet extends StatelessWidget {
 
 class _NoMatches extends StatelessWidget {
   final String query;
-  const _NoMatches({required this.query});
+
+  /// Copies the free plan has stopped showing. When there are any, the search
+  /// that just came up empty may well have been looking for one of them, which
+  /// is the moment this whole thing exists for.
+  final int evictedCount;
+  final Future<void> Function(String source)? onUpgrade;
+  const _NoMatches({
+    required this.query,
+    this.evictedCount = 0,
+    this.onUpgrade,
+  });
   @override
   Widget build(BuildContext context) {
     final c = RelicTheme.of(context);
@@ -3474,6 +3657,47 @@ class _NoMatches extends StatelessWidget {
                 ),
               ),
             ),
+            if (evictedCount > 0 && onUpgrade != null) ...[
+              const SizedBox(height: Insets.md),
+              SizedBox(
+                width: 280,
+                child: GestureDetector(
+                  onTap: () => onUpgrade!('ring_search'),
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(
+                            text: evictedCount == 1
+                                ? '1 older copy is not searchable on the '
+                                    'free plan. '
+                                : '$evictedCount older copies are not '
+                                    'searchable on the free plan. ',
+                          ),
+                          TextSpan(
+                            text: 'Upgrade',
+                            style: RelicTheme.sans(
+                              size: 12.5,
+                              weight: FontWeight.w600,
+                              color: c.accentMuted,
+                              height: 1.5,
+                            ),
+                          ),
+                          const TextSpan(text: ' to search everything.'),
+                        ],
+                      ),
+                      textAlign: TextAlign.center,
+                      style: RelicTheme.sans(
+                        size: 12.5,
+                        color: c.text,
+                        height: 1.5,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: Insets.md),
             SizedBox(
               width: 260,

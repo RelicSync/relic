@@ -11,12 +11,21 @@ import 'relic_mark.dart';
 
 enum Scope { all, vault }
 
-enum SyncKind { synced, pending, offline, quotaFull }
+enum SyncKind { synced, pending, offline, quotaFull, historyFull }
 
 class SyncState {
   final SyncKind kind;
   final int pending;
-  const SyncState(this.kind, {this.pending = 0});
+
+  /// [SyncKind.historyFull] only: copies in view, and how many the plan keeps.
+  final int historyCount;
+  final int? historyCap;
+  const SyncState(
+    this.kind, {
+    this.pending = 0,
+    this.historyCount = 0,
+    this.historyCap,
+  });
 }
 
 /// Popup header: wordmark · sync state · settings gear · close.
@@ -242,6 +251,12 @@ class _SyncChip extends StatelessWidget {
           icon = LucideIcons.refreshCw;
           color = c.warningDim;
           label = '${sync.pending} not synced';
+        // The free history ring is full. Nothing is broken, so the chip stays
+        // a plain count of what is in view against what the plan keeps.
+        case SyncKind.historyFull:
+          icon = LucideIcons.history;
+          color = c.warningDim;
+          label = '${sync.historyCount} / ${sync.historyCap}';
       }
       chip = Row(
         mainAxisSize: MainAxisSize.min,
