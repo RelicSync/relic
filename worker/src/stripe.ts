@@ -11,7 +11,7 @@
 // queue consumer, or the reconcile cron.
 
 import type { Env, StripeMessage } from "./env";
-import { isTier, type Tier } from "./tiers";
+import { isTier, type Tier, TIERS } from "./tiers";
 import type { Auth } from "./auth";
 import { CORS, err, json } from "./http";
 
@@ -110,12 +110,34 @@ export async function listPlans(env: Env): Promise<Response> {
   return plansResponse(plans);
 }
 
+// Which upgrade button opened this checkout. It rides through to Stripe as
+// metadata on both the Checkout Session and the Subscription, and it is the
+// ONLY conversion measurement we have: no client sends telemetry, so the tag on
+// the button someone actually pressed is the whole funnel.
+//
+// Closed list on purpose. Anything else is dropped silently rather than
+// rejected, because a client sending an unknown tag is a client we should still
+// take money from.
+const CHECKOUT_SOURCES = new Set([
+  "ring_strip",
+  "ring_search",
+  "ring_footer",
+  "ring_chip",
+  "ring_notification",
+  "ring_settings",
+  "ring_email",
+  "ring_web",
+]);
+
 // ---- POST /stripe/checkout -------------------------------------------------
 export async function createCheckout(req: Request, env: Env, auth: Auth): Promise<Response> {
   if (!env.STRIPE_SECRET_KEY) return err(503, "billing_unconfigured", "billing not enabled");
   let price_id = "";
+  let source = "";
   try {
-    price_id = (await req.json<{ price_id: string }>()).price_id;
+    const body = await req.json<{ price_id: string; source?: string }>();
+    price_id = body.price_id;
+    if (typeof body.source === "string") source = body.source;
   } catch {
     /* empty body -> bad price below */
   }
@@ -136,6 +158,13 @@ export async function createCheckout(req: Request, env: Env, auth: Auth): Promis
     "subscription_data[metadata][account_id]": auth.account,
     allow_promotion_codes: "true",
   });
+  // On the session for "which button started this checkout", and on the
+  // subscription so the tag survives into the customer record we can still
+  // query months later.
+  if (CHECKOUT_SOURCES.has(source)) {
+    form.set("metadata[source]", source);
+    form.set("subscription_data[metadata][source]", source);
+  }
   // Opt-in: Stripe Tax requires a registered origin, so enable only when asked.
   if (env.STRIPE_TAX === "on") form.set("automatic_tax[enabled]", "true");
   if (existing?.stripe_customer_id) form.set("customer", existing.stripe_customer_id);
@@ -311,6 +340,10 @@ async function applySubscriptionState(
   stripeTs: number,
 ): Promise<boolean> {
   const status = String(sub.status);
+  // Paid outright, as opposed to a past_due account still inside its grace
+  // window. Only this restores evicted rows: grace is a reprieve on an account
+  // that already had everything, not a new purchase.
+  const paidNow = status === "active" || status === "trialing";
   let graceUntil: number | null = null;
   // active/trialing grant outright. past_due grants only inside the window.
   // Anything else (incomplete, unpaid, canceled, paused) grants nothing.
@@ -339,7 +372,55 @@ async function applySubscriptionState(
   // has to keep holding the ENTITLED tier because that is what invoice.paid
   // restores from. Writing "free" here would erase the entitlement and strand a
   // customer on free after their card finally went through.
-  return writeSub(env, accountId, fields);
+  const wrote = await writeSub(env, accountId, fields);
+  if (wrote && paidNow && (fields.tier === "pro" || fields.tier === "max")) {
+    await restoreEvicted(env, accountId, now);
+  }
+  return wrote;
+}
+
+/// Hand back every copy the free history ring pushed out of view.
+///
+/// Three statements, in this order, so no uid list has to be carried:
+///   1. drop the tombstones for the rows that are STILL marked evicted,
+///   2. move the count from evicted_count into history_count,
+///   3. clear the flags and bump updated_at.
+/// Step 3 last is what lets steps 1 and 2 identify the same set. Bumping
+/// updated_at is what puts the rows back in the next pull, and dropping the
+/// tombstones is what stops the same pull deleting them again (the client
+/// applies /relics first and /tombstones second, and a fresh device would
+/// otherwise see both).
+///
+/// Idempotent: Stripe replays events, and a second run finds nothing evicted and
+/// changes nothing. Returns how many rows came back, for the log line.
+export async function restoreEvicted(env: Env, acct: string, now: number): Promise<number> {
+  const row = await env.DB.prepare(
+    "SELECT evicted_count FROM account_usage WHERE account_id = ?1",
+  ).bind(acct).first<{ evicted_count: number }>();
+  const n = row?.evicted_count ?? 0;
+  // Nothing to hand back, and we KNOW it (the cached row exists and says zero).
+  // Worth the early return: Stripe sends a subscription.updated for every
+  // renewal of every paying account, and this is what stops each one walking
+  // that account's relic index for rows that are not there.
+  if (row && n === 0) return 0;
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `DELETE FROM tombstones WHERE account_id = ?1 AND uid IN (
+         SELECT uid FROM relic_meta WHERE account_id = ?1 AND evicted = 1)`,
+    ).bind(acct),
+    env.DB.prepare(
+      `UPDATE account_usage
+          SET history_count = history_count + evicted_count, evicted_count = 0
+        WHERE account_id = ?1`,
+    ).bind(acct),
+    env.DB.prepare(
+      "UPDATE relic_meta SET evicted = 0, updated_at = ?2 WHERE account_id = ?1 AND evicted = 1",
+    ).bind(acct, now),
+  ]);
+
+  if (n > 0) console.log(JSON.stringify({ evt: "ring_restore", account: acct, n }));
+  return n;
 }
 
 // Human label for the email body. Unknown/free -> generic wording (the tier may
@@ -595,6 +676,83 @@ async function sendPlanLapsedEmail(
     console.log(JSON.stringify({ evt: "plan_lapsed_email", account: accountId, ok: r.ok, status: r.status }));
   } catch (e) {
     console.log(JSON.stringify({ evt: "plan_lapsed_email_error", account: accountId, err: String(e) }));
+  }
+}
+
+// ---- scheduled history-ring nudge (cron) -----------------------------------
+// One email, once, to a free account whose oldest copies have started dropping
+// out of view. This is the only surface that reaches somebody running an old
+// build, which is exactly who is over the ring today.
+//
+// Best-effort like the other two mails: no key means no work at all, and a send
+// failure still stamps the row so a bad address cannot retry every day forever.
+const RING_EMAIL_BATCH = 50;
+
+export async function ringNudgeSweep(env: Env): Promise<void> {
+  // Checked BEFORE any query: a self-host instance has no Resend key and this
+  // must not cost it a database read on every janitor tick.
+  if (!env.RESEND_API_KEY) return;
+
+  const now = Math.floor(Date.now() / 1000);
+  const due = await env.DB.prepare(
+    `SELECT u.account_id, a.email
+       FROM account_usage u
+       JOIN accounts a ON a.account_id = u.account_id
+      WHERE u.ring_evicted > 0
+        AND u.ring_email_at IS NULL
+        AND a.email IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.account_id = u.account_id)
+      LIMIT ?1`,
+  ).bind(RING_EMAIL_BATCH).all<{ account_id: string; email: string }>();
+
+  for (const row of due.results ?? []) {
+    await sendRingNudgeEmail(env, row.account_id, row.email);
+    await env.DB.prepare(
+      "UPDATE account_usage SET ring_email_at = ?2 WHERE account_id = ?1",
+    ).bind(row.account_id, now).run();
+  }
+}
+
+async function sendRingNudgeEmail(env: Env, accountId: string, to: string): Promise<void> {
+  try {
+    const cap = TIERS.free.ring; // the number in the copy is the live cap
+    const upgrade = "https://relic.space/upgrade?source=ring_email";
+    const text =
+      `You've copied more than ${cap} things into Relic. Nice.\n\n` +
+      `The free plan keeps your last ${cap} in view, so your oldest copies have ` +
+      `started to drop out of search. Relic still has them.\n\n` +
+      `Pro keeps every copy, forever, for $7 a month or $60 a year. Upgrade and ` +
+      `the ones that dropped off come straight back.\n\n` +
+      `${upgrade}\n\n` +
+      `Reply to this email if anything is off.\n\n` +
+      `The Relic team`;
+    const html =
+      `<p>You've copied more than ${cap} things into Relic. Nice.</p>` +
+      `<p>The free plan keeps your last ${cap} in view, so your oldest copies ` +
+      `have started to drop out of search. Relic still has them.</p>` +
+      `<p>Pro keeps every copy, forever, for $7 a month or $60 a year. Upgrade ` +
+      `and the ones that dropped off come straight back.</p>` +
+      `<p><a href="${upgrade}">Upgrade</a></p>` +
+      `<p>Reply to this email if anything is off.</p>` +
+      `<p>The Relic team</p>`;
+
+    const r = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: "Relic <no-reply@relic.space>",
+        to,
+        subject: "Your oldest copies are dropping off",
+        text,
+        html,
+      }),
+    });
+    console.log(JSON.stringify({ evt: "ring_email", account: accountId, ok: r.ok }));
+  } catch (e) {
+    console.log(JSON.stringify({ evt: "ring_email", account: accountId, ok: false, err: String(e) }));
   }
 }
 

@@ -1,5 +1,5 @@
 ﻿import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   MPU_MIN_AGE_S,
@@ -11,6 +11,8 @@ import {
 } from "../src/sweep";
 import { blobR2Key } from "../src/blob";
 import worker from "../src/index";
+import { ringNudgeSweep } from "../src/stripe";
+import { TIERS } from "../src/tiers";
 import { setupSchema } from "./helpers";
 
 // deno-lint-ignore no-explicit-any
@@ -154,5 +156,104 @@ describe("GET /health", () => {
     const res = await worker.fetch(new Request("http://x/health"), E);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
+  });
+});
+
+// --- history-ring nudge email -------------------------------------------------
+// One email per account, ever. The stamp is what guarantees that, and it goes on
+// whether or not Resend accepted the address, so a dead mailbox cannot make this
+// retry every single day.
+describe("ring nudge sweep", () => {
+  // deno-lint-ignore no-explicit-any
+  let fetchMock: any;
+  const realFetch = globalThis.fetch;
+
+  beforeEach(async () => {
+    await setupSchema(E.DB);
+    fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    globalThis.fetch = fetchMock;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const withKey = () => ({ ...E, RESEND_API_KEY: "re_test" });
+
+  async function seedAccount(
+    account: string,
+    email: string | null,
+    o: { ringEvicted?: number; emailedAt?: number | null; subscribed?: boolean } = {},
+  ) {
+    await E.DB.prepare("INSERT INTO accounts (account_id, email) VALUES (?1, ?2)")
+      .bind(account, email).run();
+    await E.DB.prepare(
+      `INSERT INTO account_usage
+         (account_id, bytes_used, vault_count, ring_evicted, ring_email_at)
+       VALUES (?1, 0, 0, ?2, ?3)`,
+    ).bind(account, o.ringEvicted ?? 0, o.emailedAt ?? null).run();
+    if (o.subscribed) {
+      await E.DB.prepare(
+        "INSERT INTO subscriptions (account_id, tier, status) VALUES (?1,'pro','active')",
+      ).bind(account).run();
+    }
+  }
+
+  const stampOf = async (account: string): Promise<number | null> => {
+    const r = await E.DB.prepare(
+      "SELECT ring_email_at FROM account_usage WHERE account_id = ?1",
+    ).bind(account).first();
+    return r?.ring_email_at ?? null;
+  };
+
+  it("mails the one eligible account and skips the other three", async () => {
+    await seedAccount("ringA", "over@x.com", { ringEvicted: 12 });          // eligible
+    await seedAccount("ringB", "done@x.com", { ringEvicted: 12, emailedAt: 99 }); // already
+    await seedAccount("ringC", "payer@x.com", { ringEvicted: 12, subscribed: true });
+    await seedAccount("ringD", null, { ringEvicted: 12 });                  // no address
+    await seedAccount("ringE", "under@x.com", { ringEvicted: 0 });          // nothing lost
+
+    await ringNudgeSweep(withKey());
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.resend.com/emails");
+    const sent = JSON.parse(init.body);
+    expect(sent.to).toBe("over@x.com");
+    expect(sent.subject).toBe("Your oldest copies are dropping off");
+    expect(sent.text).toContain(`your last ${TIERS.free.ring} in view`);
+    expect(sent.text).toContain("https://relic.space/upgrade?source=ring_email");
+    expect(sent.text).not.toContain("\u2014"); // no em dash
+
+    expect(await stampOf("ringA")).toBeGreaterThan(0);
+    expect(await stampOf("ringB")).toBe(99); // untouched
+    expect(await stampOf("ringC")).toBeNull();
+    expect(await stampOf("ringD")).toBeNull();
+  });
+
+  it("never sends twice", async () => {
+    await seedAccount("ringF", "once@x.com", { ringEvicted: 3 });
+    await ringNudgeSweep(withKey());
+    await ringNudgeSweep(withKey());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stamps the row even when Resend refuses the address", async () => {
+    fetchMock.mockImplementation(async () => new Response("bad address", { status: 422 }));
+    await seedAccount("ringG", "bounce@x.com", { ringEvicted: 3 });
+    await ringNudgeSweep(withKey());
+    expect(await stampOf("ringG")).toBeGreaterThan(0);
+  });
+
+  it("touches nothing at all without a Resend key (the self-host case)", async () => {
+    await seedAccount("ringH", "over@x.com", { ringEvicted: 3 });
+    await ringNudgeSweep(E);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await stampOf("ringH")).toBeNull();
+  });
+
+  it("the cron runs it", async () => {
+    await seedAccount("ringI", "cron@x.com", { ringEvicted: 3 });
+    await worker.scheduled({} as ScheduledController, withKey());
+    expect(await stampOf("ringI")).toBeGreaterThan(0);
   });
 });

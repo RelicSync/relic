@@ -29,7 +29,8 @@ const DDL = [
   `CREATE TABLE IF NOT EXISTS relic_meta (
      account_id TEXT NOT NULL, uid TEXT NOT NULL, created_at INTEGER NOT NULL,
      updated_at INTEGER NOT NULL, byte_size INTEGER NOT NULL, promoted INTEGER NOT NULL,
-     blob_key TEXT, PRIMARY KEY (account_id, uid))`,
+     blob_key TEXT, evicted INTEGER NOT NULL DEFAULT 0,
+     PRIMARY KEY (account_id, uid))`,
   `CREATE TABLE IF NOT EXISTS ai_meta (
      account_id TEXT NOT NULL, uid TEXT NOT NULL, ai_at INTEGER, ai_level INTEGER,
      device_id TEXT, n TEXT, ct TEXT, claimed_by TEXT, claim_expires_at INTEGER,
@@ -49,7 +50,9 @@ const DDL = [
      created_at INTEGER NOT NULL DEFAULT (unixepoch()))`,
   `CREATE TABLE IF NOT EXISTS account_usage (
      account_id TEXT PRIMARY KEY, bytes_used INTEGER NOT NULL,
-     vault_count INTEGER NOT NULL)`,
+     vault_count INTEGER NOT NULL, history_count INTEGER NOT NULL DEFAULT 0,
+     evicted_count INTEGER NOT NULL DEFAULT 0, ring_evicted INTEGER NOT NULL DEFAULT 0,
+     ring_email_at INTEGER)`,
   `CREATE TABLE IF NOT EXISTS mpu_state (
      account_id TEXT NOT NULL, blob_id TEXT NOT NULL, upload_id TEXT NOT NULL,
      declared_size INTEGER NOT NULL,

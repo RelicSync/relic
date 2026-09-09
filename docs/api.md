@@ -116,8 +116,16 @@ egress). Resolved within the token's account namespace only.
 
 ### `GET /account`
 → `200 { "tier": "free|pro|max", "storage_used": n, "storage_quota": n,
-"vault_count": n, "vault_cap": n|null }` — for client-side quota display.
-Never includes key material.
+"vault_count": n, "vault_cap": n|null, "history_count": n,
+"history_cap": n|null, "evicted_count": n, "devices_cap": n|null }` — for
+client-side quota display. Never includes key material.
+
+The last four are the history ring. `history_count` is unpromoted relics still
+in view, `history_cap` is the tier ring (`null` on pro and max, meaning no
+ring), and `evicted_count` is how many older copies are held back and would
+come straight back on an upgrade (always `0` when there is no ring). Clients
+treat a missing field as `0` or `null`, so an older server never breaks a
+newer client.
 
 ### `DELETE /account`
 Full account deletion (R2 objects, D1 rows, Stripe cancel). Irreversible.
@@ -162,6 +170,10 @@ E2EE one-way shares (`worker/src/share.ts`):
 `GET /stripe/plans` (public price/tier table), `POST /stripe/checkout`,
 `POST /stripe/portal`, `POST /stripe/webhook` (signature-verified; events
 applied idempotently via `billing_events`, queue-buffered when bound).
+`POST /stripe/checkout` takes `{ price_id, source? }`; a `source` on the
+allowed list rides through to Stripe as `metadata.source` on the Checkout
+Session and the Subscription, so we can see which upgrade button converts.
+Anything off the list is dropped and the checkout still goes through.
 The grace-sweep cron emails each account it downgrades ("plan lapsed, your
 data is safe", via Resend, best-effort) so a lapse is never discovered via a
 402.

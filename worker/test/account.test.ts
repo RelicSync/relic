@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { deleteAccount } from "../src/account";
 import type { Auth } from "../src/auth";
-import { setupSchema } from "./helpers";
+import worker from "../src/index";
+import { TIERS } from "../src/tiers";
+import { setupSchema, sha256Hex } from "./helpers";
 
 // deno-lint-ignore no-explicit-any
 const E = env as any;
@@ -215,5 +217,80 @@ describe("deleteAccount Supabase identity", () => {
     expect(errs.mock.calls.map(([m]) => String(m)).join("\n"))
       .toContain("supabase_user_delete_error");
     errs.mockRestore();
+  });
+});
+
+// --- GET /account: the fields every client reads ------------------------------
+// The four history-ring fields are the whole upsell contract. A client derives
+// its warning threshold from history_cap, so a null there has to mean "no ring"
+// and never "zero".
+describe("GET /account", () => {
+  async function seedToken(token: string, account: string, tier: string) {
+    await E.DB.prepare(
+      "INSERT INTO tokens (token_hash, account_id, tier) VALUES (?1,?2,?3)",
+    ).bind(await sha256Hex(token), account, tier).run();
+  }
+
+  function get(token: string) {
+    return worker.fetch(
+      new Request("https://x/account", { headers: { Authorization: `Bearer ${token}` } }),
+      E,
+    );
+  }
+
+  it("reports the ring fields on free", async () => {
+    await seedToken("tokAcctF", "acctF", "free");
+    await E.DB.prepare(
+      `INSERT INTO account_usage
+         (account_id, bytes_used, vault_count, history_count, evicted_count)
+       VALUES ('acctF', 4096, 3, 500, 312)`,
+    ).run();
+
+    const body = await (await get("tokAcctF")).json();
+    expect(body).toEqual({
+      tier: "free",
+      storage_used: 4096,
+      storage_quota: TIERS.free.storage,
+      vault_count: 3,
+      vault_cap: TIERS.free.vault,
+      history_count: 500,
+      history_cap: TIERS.free.ring,
+      evicted_count: 312,
+      devices_cap: TIERS.free.devices,
+    });
+  });
+
+  it("reports no ring and nothing waiting on pro", async () => {
+    await seedToken("tokAcctP", "acctP", "pro");
+    // Even with a stale evicted_count on the row, a paid account is told 0:
+    // nothing is hidden from it, so nothing is waiting.
+    await E.DB.prepare(
+      `INSERT INTO account_usage
+         (account_id, bytes_used, vault_count, history_count, evicted_count)
+       VALUES ('acctP', 10, 1, 900, 312)`,
+    ).run();
+
+    const body = await (await get("tokAcctP")).json();
+    expect(body).toMatchObject({
+      tier: "pro",
+      history_count: 900,
+      history_cap: null,
+      evicted_count: 0,
+      devices_cap: TIERS.pro.devices,
+    });
+  });
+
+  it("reports no ring and no device cap on max", async () => {
+    await seedToken("tokAcctM", "acctM", "max");
+    const body = await (await get("tokAcctM")).json();
+    // No account_usage row at all: the counters recompute rather than 500ing,
+    // which is the self-host shape (one max account, nothing cached yet).
+    expect(body).toMatchObject({
+      tier: "max",
+      history_count: 0,
+      history_cap: null,
+      evicted_count: 0,
+      devices_cap: null,
+    });
   });
 });
