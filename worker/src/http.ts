@@ -6,6 +6,10 @@ export const CORS: Record<string, string> = {
   "Access-Control-Allow-Methods": "GET,PUT,POST,PATCH,DELETE,OPTIONS",
   "Access-Control-Allow-Headers": "Authorization,Content-Type,Stripe-Signature,X-Relic-Device,X-Relic-App-Version",
   "Access-Control-Max-Age": "86400",
+  // So a browser client (the web vault) can read the pacing and
+  // deprecation headers, which are not on the CORS safelist.
+  "Access-Control-Expose-Headers":
+    "RateLimit,RateLimit-Policy,RateLimit-Limit,RateLimit-Remaining,RateLimit-Reset,Retry-After,Deprecation,Sunset,Link",
 };
 
 export const json = (data: unknown, status = 200): Response =>
@@ -25,3 +29,19 @@ export const clampLimit = (raw: string | null): number => {
   if (!Number.isFinite(n)) return 500;
   return Math.min(Math.max(n, 1), 500);
 };
+
+/// The headers a route carries while it is being retired (docs/api.md
+/// "Versioning and deprecation"): `Deprecation` (RFC 9745) says since when,
+/// `Sunset` (RFC 8594) says the date it stops answering, and a
+/// `successor-version` link says where to go instead. Nothing is deprecated
+/// today; this is the one place the policy's wire format lives, so the first
+/// retirement does not invent its own.
+export function deprecated(
+  res: Response,
+  opts: { since: Date; sunset: Date; successor?: string },
+): Response {
+  res.headers.set("Deprecation", `@${Math.floor(opts.since.getTime() / 1000)}`);
+  res.headers.set("Sunset", opts.sunset.toUTCString());
+  if (opts.successor) res.headers.append("Link", `<${opts.successor}>; rel="successor-version"`);
+  return res;
+}

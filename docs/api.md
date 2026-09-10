@@ -43,7 +43,8 @@ Non-2xx responses carry `{ "error": "<code>", "message": "<human text>" }`.
 | 404 | `not_found` | unknown uid / blob key / no keyparams yet |
 | 409 | `keyparams_exists` | `PUT /keyparams` without `?replace=1` when one exists |
 | 413 | `too_large` | relic/blob exceeds tier per-item size cap |
-| 429 | `rate_limited` | per-account rate limit |
+| 410 | `gone` | a route past its sunset date (see Versioning and deprecation) |
+| 429 | `rate_limited` | per-account or per-IP rate limit (see Rate limits) |
 
 ## Routes
 
@@ -221,6 +222,61 @@ Authed upgrade (`Upgrade: websocket`) forwarded to the account's Durable
 Object. A write on one device rings the others, content-free; they answer
 with a normal pull. `501 no_socket` on a server without the binding
 (self-host), and the client falls back to polling.
+
+## Rate limits
+
+Every route except the webhook and the live-sync socket sits behind a fixed
+window limiter: per account on signed-in routes, per IP on public ones. A
+reply from a limited route says which policy applied, in the standard headers,
+so a client can pace itself instead of guessing:
+
+| header | on every reply | on a 429 |
+|---|---|---|
+| `RateLimit-Policy` | `"sync";q=900;w=60` (quota, window in seconds) | same |
+| `RateLimit-Limit` | the quota | same |
+| `RateLimit` | | `"sync";r=0;t=60` (remaining, seconds until the window turns) |
+| `RateLimit-Remaining` | | `0` |
+| `RateLimit-Reset` | | seconds until the window turns |
+| `Retry-After` | | seconds to wait |
+
+The `X-RateLimit-Limit` and `X-RateLimit-Remaining` forms ride along for
+clients that only know those. The policies (`worker/src/ratelimit.ts`, which a
+test keeps equal to `worker/wrangler.example.toml`):
+
+| policy | routes | quota |
+|---|---|---|
+| `public` | /health, /stripe/plans | 30 per minute per IP |
+| `share-view` | /s/:id, /share/:id/blob | 30 per minute per IP |
+| `sync` | the data plane: /keyparams, /relics, /relic/:uid, /tombstones, /blob*, /ai* | 900 per minute per account |
+| `billing` | /stripe/checkout, /stripe/portal | 12 per minute per account |
+| `share` | creating and revoking shares | 10 per minute per account |
+| `pair` | /pair/* | 40 per minute per account |
+| `device` | registering, renaming and removing devices | 20 per minute per account |
+| `account` | deleting the account | 3 per minute per account |
+
+The limiter only reports pass or fail, so a 2xx carries the quota and window
+and never a remaining count. A self-hosted server with no limiter bindings
+sends none of these headers and never answers 429.
+
+## Versioning and deprecation
+
+- The path carries no version. `info.version` in `docs/openapi.json` follows
+  semver: patch for wording, minor for additive changes, major for a breaking
+  one.
+- Additive changes (a new route, a new optional request field, a new field in
+  a reply) can ship at any time. Clients ignore fields they do not know. The
+  sealed envelope has its own `v` (`docs/wire-format.md`).
+- A breaking change ships as a new route or a new envelope `v`. The old route
+  keeps working for at least 180 days after the change ships and is marked
+  `deprecated: true` in the spec.
+- While it is deprecated, every reply on it carries `Deprecation` (RFC 9745,
+  since when), `Sunset` (RFC 8594, the date it stops) and a `Link` with
+  `rel="successor-version"`. The helper is `deprecated()` in
+  `worker/src/http.ts`, so every retirement looks the same on the wire.
+- After the sunset date the route answers `410 gone`.
+- Self-hosted servers run the same code, so the same rules apply there.
+- Nothing is deprecated today. The spec's `x-versioning-policy` carries this
+  list in machine-readable form.
 
 ## Tier limits (enforced here — `worker/src/tiers.ts` is the source of truth)
 
