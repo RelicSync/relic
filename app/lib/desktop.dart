@@ -803,12 +803,14 @@ class _RealAppState extends State<RealApp>
         }
       }
       final c = await _readClipboardContent();
+      final plain = c.files.isEmpty && c.png == null;
       final r = repo.captureForStack(
-        text: c.png == null ? c.text : null,
+        files: c.files,
+        text: plain ? c.text : null,
         png: c.png,
         sourceApp: srcApp,
-        html: c.png == null ? c.html : null,
-        rtf: c.png == null ? c.rtf : null,
+        html: plain ? c.html : null,
+        rtf: plain ? c.rtf : null,
       );
       if (r == null) {
         _notify('Nothing to queue', 'Select or copy something first.');
@@ -1388,32 +1390,32 @@ class _RealAppState extends State<RealApp>
           await Future<void>.delayed(const Duration(milliseconds: 40));
         }
       }
-      String? text;
-      Uint8List? png;
-      String? html;
-      Uint8List? rtf;
-      if (await clipboardSequence() != seqBefore) {
-        final c = await _readClipboardContent();
-        text = c.text;
-        png = c.png;
-        html = c.html;
-        rtf = c.rtf;
-      }
-      // No new copy → the user meant "annotate what I already copied".
+      // Read what is there now whether or not the copy moved the clipboard:
+      // with nothing selected the user meant "annotate what I already
+      // copied", and that is a file or an image as often as text. (Reading
+      // only after a fresh copy meant a file selected in Explorer came back
+      // as neither text nor image and the hotkey fell through to stale text
+      // or "Nothing to save", and an image copied earlier was never seen.)
       // NB: deliberately NOT gated on clipboardShouldBeIgnored() — an explicit
       // user-invoked save overrides a password manager's history hint (the
       // content is still detected + masked as a secret).
-      if (png == null && (text == null || text.trim().isEmpty)) text = before;
-      if (png == null && (text == null || text.trim().isEmpty)) {
+      final c = await _readClipboardContent();
+      final files = c.files;
+      final png = c.png;
+      final plain = files.isEmpty && png == null;
+      var text = c.text;
+      if (plain && (text == null || text.trim().isEmpty)) text = before;
+      if (plain && (text == null || text.trim().isEmpty)) {
         _notify('Nothing to save', 'Select or copy something first.');
         return;
       }
       final res = await repo.captureForAnnotate(
-        text: png == null ? text : null,
+        files: files,
+        text: plain ? text : null,
         png: png,
         sourceApp: srcApp,
-        html: png == null ? html : null,
-        rtf: png == null ? rtf : null,
+        html: plain ? c.html : null,
+        rtf: plain ? c.rtf : null,
       );
       if (res == null) {
         _notify('Nothing to save', 'That item couldn’t be captured.');
@@ -1481,12 +1483,25 @@ class _RealAppState extends State<RealApp>
   }
 
   /// Annotate-path clipboard read — the same format ladder as the watcher
-  /// (PNG → JPEG → plain text → CF_DIB→PNG → framework text), condensed to a
-  /// value return. Keep in step with [onClipboardChanged] — including the
-  /// rich flavors, which both ladders read through [_readRichFlavors].
-  Future<({String? text, Uint8List? png, String? html, Uint8List? rtf})>
-      _readClipboardContent() async {
+  /// (files → PNG → JPEG → plain text → CF_DIB→PNG → framework text),
+  /// condensed to a value return. Keep in step with [onClipboardChanged] —
+  /// including the rich flavors, which both ladders read through
+  /// [_readRichFlavors]. `files` is a file-manager copy, one path per file.
+  Future<
+      ({
+        List<String> files,
+        String? text,
+        Uint8List? png,
+        String? html,
+        Uint8List? rtf,
+      })> _readClipboardContent() async {
+    const nothing = (files: <String>[], text: null, png: null, html: null, rtf: null);
     try {
+      // A file copy takes priority over text/image reps, as in the watcher.
+      var files = await clipboardFilePaths();
+      if (files.isNotEmpty) {
+        return (files: files, text: null, png: null, html: null, rtf: null);
+      }
       final clip = SystemClipboard.instance;
       if (clip != null) {
         final reader = await clip.read();
@@ -1503,7 +1518,13 @@ class _RealAppState extends State<RealApp>
               onTimeout: () => null,
             );
             if (bytes != null && bytes.isNotEmpty) {
-              return (text: null, png: bytes, html: null, rtf: null);
+              return (
+                files: const <String>[],
+                text: null,
+                png: bytes,
+                html: null,
+                rtf: null,
+              );
             }
           }
         }
@@ -1511,19 +1532,50 @@ class _RealAppState extends State<RealApp>
           final t = await reader.readValue(Formats.plainText);
           if (t != null && t.trim().isNotEmpty) {
             final rich = await _readRichFlavors(reader, t);
-            return (text: t, png: null, html: rich.html, rtf: rich.rtf);
+            return (
+              files: const <String>[],
+              text: t,
+              png: null,
+              html: rich.html,
+              rtf: rich.rtf,
+            );
           }
         }
       }
       final fallbackPng = await clipboardImageAsPng();
       if (fallbackPng != null) {
-        return (text: null, png: fallbackPng, html: null, rtf: null);
+        return (
+          files: const <String>[],
+          text: null,
+          png: fallbackPng,
+          html: null,
+          rtf: null,
+        );
+      }
+      // Nothing else is there. On Windows the change event can land a beat
+      // before Explorer finishes placing CF_HDROP, so give the file list one
+      // more chance before reading plain text. Only on this empty path, so a
+      // text or image capture never pays the wait.
+      if (Platform.isWindows) {
+        for (var tries = 0; files.isEmpty && tries < 5; tries++) {
+          await Future<void>.delayed(const Duration(milliseconds: 40));
+          files = await clipboardFilePaths();
+        }
+        if (files.isNotEmpty) {
+          return (files: files, text: null, png: null, html: null, rtf: null);
+        }
       }
       // No reader to ask, so plain only.
       final data = await Clipboard.getData(Clipboard.kTextPlain);
-      return (text: data?.text, png: null, html: null, rtf: null);
+      return (
+        files: const <String>[],
+        text: data?.text,
+        png: null,
+        html: null,
+        rtf: null,
+      );
     } catch (_) {
-      return (text: null, png: null, html: null, rtf: null);
+      return nothing;
     }
   }
 
