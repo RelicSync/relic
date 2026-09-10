@@ -235,6 +235,20 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   // uid behind _lastBlobHash — lets save & annotate resolve the relic a
   // deduped/echo-suppressed image refers to, without racing mostRecentUid.
   String? _lastBlobUid;
+  // Every blob captured in the last few seconds, hash → uid. A copied file
+  // reaches the repo twice: from the clipboard watcher and from the save &
+  // annotate (or paste stack) hotkey that synthesized the copy, in either
+  // order. With several files selected the one-deep [_lastBlobHash] guard only
+  // covers the last of them, so the second arrival would duplicate the rest.
+  final Map<int, (String, int)> _recentBlobs = {};
+  static const _recentBlobWindowMs = 5000;
+
+  /// The uid of a blob captured within the last few seconds, or null.
+  String? _recentBlobUid(int hash) {
+    final now = _nowMs;
+    _recentBlobs.removeWhere((_, v) => now - v.$2 > _recentBlobWindowMs);
+    return _recentBlobs[hash]?.$1;
+  }
   static final _uuid = Uuid();
   final Set<String> _fetching = {}; // blob ids currently downloading
   final Set<String> _uploaded = {}; // blob ids known present on the Worker
@@ -420,6 +434,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       _lastCapturedRichFp = null;
       _lastBlobHash = null;
       _lastBlobUid = null;
+      _recentBlobs.clear();
     }
     // Coming back to an account this device is holding items for: they are its
     // own items again, seamlessly. The sentinel is never matched — nothing
@@ -2668,6 +2683,14 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   bool captureImage(Uint8List png, {String? sourceApp}) {
     final h = _hash(png);
     if (h == _lastBlobHash) return false;
+    final recent = _recentBlobUid(h);
+    if (recent != null) {
+      // Second arrival of the same copy (watcher and hotkey): resolve to the
+      // relic already made for it instead of inserting a twin.
+      _lastBlobHash = h;
+      _lastBlobUid = recent;
+      return false;
+    }
     _lastBlobHash = h;
     _lastBlobUid = null; // set again below on a successful insert
     final db = _db;
@@ -2705,6 +2728,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     );
     db.upsert(r, haveBlob: true, queuePush: syncEnabled);
     _lastBlobUid = r.uid;
+    _recentBlobs[h] = (r.uid, _nowMs);
     _enforceRetention();
     _refreshWindow();
     notifyListeners();
@@ -2716,6 +2740,12 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   bool captureFile(String filePath, Uint8List bytes, {String? mime}) {
     final h = _hash(bytes);
     if (h == _lastBlobHash) return false;
+    final recent = _recentBlobUid(h);
+    if (recent != null) {
+      _lastBlobHash = h;
+      _lastBlobUid = recent;
+      return false;
+    }
     _lastBlobHash = h;
     _lastBlobUid = null; // set again below on a successful insert
     final db = _db;
@@ -2748,6 +2778,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     );
     db.upsert(r, haveBlob: true, queuePush: syncEnabled);
     _lastBlobUid = r.uid;
+    _recentBlobs[h] = (r.uid, _nowMs);
     _enforceRetention();
     _refreshWindow();
     notifyListeners();
@@ -2756,13 +2787,44 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     return true;
   }
 
+  /// One copied file to a relic uid: the relic the watcher just made for it,
+  /// or a fresh capture. Over the size cap it is the same path-only relic the
+  /// watcher degrades to, so the hotkey and the watcher agree on what a big
+  /// file becomes.
+  String? _resolveFileUid(String path) {
+    final db = _db;
+    if (db == null) return null;
+    Uint8List bytes;
+    try {
+      final f = File(path);
+      if (f.lengthSync() > maxItemBytes) {
+        onCaptureTooLarge?.call(maxItemMb);
+        captureText(path);
+        return db.uidByContent(path);
+      }
+      bytes = f.readAsBytesSync();
+    } catch (_) {
+      captureText(path);
+      return db.uidByContent(path);
+    }
+    final h = _hash(bytes);
+    final recent = _recentBlobUid(h);
+    if (recent != null) return recent;
+    if (h == _lastBlobHash && _lastBlobUid != null) return _lastBlobUid;
+    return captureFile(path, bytes) ? _lastBlobUid : null;
+  }
+
   /// Capture the selection/clipboard AND promote it, returning the relic —
   /// the "save & annotate" hotkey's entry point. Dedupes exactly like the
   /// watcher paths (an existing identical relic is touched, not duplicated),
   /// sets the echo guards so the watcher doesn't double-capture the same
   /// event, and reuses [promote]'s tier-cap logic. Returns null when there's
   /// nothing capturable; `promoted` is false when the vault cap refused.
+  ///
+  /// [files] is a file-manager copy (one path per selected file). Every file
+  /// lands in the vault; the editor opens on the first.
   Future<(Relic, bool)?> captureForAnnotate({
+    List<String> files = const [],
     String? text,
     Uint8List? png,
     String? sourceApp,
@@ -2770,9 +2832,24 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     Uint8List? rtf,
   }) async {
     final db = _db;
+    if (db == null) return null;
+    if (files.isNotEmpty) {
+      (Relic, bool)? first;
+      for (final path in files.take(20)) {
+        final uid = _resolveFileUid(path);
+        var r = uid == null ? null : db.getByUid(uid);
+        if (r == null) continue;
+        if (!r.promoted) {
+          await promote(r, true); // tier-cap guarded; no-op on refusal
+          r = db.getByUid(uid!) ?? r;
+        }
+        first ??= (r, r.promoted);
+      }
+      return first;
+    }
     final uid = _resolveCapturedUid(
         text: text, png: png, sourceApp: sourceApp, html: html, rtf: rtf);
-    if (db == null || uid == null) return null;
+    if (uid == null) return null;
     var r = db.getByUid(uid);
     if (r == null) return null;
     if (!r.promoted) {
@@ -2786,6 +2863,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   /// not put it in the vault. Returns the relic, or null when there was nothing
   /// on the clipboard worth queuing.
   Relic? captureForStack({
+    List<String> files = const [],
     String? text,
     Uint8List? png,
     String? sourceApp,
@@ -2793,9 +2871,18 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     Uint8List? rtf,
   }) {
     final db = _db;
+    if (db == null) return null;
+    if (files.isNotEmpty) {
+      // Every file is captured; the first one is what goes on the stack.
+      String? first;
+      for (final path in files.take(20)) {
+        first ??= _resolveFileUid(path);
+      }
+      return first == null ? null : db.getByUid(first);
+    }
     final uid = _resolveCapturedUid(
         text: text, png: png, sourceApp: sourceApp, html: html, rtf: rtf);
-    return (db == null || uid == null) ? null : db.getByUid(uid);
+    return uid == null ? null : db.getByUid(uid);
   }
 
   /// Resolve whatever was just read off the clipboard to a relic uid, capturing
