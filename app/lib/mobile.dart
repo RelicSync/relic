@@ -15,6 +15,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'data/api.dart';
 import 'data/boot_trace.dart';
 import 'data/device_directory.dart';
+import 'data/help_urls.dart';
 import 'data/oauth_flow.dart';
 import 'data/repo.dart';
 import 'data/save_prefs.dart';
@@ -32,6 +33,7 @@ import 'ui/dialogs.dart';
 import 'ui/popup.dart';
 import 'ui/quick_capture_tutorial.dart';
 import 'widgets/chrome.dart' show SyncKind;
+import 'widgets/learn_more.dart';
 import 'widgets/relic_mark.dart';
 
 /// Mobile entry point — the "lens" (SPEC §8): connect to your deployed Worker,
@@ -1493,6 +1495,8 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
                           Text('Settings',
                               style: RelicTheme.headline(
                                   size: 17, color: colors.text)),
+                          const SizedBox(width: 10),
+                          const LearnMore('settings.phone'),
                           const Spacer(),
                           IconButton(
                             icon: Icon(LucideIcons.x, size: 20, color: colors.textMuted),
@@ -1672,6 +1676,8 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
                               size: 12.5, color: colors.textMuted),
                         ),
                       ),
+                    _sheetItem(colors, LucideIcons.circleHelp, 'Help and FAQ',
+                        () => _openLink(sheetCtx, helpUrl('help.faq'))),
                     _sheetItem(colors, LucideIcons.globe, 'Website',
                         () => _openLink(sheetCtx, 'https://relic.space')),
                     _sheetItem(colors, LucideIcons.mail, 'Contact support',
