@@ -1,0 +1,106 @@
+/// The help wiki at relic.space/help, addressed by stable key.
+///
+/// The apps never hard-code a help URL. They ask for a key, and this table
+/// says where that key lives today, so a page can move without touching a
+/// single screen. The table mirrors the "Every key" list the site keeps; a
+/// key that is wired in the app and missing here fails loudly in a test.
+library;
+
+const String helpBase = 'https://relic.space/help';
+
+const Map<String, String> helpUrls = <String, String>{
+  'agents.cli': '$helpBase/cli',
+  'agents.skill': '$helpBase/ai-agents',
+  'ai.describe': '$helpBase/describe-items',
+  'ai.ocr': '$helpBase/read-text-in-images',
+  'ai.overview': '$helpBase/on-device-ai',
+  'ai.speed': '$helpBase/analysis-speed',
+  'app.update': '$helpBase/updates',
+  'backup.export': '$helpBase/export',
+  'backup.restore': '$helpBase/restore',
+  'backup.resume': '$helpBase/automatic-backups#resume',
+  'backup.setup': '$helpBase/automatic-backups',
+  'capture.annotate': '$helpBase/save-and-annotate',
+  'capture.blocklist': '$helpBase/never-capture-from',
+  'capture.compose': '$helpBase/compose',
+  'capture.formatting': '$helpBase/formatting',
+  'capture.overview': '$helpBase/what-gets-captured',
+  'capture.promoteLast': '$helpBase/keep-the-last-thing',
+  'capture.secrets': '$helpBase/secrets',
+  'find.collections': '$helpBase/collections',
+  'find.dates': '$helpBase/search-by-date',
+  'find.meaning': '$helpBase/search-by-meaning',
+  'find.ranking': '$helpBase/personalized-ranking',
+  'find.search': '$helpBase/search',
+  'find.syntax': '$helpBase/search-syntax',
+  'find.tags': '$helpBase/tags',
+  'fix.capture': '$helpBase/not-capturing',
+  'fix.hotkey': '$helpBase/hotkey-not-working',
+  'fix.hotkeyBlocked': '$helpBase/hotkey-not-working#another-app-owns-it',
+  'fix.lostPassphrase': '$helpBase/lost-passphrase',
+  'fix.paste': '$helpBase/paste-not-working',
+  'fix.sync': '$helpBase/not-syncing',
+  'fix.updates': '$helpBase/updates',
+  'help.basics': '$helpBase/the-basics',
+  'help.faq': '$helpBase/common-questions',
+  'help.install': '$helpBase/install',
+  'help.plans': '$helpBase/plans-and-limits',
+  'help.popup': '$helpBase/the-popup',
+  'help.shortcuts': '$helpBase/shortcuts',
+  'hotkey.change': '$helpBase/change-a-shortcut',
+  'hotkey.registerFailed': '$helpBase/change-a-shortcut#refused',
+  'keep.attachments': '$helpBase/attachments',
+  'keep.delete': '$helpBase/delete-and-undo',
+  'keep.edit': '$helpBase/edit-an-item',
+  'keep.multiSelect': '$helpBase/multi-select',
+  'keep.reminders': '$helpBase/reminders',
+  'keep.snippets': '$helpBase/snippets',
+  'keep.tags': '$helpBase/tags',
+  'keep.vault': '$helpBase/the-vault',
+  'linux.wayland': '$helpBase/linux#wayland',
+  'mac.accessibility': '$helpBase/macos#accessibility',
+  'mobile.iosShortcut': '$helpBase/capture-on-iphone',
+  'mobile.quickCapture': '$helpBase/capture-on-android',
+  'mobile.shareSheet': '$helpBase/capture-on-android#share-to-relic',
+  'onboarding.recoveryKit': '$helpBase/first-run#recovery-kit',
+  'onboarding.welcome': '$helpBase/first-run',
+  'paste.copyAs': '$helpBase/copy-as',
+  'paste.dragOut': '$helpBase/drag-out',
+  'paste.miniPicker': '$helpBase/mini-picker',
+  'paste.onSelect': '$helpBase/paste-on-select',
+  'paste.quickPaste': '$helpBase/quick-paste',
+  'paste.stack': '$helpBase/paste-stack',
+  'platform.android': '$helpBase/android',
+  'platform.ios': '$helpBase/iphone-and-ipad',
+  'platform.linux': '$helpBase/linux',
+  'platform.macos': '$helpBase/macos',
+  'platform.web': '$helpBase/web',
+  'platform.windows': '$helpBase/windows',
+  'privacy.changePassphrase': '$helpBase/vault-passphrase#change-it',
+  'privacy.deleteAccount': '$helpBase/sign-out-everywhere#delete-your-account',
+  'privacy.encryption': '$helpBase/how-encryption-works',
+  'privacy.passphrase': '$helpBase/vault-passphrase',
+  'privacy.recoveryKit': '$helpBase/recovery-kit',
+  'privacy.share': '$helpBase/share-links',
+  'privacy.signOutEverywhere': '$helpBase/sign-out-everywhere',
+  'privacy.visibility': '$helpBase/what-we-can-see',
+  'settings.about': '$helpBase/settings-about',
+  'settings.capture': '$helpBase/settings-capture',
+  'settings.general': '$helpBase/settings-general',
+  'settings.phone': '$helpBase/settings-on-your-phone',
+  'settings.searchAi': '$helpBase/settings-search-and-ai',
+  'settings.sync': '$helpBase/settings-sync-and-account',
+  'settings.vault': '$helpBase/settings-vault-and-storage',
+  'sync.addDevice': '$helpBase/add-a-device',
+  'sync.notSynced': '$helpBase/how-sync-works#not-synced',
+  'tray.menu': '$helpBase/the-popup#tray',
+  'tray.pause': '$helpBase/pause-capture',
+};
+
+/// The page for [key]. Throws on a key nobody registered, so a typo surfaces
+/// in a test rather than as a dead link in front of a user.
+String helpUrl(String key) {
+  final url = helpUrls[key];
+  if (url == null) throw ArgumentError.value(key, 'key', 'unknown help key');
+  return url;
+}

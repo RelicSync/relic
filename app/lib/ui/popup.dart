@@ -22,6 +22,7 @@ import '../theme/tokens.dart';
 import '../util/blob_open.dart';
 import '../widgets/chrome.dart';
 import '../widgets/controls.dart';
+import '../widgets/learn_more.dart';
 import '../widgets/date_range_calendar.dart';
 import '../widgets/relic_drag.dart';
 import '../widgets/relic_mark.dart';
@@ -3076,7 +3077,10 @@ class _PopupViewState extends State<PopupView> {
             ),
             if (_showCoach)
               Positioned.fill(
-                child: CoachMarks(steps: _coachSteps(), onDone: _dismissCoach),
+                child: CoachMarks(
+                    steps: _coachSteps(),
+                    helpKey: 'help.popup',
+                    onDone: _dismissCoach),
               ),
           ],
         ),
@@ -3372,6 +3376,8 @@ class _SyncIssuesSheetState extends State<_SyncIssuesSheet> {
                     style: RelicTheme.headline(size: 15, color: c.text),
                   ),
                 ),
+                const LearnMore('sync.notSynced'),
+                const SizedBox(width: Insets.md),
                 GhostIconButton(
                     icon: LucideIcons.x,
                     size: 28,
@@ -3581,6 +3587,8 @@ class _HelpSheet extends StatelessWidget {
                     style: RelicTheme.headline(size: 15, color: c.text),
                   ),
                 ),
+                const LearnMore('help.shortcuts', label: 'Every shortcut'),
+                const SizedBox(width: Insets.md),
                 GhostIconButton(
                     icon: LucideIcons.x,
                     size: 28,

@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/controls.dart';
+import '../widgets/learn_more.dart';
 
 /// One coach-mark step: a widget to spotlight (via its [GlobalKey]) plus a short
 /// explanation. If the key isn't laid out, the callout just centers.
@@ -19,7 +20,12 @@ class CoachStep {
 class CoachMarks extends StatefulWidget {
   final List<CoachStep> steps;
   final VoidCallback onDone;
-  const CoachMarks({super.key, required this.steps, required this.onDone});
+
+  /// Help key for the page that walks the same ground as these marks; shown
+  /// as a quiet link on every card when set.
+  final String? helpKey;
+  const CoachMarks(
+      {super.key, required this.steps, required this.onDone, this.helpKey});
 
   @override
   State<CoachMarks> createState() => _CoachMarksState();
@@ -151,6 +157,10 @@ class _CoachMarksState extends State<CoachMarks> {
                   ),
                 ),
               ),
+            if (widget.helpKey case final k?) ...[
+              const SizedBox(width: Insets.sm),
+              LearnMore(k),
+            ],
             const Spacer(),
             if (!last) ...[
               GhostButton(label: 'Skip', size: 30, onTap: widget.onDone),
