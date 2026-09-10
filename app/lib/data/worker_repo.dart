@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:isolate';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -28,6 +27,7 @@ import 'recovery.dart';
 import 'relic_db.dart';
 import 'repo.dart';
 import 'supabase_auth.dart';
+import 'sync_jobs.dart';
 import 'sync_socket.dart';
 
 /// RelicRepo backed by the deployed Cloudflare Worker (docs/api.md), with
@@ -688,6 +688,59 @@ class WorkerRepo implements RelicRepo {
     } catch (_) {}
   }
 
+  /// [_indexUpsert] for a batch, with the expensive half off the UI isolate.
+  ///
+  /// Deriving the index text is the cost (see [RelicDb.deriveIndexText]);
+  /// the SQLite writes are cheap, and they go in slices with a frame between
+  /// them so a 500-relic page never holds the list still. A relic that was
+  /// edited locally while the isolate ran is skipped: its own [_push] already
+  /// wrote the newer row, and the older one must not land on top.
+  Future<void> _indexUpsertMany(List<Relic> relics) async {
+    if (relics.isEmpty) return;
+    if (_indexBuilding) {
+      for (final r in relics) {
+        _indexDirty.add(r.uid); // replayed onto the new db
+      }
+    }
+    final db = _index;
+    if (db == null) return;
+    var derived = const <String, IndexText>{};
+    try {
+      final rows = await deriveIndexTextOffThread(relics);
+      derived = {for (final d in rows) d.uid: d};
+    } catch (_) {
+      // upsertMany derives inline for anything missing from the map.
+    }
+    final current = {for (final r in _items) r.uid: r};
+    final rows = [
+      for (final r in relics)
+        if (identical(current[r.uid], r)) r,
+    ];
+    const slice = 150;
+    for (var i = 0; i < rows.length; i += slice) {
+      // Rebuilt underneath us: the new index was loaded from _items, which
+      // already holds these rows.
+      if (!identical(_index, db)) return;
+      final part = rows.skip(i).take(slice).toList();
+      try {
+        db.upsertMany(
+          part,
+          haveBlob: (r) => localImagePath(r) != null,
+          derived: derived,
+        );
+        // Attachment text is a column on the index row, not a field on the
+        // Relic, so an upsert leaves it behind and it has to be written back.
+        for (final r in part) {
+          final att = _aiByUid[r.uid]?.att;
+          if (att != null && att.isNotEmpty) db.setAttachmentText(r.uid, att);
+        }
+      } catch (_) {}
+      if (i + slice < rows.length) {
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+  }
+
   // --- personalized ranking (usage frecency + query-pick memory) -----------
   // Desktop keeps these decaying counters in the vault DB; here the index is
   // an ephemeral mirror, so they live in a tiny on-disk sqlite of their own
@@ -1092,6 +1145,7 @@ class WorkerRepo implements RelicRepo {
     // another device as an item whose bytes 404.
     await _flushBlobOutbox();
     await _flushOutbox();
+    final before = _cacheStamp();
     try {
       // account (best-effort)
       try {
@@ -1146,8 +1200,10 @@ class WorkerRepo implements RelicRepo {
         for (final env in items) {
           final u = (env['updated_at'] as num).toInt();
           if (u > maxU) maxU = u;
-          if (await _upsertEnv(env)) changed = true;
         }
+        // The whole page at once: one hop off the UI isolate opens every
+        // envelope, and the index takes the page in slices between frames.
+        if (await _absorbEnvelopes(items)) changed = true;
         cursor = body['next_cursor'] as String?;
       } while (cursor != null);
       if (maxU - 1 > _cursor) _cursor = maxU - 1;
@@ -1198,83 +1254,128 @@ class WorkerRepo implements RelicRepo {
             : SyncKind.pending,
         pending: _outbox.length,
       );
-      await _saveCache();
+      // Only write the cache when this pass changed something it holds. It
+      // used to write after every pass, and on the 2 s catch-up cadence that
+      // was the whole vault serialised many times a minute for nothing.
+      if (changed || _cacheStamp() != before) await _saveCache();
     } catch (_) {
       _sync = const SyncState(SyncKind.offline);
     }
   }
 
-  /// Decrypt an envelope and upsert it into [_items] / [_envByUid]. Returns
-  /// whether anything changed (skips re-inserting an identical updated_at).
-  Future<bool> _upsertEnv(Map<String, dynamic> env) async {
+  /// Everything the cache file holds that a pass can change without touching
+  /// an item, so a pass that changed none of it can skip the write.
+  String _cacheStamp() {
+    final a = _account;
+    return '$_cursor|$_tombCursor|$_aiCursor|${_outbox.length}|'
+        '${_blobOutbox.length}|${a?.tier}|${a?.usedBytes}|${a?.quotaBytes}|'
+        '${a?.vaultCount}|${a?.vaultCap}|${a?.historyCount}|${a?.historyCap}|'
+        '${a?.evictedCount}|${a?.devicesCap}';
+  }
+
+  /// Whether a pulled envelope is news: not locally deleted with the tombstone
+  /// still in flight (a pull snapshot from before the delete must not
+  /// resurrect the row), and newer than what is already here.
+  bool _wantsEnv(Map<String, dynamic> env) {
     final uid = env['uid'] as String;
-    // Locally deleted with the tombstone still in flight: a pull snapshot
-    // from before the delete must not resurrect the row.
     if (_outbox.any((o) => o['uid'] == uid && o['op'] == 'delete')) {
       return false;
     }
     final existing = _envByUid[uid];
-    if (existing != null &&
-        (existing['updated_at'] as num).toInt() >=
-            (env['updated_at'] as num).toInt()) {
-      return false;
-    }
-    final relic = await _decrypt(env);
-    if (relic == null) return false;
-    _envByUid[uid] = env;
-    final i = _items.indexWhere((x) => x.uid == uid);
-    if (i >= 0) {
-      _items[i] = relic;
-    } else {
-      _items.add(relic);
-    }
-    _indexUpsert(relic);
-    // A relic update replaces the decrypted row wholesale, and the generated
-    // title lives only in that row (never in the envelope), so it has to be
-    // folded back in or an unrelated edit on another device would silently
-    // strip the title off this one.
-    _applyAiRecord(uid);
-    return true;
+    return existing == null ||
+        (existing['updated_at'] as num).toInt() <
+            (env['updated_at'] as num).toInt();
   }
 
-  /// Fold this uid's AI record into the in-memory relic, if both are here.
+  /// Open a batch of pulled envelopes off the UI isolate and fold the ones
+  /// that are news into [_items], [_envByUid] and the index. Returns whether
+  /// anything changed.
   ///
-  /// Returns whether anything changed. Safe to call at any time: records and
-  /// relics arrive on independent cursors, so either order is normal and this
-  /// simply does nothing until both halves exist.
-  bool _applyAiRecord(String uid) {
-    final rec = _aiByUid[uid];
-    if (rec == null) return false;
-    final i = _items.indexWhere((x) => x.uid == uid);
-    if (i < 0) return false;
-    final cur = _items[i];
+  /// One hop for the whole batch: spawning an isolate costs a few
+  /// milliseconds, so per envelope it would cost more than it saved, but per
+  /// page it is nothing. The batch is checked again after the hop, since a
+  /// local edit can land while the isolate is busy and must not be undone by
+  /// an older envelope from the server.
+  Future<bool> _absorbEnvelopes(List<Map<String, dynamic>> envs) async {
+    final mk = _mk;
+    if (mk == null) return false;
+    final fresh = [
+      for (final env in envs)
+        if (_wantsEnv(env)) env,
+    ];
+    if (fresh.isEmpty) return false;
+    final opened = await openRelicEnvelopes(mk, fresh);
+    final landed = <Relic>[];
+    for (var i = 0; i < fresh.length; i++) {
+      final r = opened[i];
+      final env = fresh[i];
+      if (r == null || !_wantsEnv(env)) continue;
+      _envByUid[r.uid] = env;
+      // A relic update replaces the decrypted row wholesale, and the generated
+      // title lives only in that row (never in the envelope), so it has to be
+      // folded back in or an unrelated edit on another device would silently
+      // strip the title off this one.
+      final merged = _withAiRecord(r);
+      final at = _items.indexWhere((x) => x.uid == r.uid);
+      if (at >= 0) {
+        _items[at] = merged;
+      } else {
+        _items.add(merged);
+      }
+      landed.add(merged);
+    }
+    await _indexUpsertMany(landed);
+    return landed.isNotEmpty;
+  }
+
+  /// [r] with its AI record folded in, if one is here. Returns [r] itself
+  /// when there is nothing to fold, so callers can tell by identity.
+  ///
+  /// Content carries the extracted text a desktop read out of the item. A
+  /// phone will never produce it, so this is the only way a screenshot ends
+  /// up searchable by the words inside it here.
+  Relic _withAiRecord(Relic r) {
+    final rec = _aiByUid[r.uid];
+    if (rec == null) return r;
     // Suppression is desktop-only local state, so there is nothing to filter
     // out here; the user's own title still outranks the generated one.
-    final merged = mergeAiRecord(cur: cur, rec: rec, suppressed: const {});
-    if (merged.tags.length == cur.tags.length &&
-        merged.title == cur.title &&
-        merged.content == cur.content) {
-      // Nothing on the relic itself changed, but the record may still carry
-      // attachment text, which lives on the index row rather than the relic.
-      // Routed through _indexUpsert so it gets the same treatment as any other
-      // index write, including being replayed if a rebuild is in flight.
-      final att = rec.att;
-      if (att != null && att.isNotEmpty) {
-        _indexUpsert(cur);
-        return true;
-      }
-      return false;
+    final m = mergeAiRecord(cur: r, rec: rec, suppressed: const {});
+    if (m.tags.length == r.tags.length &&
+        m.title == r.title &&
+        m.content == r.content) {
+      return r;
     }
-    // Content carries the extracted text a desktop read out of the item. A
-    // phone will never produce it, so this is the only way a screenshot ends up
-    // searchable by the words inside it here.
-    _items[i] = cur.copyWith(
-      tags: merged.tags,
-      title: merged.title,
-      content: merged.content,
-    );
-    _indexUpsert(_items[i]);
-    return true;
+    return r.copyWith(tags: m.tags, title: m.title, content: m.content);
+  }
+
+  /// Fold these uids' AI records into their in-memory relics, where both
+  /// halves are here, and reindex what changed. Returns whether anything did.
+  ///
+  /// Safe to call at any time: records and relics arrive on independent
+  /// cursors, so either order is normal, and a record whose relic has not
+  /// landed yet simply waits for [_absorbEnvelopes] to fold it in.
+  Future<bool> _applyAiRecords(Iterable<String> uids) async {
+    final touched = <Relic>[];
+    for (final uid in uids) {
+      final rec = _aiByUid[uid];
+      if (rec == null) continue;
+      final i = _items.indexWhere((x) => x.uid == uid);
+      if (i < 0) continue;
+      final cur = _items[i];
+      final merged = _withAiRecord(cur);
+      if (identical(merged, cur)) {
+        // Nothing on the relic itself changed, but the record may still carry
+        // attachment text, which lives on the index row rather than the relic,
+        // so the row is rewritten to pick it up.
+        final att = rec.att;
+        if (att != null && att.isNotEmpty) touched.add(cur);
+        continue;
+      }
+      _items[i] = merged;
+      touched.add(merged);
+    }
+    await _indexUpsertMany(touched);
+    return touched.isNotEmpty;
   }
 
   /// Pull the generated titles and tags the account's desktops produced.
@@ -1299,11 +1400,12 @@ class WorkerRepo implements RelicRepo {
         ).timeout(kNetTimeout);
         if (r.statusCode != 200) return changed;
         final body = jsonDecode(r.body) as Map<String, dynamic>;
-        for (final env in (body['items'] as List).cast<Map<String, dynamic>>()) {
+        final items = (body['items'] as List).cast<Map<String, dynamic>>();
+        for (final env in items) {
           final at = (env['ai_at'] as num).toInt();
           if (at > maxAt) maxAt = at;
-          if (await _absorbAiEnv(env)) changed = true;
         }
+        if (await _absorbAiEnvelopes(items)) changed = true;
         cursor = body['next_cursor'] as String?;
       } while (cursor != null);
       // Same off-by-one guard the relic cursor uses, so a record written in the
@@ -1315,26 +1417,44 @@ class WorkerRepo implements RelicRepo {
     return changed;
   }
 
-  Future<bool> _absorbAiEnv(Map<String, dynamic> env) async {
-    final uid = env['uid'] as String;
-    final p = await RelicCrypto.openAiPayload(
-        _mk!, uid, env['n'] as String, env['ct'] as String);
-    if (p == null) return false; // not ours to read, or tampered with
-    _aiEnvByUid[uid] = env;
-    _aiByUid[uid] = AiRecord.fromWire(env, p);
-    return _applyAiRecord(uid);
+  /// Open a batch of AI record envelopes off the UI isolate and apply them.
+  Future<bool> _absorbAiEnvelopes(List<Map<String, dynamic>> envs) async {
+    final mk = _mk;
+    if (mk == null || envs.isEmpty) return false;
+    final opened = await openAiEnvelopes(mk, envs);
+    final landed = <String>[];
+    for (final env in envs) {
+      final uid = env['uid'] as String;
+      final p = opened[uid];
+      if (p == null) continue; // not ours to read, or tampered with
+      _aiEnvByUid[uid] = env;
+      _aiByUid[uid] = AiRecord.fromWire(env, p);
+      landed.add(uid);
+    }
+    return _applyAiRecords(landed);
   }
 
   // --- test hooks (the pull/outbox plumbing is private; there is no offline
   // network seam, so tests drive these directly) ----------------------------
 
   @visibleForTesting
-  Future<bool> debugUpsertEnv(Map<String, dynamic> env) => _upsertEnv(env);
+  Future<bool> debugUpsertEnv(Map<String, dynamic> env) =>
+      _absorbEnvelopes([env]);
+
+  /// A whole page at once, exactly as the pull hands it over.
+  @visibleForTesting
+  Future<bool> debugAbsorbEnvelopes(List<Map<String, dynamic>> envs) =>
+      _absorbEnvelopes(envs);
+
+  /// Write the cache file now, as the end of a sync pass would.
+  @visibleForTesting
+  Future<void> debugSaveCache() => _saveCache();
 
   /// Feed one AI record in, as a pull would. There is no offline network seam,
   /// so the consumer path is driven directly.
   @visibleForTesting
-  Future<bool> debugAbsorbAiEnv(Map<String, dynamic> env) => _absorbAiEnv(env);
+  Future<bool> debugAbsorbAiEnv(Map<String, dynamic> env) =>
+      _absorbAiEnvelopes([env]);
 
   /// Rebuild the search index from scratch, as a relaunch does.
   @visibleForTesting
@@ -1349,32 +1469,6 @@ class WorkerRepo implements RelicRepo {
   @visibleForTesting
   void debugSetPersonalStore(PersonalStore? s) => _personal = s;
 
-  Future<Relic?> _decrypt(Map<String, dynamic> env) async {
-    final p = await RelicCrypto.openRelicPayload(_mk!, env);
-    if (p == null) return null;
-    return Relic(
-      uid: env['uid'] as String,
-      createdAt: (env['created_at'] as num).toInt(),
-      updatedAt: (env['updated_at'] as num).toInt(),
-      kind: kindFromStr(p['kind'] as String? ?? 'other'),
-      source: sourceFromStr(p['source'] as String? ?? 'api'),
-      promoted: env['promoted'] as bool? ?? false,
-      byteSize: (env['byte_size'] as num?)?.toInt() ?? 0,
-      device: p['device'] as String?,
-      mime: p['mime'] as String?,
-      filename: p['filename'] as String?,
-      blobKey: env['blob_key'] as String?,
-      tags: (p['tags'] as List?)?.cast<String>() ?? const [],
-      userTags: (p['user_tags'] as List?)?.cast<String>() ?? const [],
-      title: p['title'] as String?,
-      note: p['note'] as String?,
-      content: p['content'] as String?,
-      preview: p['preview'] as String?,
-      attachments: Attachment.listFrom(p['attachments']),
-      rich: RichBody.fromJson(p['rich']),
-    );
-  }
-
   // --- local cache (instant + offline launch) ------------------------------
 
   Directory? _supportDirCache;
@@ -1383,13 +1477,25 @@ class WorkerRepo implements RelicRepo {
 
   Future<File> _cacheFile() async => File('${(await _supportDir()).path}/relic_cache.json');
 
-  Future<void> _loadCache() async {
-    if (_cacheLoaded) return;
+  /// Reads happen off the UI isolate now, so a second caller arriving while
+  /// the first is mid-read (the capture repo priming while the host loads)
+  /// must wait for that read rather than seeing an empty cache.
+  Future<void>? _cacheLoading;
+
+  Future<void> _loadCache() {
+    if (_cacheLoaded) return _cacheLoading ?? Future<void>.value();
     _cacheLoaded = true;
+    return _cacheLoading = _loadCacheOnce();
+  }
+
+  Future<void> _loadCacheOnce() async {
     try {
       final f = await _cacheFile();
       if (!f.existsSync()) return;
-      final j = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+      // Read and parsed on a background isolate: the file is every envelope
+      // in the vault, and parsing it inline held the launch animation still.
+      final j = await readCacheFile(f.path);
+      if (j == null) return;
       // Account-switch guard: a cache written under a different account must
       // not leak into this session — its envelopes wouldn't decrypt with this
       // account's key, its outbox would replay old-account ops against the new
@@ -1447,23 +1553,29 @@ class WorkerRepo implements RelicRepo {
   }
 
   Future<void> _decryptCache() async {
+    final mk = _mk!;
     _items.clear();
-    for (final env in _envByUid.values) {
-      final r = await _decrypt(env);
+    // Every envelope in one hop off the UI isolate, so the launch animation
+    // keeps moving while the vault opens.
+    final envs = _envByUid.values.toList();
+    for (final r in await openRelicEnvelopes(mk, envs)) {
       if (r != null) _items.add(r);
     }
     // Generated titles, folded in before the first paint. The relic envelope
     // never carries them, so without this pass a relaunch would show every
     // desktop-titled item untitled until the next successful pull.
     _aiByUid.clear();
-    for (final env in _aiEnvByUid.values) {
+    final aiEnvs = _aiEnvByUid.values.toList();
+    final opened = await openAiEnvelopes(mk, aiEnvs);
+    for (final env in aiEnvs) {
       final uid = env['uid'] as String;
-      final p = await RelicCrypto.openAiPayload(
-          _mk!, uid, env['n'] as String, env['ct'] as String);
+      final p = opened[uid];
       if (p != null) _aiByUid[uid] = AiRecord.fromWire(env, p);
     }
-    for (final uid in _aiByUid.keys) {
-      _applyAiRecord(uid);
+    // The merge alone: the index is rebuilt from _items just below, so there
+    // is no row to write yet.
+    for (var i = 0; i < _items.length; i++) {
+      _items[i] = _withAiRecord(_items[i]);
     }
     _items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     BootTrace.mark('relics decrypted');
@@ -1529,7 +1641,7 @@ class WorkerRepo implements RelicRepo {
       // bulkLoad then derives inline, which is slow but correct.
       Map<String, IndexText> derived = const {};
       try {
-        final rows = await Isolate.run(() => RelicDb.deriveIndexText(snapshot));
+        final rows = await deriveIndexTextOffThread(snapshot);
         derived = {for (final r in rows) r.uid: r};
         BootTrace.mark('index text derived');
       } catch (_) {
@@ -1587,10 +1699,38 @@ class WorkerRepo implements RelicRepo {
   /// answer until the next unrelated rebuild.
   void Function()? onIndexReady;
 
-  Future<void> _saveCache() async {
+  /// Write the cache, coalescing callers the way [syncDelta] does.
+  ///
+  /// The encode and the write happen on a background isolate, so two callers
+  /// can now overlap. A caller arriving mid-write joins the running one and
+  /// then waits for exactly one follow-up write, which is what makes its own
+  /// change durable: the running write took its snapshot before that change.
+  /// Bursts collapse into that single follow-up.
+  Future<void> _saveCache() {
+    final running = _saveInFlight;
+    if (running != null) {
+      _saveAgain = true;
+      return running.then((_) => _saveInFlight ?? Future<void>.value());
+    }
+    final f = _saveCacheOnce().whenComplete(() {
+      _saveInFlight = null;
+      if (_saveAgain) {
+        _saveAgain = false;
+        unawaited(_saveCache());
+      }
+    });
+    return _saveInFlight = f;
+  }
+
+  Future<void>? _saveInFlight;
+  bool _saveAgain = false;
+
+  Future<void> _saveCacheOnce() async {
     try {
       final f = await _cacheFile();
-      f.writeAsStringSync(jsonEncode({
+      // Snapshot the collections now; the isolate copies the document when
+      // it is handed over, and the lists must not shift under that copy.
+      final doc = <String, dynamic>{
         'account': _personalAcct, // owner stamp — see _loadCache's guard
         'cursor': _cursor,
         'tombCursor': _tombCursor,
@@ -1598,8 +1738,8 @@ class WorkerRepo implements RelicRepo {
         'keyparams': _keyparams,
         'items': _envByUid.values.toList(),
         'aiItems': _aiEnvByUid.values.toList(),
-        'outbox': _outbox,
-        'blobOutbox': _blobOutbox,
+        'outbox': List<Map<String, dynamic>>.of(_outbox),
+        'blobOutbox': List<String>.of(_blobOutbox),
         if (_account != null)
           'accountInfo': {
             'tier': _account!.tier,
@@ -1612,7 +1752,8 @@ class WorkerRepo implements RelicRepo {
             'evictedCount': _account!.evictedCount,
             'devicesCap': _account!.devicesCap,
           },
-      }));
+      };
+      await writeCacheFile(f.path, doc);
     } catch (_) {}
   }
 
@@ -2040,7 +2181,7 @@ class WorkerRepo implements RelicRepo {
     if (key == null || _blobDir == null) return null;
     try {
       final f = File(_blobFile(key));
-      return f.existsSync() ? f.readAsBytesSync() : null;
+      return f.existsSync() ? await f.readAsBytes() : null;
     } catch (_) {
       return null;
     }
@@ -2278,11 +2419,19 @@ class WorkerRepo implements RelicRepo {
           .get(Uri.parse(_u('/blob/$key')), headers: _headers)
           .timeout(kBlobTimeout);
       if (resp.statusCode != 200) return false;
-      final clear = await RelicCrypto.openBlob(_mk!, key, resp.bodyBytes);
-      if (clear == null) return false;
-      File(_blobFile(key)).writeAsBytesSync(clear);
-      if (r.attachments.isNotEmpty) _unpackBundle(r);
-      return true;
+      // Decrypt and write off the UI isolate: a photo is megabytes of pure
+      // Dart XChaCha20, and this used to run on the UI isolate for every
+      // photo the prefetch walked after a sync.
+      return await openBlobToFile(
+        _mk!,
+        key,
+        resp.bodyBytes,
+        _blobFile(key),
+        attachments: r.attachments,
+        attachmentPaths: {
+          for (final a in r.attachments) a.id: _attFile(key, a.id),
+        },
+      );
     } catch (_) {
       return false;
     } finally {
@@ -2296,7 +2445,7 @@ class WorkerRepo implements RelicRepo {
     if (key == null) return null;
     if (!await ensureBlob(r)) return null;
     final f = File(_blobFile(key));
-    return f.existsSync() ? f.readAsBytesSync() : null;
+    return f.existsSync() ? await f.readAsBytes() : null;
   }
 
   /// Download every not-yet-cached photo blob (call after [load]); returns how
