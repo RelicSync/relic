@@ -1,0 +1,1367 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Relic sync API",
+    "version": "1.0.0",
+    "summary": "The HTTP contract between Relic clients and a Relic sync server (Relic Cloud or a self-hosted server).",
+    "description": "Relic is an open-source, end-to-end encrypted vault for everything you copy. This is the API its apps use to sync. It is written for people building a client or running their own server.\n\nWhat the server can and cannot do:\n\n- Every relic and blob arrives already encrypted on the device. The server stores ciphertext, enforces quotas and ordering, and never holds a key.\n- Every route except `/health`, `/stripe/plans`, `/stripe/webhook`, and the public share views needs a bearer token (see Security). There is no API key you can request; a token comes from signing in to an account or from pairing a device.\n- Because the payloads are ciphertext, this is not a data API a third party can read from. It is the sync contract, published so clients and self-hosters can be built against it.\n\nThe long-form contract with the reasoning behind each route is docs/api.md (https://relic.space/docs/api.md). The envelope and blob byte formats are docs/wire-format.md; the key derivation and sealing are docs/crypto.md. Relic's website has a separate, account-less one-time note API at relic.space/api/note that is not part of this document.\n\nSource: https://github.com/RelicSync/relic (worker/src). This file lives at docs/openapi.json in that repo and is served at https://relic.space/openapi.json.",
+    "termsOfService": "https://relic.space/legal/terms",
+    "contact": {
+      "name": "Relic support",
+      "email": "support@relic.space",
+      "url": "https://relic.space/support"
+    },
+    "license": {
+      "name": "AGPL-3.0",
+      "url": "https://www.gnu.org/licenses/agpl-3.0.html"
+    }
+  },
+  "externalDocs": {
+    "description": "Relic developer docs",
+    "url": "https://relic.space/developers"
+  },
+  "servers": [
+    {
+      "url": "https://api.relic.space",
+      "description": "Relic Cloud"
+    },
+    {
+      "url": "http://localhost:8787",
+      "description": "A self-hosted server on its default port (selfhost/README.md)"
+    }
+  ],
+  "security": [{ "bearerAuth": [] }],
+  "tags": [
+    { "name": "health", "description": "Liveness." },
+    { "name": "keyparams", "description": "The per-account key-params record: the Argon2id salt and parameters plus the wrapped master key. Recovering the master key from it needs the passphrase." },
+    { "name": "relics", "description": "Encrypted relic envelopes. Last writer wins on `updated_at`; deletes are tombstoned so an offline device cannot bring an item back." },
+    { "name": "blobs", "description": "Encrypted blob bytes for image and file relics. Plain upload up to 64 MiB, chunked upload past that." },
+    { "name": "ai", "description": "Sealed AI records (a generated title and tags) and the short work lease that keeps two devices from generating the same one." },
+    { "name": "account", "description": "Usage, quotas, the device list, and account deletion." },
+    { "name": "pairing", "description": "The zero-knowledge relay behind the QR join flow. It stores opaque sealed blobs for two minutes and never sees a secret." },
+    { "name": "shares", "description": "End-to-end encrypted one-way share links. The key travels in the URL fragment and never reaches the server." },
+    { "name": "billing", "description": "Stripe checkout and portal. Self-hosted servers answer 503 here." },
+    { "name": "sync", "description": "The live-sync doorbell." }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["health"],
+        "operationId": "getHealth",
+        "summary": "Liveness probe",
+        "description": "200 when the router is up and the database answers. Public, rate-limited per IP.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Healthy.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ok" } } }
+          },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": {
+            "description": "The database did not answer (`unhealthy`).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+    "/keyparams": {
+      "get": {
+        "tags": ["keyparams"],
+        "operationId": "getKeyParams",
+        "summary": "Fetch the account's key-params record",
+        "description": "Every new device fetches this, derives the key-encryption key from the passphrase and the salt, and unwraps the master key. Unwrap failure means a wrong passphrase.",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "responses": {
+          "200": {
+            "description": "The record.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/KeyParams" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      },
+      "put": {
+        "tags": ["keyparams"],
+        "operationId": "putKeyParams",
+        "summary": "Store the account's key-params record",
+        "description": "The first write succeeds. A later write needs `?replace=1` (a passphrase change re-wraps the master key). The body is stored as sent.",
+        "parameters": [
+          { "$ref": "#/components/parameters/XRelicDevice" },
+          {
+            "name": "replace",
+            "in": "query",
+            "description": "Set to `1` to overwrite an existing record.",
+            "schema": { "type": "string", "enum": ["1"] }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/KeyParams" } } }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Empty" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/EmailUnverified" },
+          "409": {
+            "description": "A record already exists and `replace=1` was not given (`keyparams_exists`).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/relic/{uid}": {
+      "parameters": [{ "$ref": "#/components/parameters/uid" }],
+      "put": {
+        "tags": ["relics"],
+        "operationId": "putRelic",
+        "summary": "Upsert one encrypted relic",
+        "description": "Last writer wins: if the stored `updated_at` is at or past the envelope's, the write is a no-op and the reply says `stale: true`. A uid with a live tombstone is also `stale: true`, so an offline device cannot resurrect a deleted item. Enforces the per-item size cap (413), the storage quota (402 `storage_quota`), and on free accounts the vault cap when the write newly promotes an item (402 `vault_cap`). On free accounts, unpromoted items past the history ring (500) are pushed out of view after the write.",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Envelope" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Written, or ignored as stale.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Stale" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/QuotaExceeded" },
+          "403": { "$ref": "#/components/responses/EmailUnverified" },
+          "413": { "$ref": "#/components/responses/TooLarge" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      },
+      "delete": {
+        "tags": ["relics"],
+        "operationId": "deleteRelic",
+        "summary": "Delete one relic",
+        "description": "Removes the envelope and its blob, writes a tombstone, and updates the usage counters. Idempotent: deleting a uid that does not exist is still 200.",
+        "parameters": [
+          { "$ref": "#/components/parameters/XRelicDevice" },
+          {
+            "name": "deleted_at",
+            "in": "query",
+            "description": "Unix seconds to stamp on the tombstone. Defaults to now.",
+            "schema": { "type": "integer" }
+          }
+        ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/Empty" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/relics": {
+      "get": {
+        "tags": ["relics"],
+        "operationId": "listRelics",
+        "summary": "List envelopes changed since a point in time",
+        "description": "Envelopes with `updated_at` after `since`, oldest first, paginated. Initial sync: `since=0` and page until `next_cursor` is null. Steady state: pass the cursor you saved. On free accounts, items the history ring has pushed out of view are not returned; they come back on an upgrade.",
+        "parameters": [
+          { "$ref": "#/components/parameters/XRelicDevice" },
+          { "$ref": "#/components/parameters/since" },
+          { "$ref": "#/components/parameters/cursor" },
+          { "$ref": "#/components/parameters/limit" }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RelicList" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/tombstones": {
+      "get": {
+        "tags": ["relics"],
+        "operationId": "listTombstones",
+        "summary": "List deletions since a point in time",
+        "description": "Up to 1000 tombstones with `deleted_at` after `since`, oldest first. Tombstones are kept for 90 days; a device offline longer than that should do a full resync instead of trusting this feed.",
+        "parameters": [
+          { "$ref": "#/components/parameters/XRelicDevice" },
+          { "$ref": "#/components/parameters/since" }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tombstones.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TombstoneList" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/blob": {
+      "post": {
+        "tags": ["blobs"],
+        "operationId": "uploadBlob",
+        "summary": "Upload an encrypted blob in one request",
+        "description": "Body is the raw sealed bytes (24-byte nonce followed by the ciphertext). The client mints `id` before uploading because the encryption binds it. Use this up to 64 MiB; use the chunked routes past that. Upload the blob first, then push the envelope that references it. A blob no envelope references is swept after 24 hours.",
+        "parameters": [
+          { "$ref": "#/components/parameters/XRelicDevice" },
+          { "$ref": "#/components/parameters/blobIdQuery" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BlobKey" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/QuotaExceeded" },
+          "403": { "$ref": "#/components/responses/EmailUnverified" },
+          "413": { "$ref": "#/components/responses/TooLarge" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/blob/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/blobId" }],
+      "get": {
+        "tags": ["blobs"],
+        "operationId": "getBlob",
+        "summary": "Download an encrypted blob",
+        "description": "Raw sealed bytes, resolved inside the token's account only. Served with `Cache-Control: private, immutable`.",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "responses": {
+          "200": {
+            "description": "The bytes.",
+            "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/blob/mpu": {
+      "post": {
+        "tags": ["blobs"],
+        "operationId": "startChunkedUpload",
+        "summary": "Start a chunked upload",
+        "description": "Checks the declared size against the per-item cap and the storage quota before any bytes move, so a client can show its upgrade prompt first. The declared bytes are reserved until the upload completes or is aborted.",
+        "parameters": [
+          { "$ref": "#/components/parameters/XRelicDevice" },
+          { "$ref": "#/components/parameters/blobIdQuery" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MpuCreateRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Upload opened.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MpuCreateResponse" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/QuotaExceeded" },
+          "403": { "$ref": "#/components/responses/EmailUnverified" },
+          "413": { "$ref": "#/components/responses/TooLarge" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/blob/mpu/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/blobId" }],
+      "put": {
+        "tags": ["blobs"],
+        "operationId": "uploadChunk",
+        "summary": "Upload one chunk",
+        "description": "Every part is exactly `part_size` bytes except the last. Parts are numbered from 1.",
+        "parameters": [
+          { "$ref": "#/components/parameters/XRelicDevice" },
+          { "$ref": "#/components/parameters/uploadId" },
+          {
+            "name": "part",
+            "in": "query",
+            "required": true,
+            "description": "Part number, 1 to `max_parts`.",
+            "schema": { "type": "integer", "minimum": 1 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Part stored. Keep the etag for the complete call.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MpuPart" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "413": { "$ref": "#/components/responses/TooLarge" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      },
+      "delete": {
+        "tags": ["blobs"],
+        "operationId": "abortChunkedUpload",
+        "summary": "Abort a chunked upload",
+        "description": "Idempotent. Releases the reserved bytes.",
+        "parameters": [
+          { "$ref": "#/components/parameters/XRelicDevice" },
+          { "$ref": "#/components/parameters/uploadId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Aborted (or already gone).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Aborted" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/blob/mpu/{id}/complete": {
+      "parameters": [{ "$ref": "#/components/parameters/blobId" }],
+      "post": {
+        "tags": ["blobs"],
+        "operationId": "completeChunkedUpload",
+        "summary": "Finish a chunked upload",
+        "description": "Assembles the parts and re-checks the real size against the cap and the quota. An object over either is deleted and the call fails.",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MpuCompleteRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored. Same shape as a plain upload.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BlobKey" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/QuotaExceeded" },
+          "403": { "$ref": "#/components/responses/EmailUnverified" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "413": { "$ref": "#/components/responses/TooLarge" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/ai": {
+      "get": {
+        "tags": ["ai"],
+        "operationId": "listAiRecords",
+        "summary": "List AI records changed since a point in time",
+        "description": "Same paging as `/relics`, on the records' own `ai_at` timeline so generated titles never disturb relic ordering.",
+        "parameters": [
+          { "$ref": "#/components/parameters/XRelicDevice" },
+          { "$ref": "#/components/parameters/since" },
+          { "$ref": "#/components/parameters/cursor" },
+          { "$ref": "#/components/parameters/limit" }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AiList" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/ai/claim": {
+      "post": {
+        "tags": ["ai"],
+        "operationId": "claimAiWork",
+        "summary": "Claim a lease on items to enrich",
+        "description": "One device wins a ten-minute lease per uid; the others skip it. Needs `X-Relic-Device`. Up to 64 items per call. Items in neither `granted` nor `done` are leased by a live peer and may be offered again later.",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ClaimRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome for each item.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ClaimResponse" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/ai/release": {
+      "post": {
+        "tags": ["ai"],
+        "operationId": "releaseAiWork",
+        "summary": "Give back leases this device will not use",
+        "description": "Optional: every lease expires on its own. Needs `X-Relic-Device`.",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReleaseRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "How many leases were released.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReleaseResponse" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/ai/{uid}": {
+      "parameters": [{ "$ref": "#/components/parameters/uid" }],
+      "put": {
+        "tags": ["ai"],
+        "operationId": "putAiRecord",
+        "summary": "Publish a sealed AI record",
+        "description": "Not last writer wins. A higher `level` always wins; at equal level the earliest result stands, and a device may amend its own record. A losing write is `stale: true`, which is not an error. The sealed payload is capped at 48 KiB.",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AiRecord" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Written, or ignored because another result stands.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Stale" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/EmailUnverified" },
+          "413": { "$ref": "#/components/responses/TooLarge" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/account": {
+      "get": {
+        "tags": ["account"],
+        "operationId": "getAccount",
+        "summary": "Usage and quotas",
+        "description": "For the client's quota display. Never includes key material. `history_cap` is null on paid tiers, which is how a client knows there is no ring to warn about.",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "responses": {
+          "200": {
+            "description": "The account.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Account" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      },
+      "delete": {
+        "tags": ["account"],
+        "operationId": "deleteAccount",
+        "summary": "Delete the account and everything in it",
+        "description": "Irreversible. Cancels billing, deletes every stored object and row, and removes the sign-in identity. Needs a sign-in token issued within the last ten minutes (`403 stale_token` otherwise), so a leaked bearer alone cannot destroy an account. Clients refresh right before calling.",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "responses": {
+          "200": {
+            "description": "Gone.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Deleted" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": {
+            "description": "The token is too old for this action (`stale_token`). Refresh and retry.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/account/devices": {
+      "get": {
+        "tags": ["account"],
+        "operationId": "listDevices",
+        "summary": "List registered devices",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "responses": {
+          "200": {
+            "description": "Devices, most recently seen first.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeviceList" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      },
+      "post": {
+        "tags": ["account"],
+        "operationId": "registerDevice",
+        "summary": "Register (or re-register) this device",
+        "description": "Enforces the tier's device cap. At the cap the reply is a 409 that carries the current device list, so a client can offer to remove one.",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeviceRegistration" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Registered.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ok" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "409": {
+            "description": "Device limit reached (`device_cap`). The body includes the current devices.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeviceCapError" } } }
+          },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/account/devices/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/deviceId" }],
+      "patch": {
+        "tags": ["account"],
+        "operationId": "renameDevice",
+        "summary": "Rename a device",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeviceRename" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Renamed.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ok" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      },
+      "delete": {
+        "tags": ["account"],
+        "operationId": "removeDevice",
+        "summary": "Remove a device and sign the account out everywhere",
+        "description": "Revokes every refresh token at the identity provider and refuses access tokens issued before the removal. The provider has no per-session revocation, so every device has to sign in again. `sessions_revoked` says whether that revocation actually happened.",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "responses": {
+          "200": {
+            "description": "Removed.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeviceRemoved" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/pair/start": {
+      "post": {
+        "tags": ["pairing"],
+        "operationId": "startPairing",
+        "summary": "Mint a pairing session id",
+        "description": "The channel key is generated on the device and travels only in the QR code. The server just mints the id.",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "responses": {
+          "200": {
+            "description": "A new session.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PairingStart" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unconfigured" }
+        }
+      }
+    },
+    "/pair/offer": {
+      "post": {
+        "tags": ["pairing"],
+        "operationId": "offerPairingBlob",
+        "summary": "Drop a sealed blob into a pairing slot",
+        "description": "Slots: `np` and `tp` (sealed ephemeral public keys, one per side) and `mk` (the sealed master key). Each slot lives for two minutes.",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PairingOffer" } } }
+        },
+        "responses": {
+          "204": { "description": "Stored." },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unconfigured" }
+        }
+      }
+    },
+    "/pair/poll": {
+      "get": {
+        "tags": ["pairing"],
+        "operationId": "pollPairingSlot",
+        "summary": "Read a pairing slot without consuming it",
+        "description": "Absent, expired, and consumed slots all answer 204, on purpose.",
+        "parameters": [
+          { "$ref": "#/components/parameters/XRelicDevice" },
+          { "$ref": "#/components/parameters/pairingId" },
+          { "$ref": "#/components/parameters/pairingSlot" }
+        ],
+        "responses": {
+          "200": {
+            "description": "The blob.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PairingBlob" } } }
+          },
+          "204": { "description": "Nothing there." },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/Unconfigured" }
+        }
+      }
+    },
+    "/pair/claim": {
+      "get": {
+        "tags": ["pairing"],
+        "operationId": "claimPairingSlot",
+        "summary": "Read a pairing slot and delete it",
+        "description": "Single use. Absent, expired, and consumed slots all answer 204.",
+        "parameters": [
+          { "$ref": "#/components/parameters/XRelicDevice" },
+          { "$ref": "#/components/parameters/pairingId" },
+          { "$ref": "#/components/parameters/pairingSlot" }
+        ],
+        "responses": {
+          "200": {
+            "description": "The blob. It is gone after this reply.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PairingBlob" } } }
+          },
+          "204": { "description": "Nothing there." },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unconfigured" }
+        }
+      }
+    },
+    "/share": {
+      "post": {
+        "tags": ["shares"],
+        "operationId": "createShare",
+        "summary": "Create a share link",
+        "description": "The body is the sealed payload (AES-GCM, 12-byte IV, then ciphertext, then the 16-byte tag). The client mints the 22-character id so the encryption can bind to it. The decryption key goes in the URL fragment, which never reaches the server. Per-tier limits apply to how many shares can be live at once and how large one can be.",
+        "parameters": [
+          { "$ref": "#/components/parameters/XRelicDevice" },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Client-minted share id: 16 random bytes as unpadded base64url.",
+            "schema": { "type": "string", "pattern": "^[A-Za-z0-9_-]{22}$" }
+          },
+          {
+            "name": "ttl",
+            "in": "query",
+            "required": true,
+            "description": "Lifetime in seconds: one hour, one day, or seven days.",
+            "schema": { "type": "integer", "enum": [3600, 86400, 604800] }
+          },
+          {
+            "name": "views",
+            "in": "query",
+            "description": "Maximum number of reveals, 1 to 100. Omit for unlimited within the lifetime.",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Created.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ShareCreated" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": {
+            "description": "Too many live shares for this tier (`share_cap`).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "409": {
+            "description": "The id already exists (`share_id_collision`). Mint a new one and retry.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "413": { "$ref": "#/components/responses/TooLarge" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/share/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/shareId" }],
+      "delete": {
+        "tags": ["shares"],
+        "operationId": "revokeShare",
+        "summary": "Revoke a share link you created",
+        "description": "Idempotent.",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "responses": {
+          "200": {
+            "description": "Revoked.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ok" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/share/{id}/blob": {
+      "parameters": [{ "$ref": "#/components/parameters/shareId" }],
+      "get": {
+        "tags": ["shares"],
+        "operationId": "fetchShareBlob",
+        "summary": "Fetch a share's ciphertext (counts as a view)",
+        "description": "Public. The share page calls this when the recipient clicks Reveal; only this fetch counts a view, so link-preview bots cannot burn a one-time share. Rate-limited per IP.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The sealed bytes, `Content-Disposition: attachment`, never cached.",
+            "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "410": {
+            "description": "Expired, revoked, or already viewed the allowed number of times (`share_gone`).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/s/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/shareId" }],
+      "get": {
+        "tags": ["shares"],
+        "operationId": "getSharePage",
+        "summary": "The recipient page for a share link",
+        "description": "Public HTML, self-contained, `noindex`. Decrypts in the browser with the key from the fragment. Never touches the view count. Rate-limited per IP.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The page.",
+            "content": { "text/html": { "schema": { "type": "string" } } }
+          },
+          "404": {
+            "description": "No such share, or it is gone. Still an HTML page.",
+            "content": { "text/html": { "schema": { "type": "string" } } }
+          },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/stripe/plans": {
+      "get": {
+        "tags": ["billing"],
+        "operationId": "listPlans",
+        "summary": "The purchasable plans",
+        "description": "Public. Price ids, tiers, intervals, and amounts, so a client can render an upgrade screen without hardcoding price ids. Cached for five minutes. A server with no billing configured returns an empty list.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The plans.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PlanList" } } }
+          },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/stripe/checkout": {
+      "post": {
+        "tags": ["billing"],
+        "operationId": "createCheckout",
+        "summary": "Open a Stripe Checkout session",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CheckoutRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Send the user to this URL.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RedirectUrl" } } }
+          },
+          "400": {
+            "description": "Unknown price (`bad_price`).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/BillingUnconfigured" }
+        }
+      }
+    },
+    "/stripe/portal": {
+      "post": {
+        "tags": ["billing"],
+        "operationId": "createPortal",
+        "summary": "Open the Stripe customer portal",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "responses": {
+          "200": {
+            "description": "Send the user to this URL.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RedirectUrl" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "409": {
+            "description": "The account has no subscription to manage (`no_subscription`).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/BillingUnconfigured" }
+        }
+      }
+    },
+    "/stripe/webhook": {
+      "post": {
+        "tags": ["billing"],
+        "operationId": "stripeWebhook",
+        "summary": "Stripe event webhook",
+        "description": "Called by Stripe, not by clients. Authenticated by the `Stripe-Signature` header. Events are applied idempotently.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "Stripe-Signature",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "description": "A Stripe event." } } }
+        },
+        "responses": {
+          "200": { "description": "Accepted." },
+          "400": { "description": "Bad signature or body." },
+          "503": { "description": "Billing is not configured on this server." }
+        }
+      }
+    },
+    "/sync/socket": {
+      "get": {
+        "tags": ["sync"],
+        "operationId": "syncSocket",
+        "summary": "The live-sync doorbell (WebSocket)",
+        "description": "Send `Upgrade: websocket` with the bearer token. The server rings every other device on the account when a write lands; the message carries no content, and the client answers it with a normal pull. A self-hosted server without the feature answers 501 and the client falls back to polling.",
+        "parameters": [
+          { "$ref": "#/components/parameters/XRelicDevice" },
+          {
+            "name": "Upgrade",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "enum": ["websocket"] }
+          }
+        ],
+        "responses": {
+          "101": { "description": "Switching protocols." },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "501": {
+            "description": "Live sync is not enabled on this server (`no_socket`). Poll instead.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "`Authorization: Bearer <token>`. Two kinds of token are accepted: the access token from signing in to a Relic account (a JWT), and a device token from pairing (an opaque string, used by older installs and the CLI). Relic Cloud issues these through the apps; there is no way to request one over this API. A self-hosted server enrolls devices from the vault passphrase alone. Devices also send `X-Relic-Device` so a removed device can be cut off before its token expires."
+      }
+    },
+    "parameters": {
+      "XRelicDevice": {
+        "name": "X-Relic-Device",
+        "in": "header",
+        "description": "This device's id (up to 64 characters). Required for the AI lease routes, recommended everywhere: it is how the server skips echoing a write back to its author and how a removed device is cut off early.",
+        "schema": { "type": "string", "maxLength": 64 }
+      },
+      "uid": {
+        "name": "uid",
+        "in": "path",
+        "required": true,
+        "description": "The relic's id, minted by the client.",
+        "schema": { "type": "string", "pattern": "^[A-Za-z0-9-]+$" }
+      },
+      "blobId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "The blob id, minted by the client before encryption.",
+        "schema": { "type": "string", "pattern": "^[A-Za-z0-9-][A-Za-z0-9.-]{7,63}$" }
+      },
+      "blobIdQuery": {
+        "name": "id",
+        "in": "query",
+        "required": true,
+        "description": "The blob id, minted by the client before encryption. 8 to 64 characters of letters, digits, and dashes.",
+        "schema": { "type": "string", "pattern": "^[A-Za-z0-9-][A-Za-z0-9.-]{7,63}$" }
+      },
+      "uploadId": {
+        "name": "upload_id",
+        "in": "query",
+        "required": true,
+        "description": "From the start call.",
+        "schema": { "type": "string" }
+      },
+      "shareId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" }
+      },
+      "deviceId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" }
+      },
+      "since": {
+        "name": "since",
+        "in": "query",
+        "description": "Unix seconds. Only records changed after this are returned. Defaults to 0.",
+        "schema": { "type": "integer", "minimum": 0, "default": 0 }
+      },
+      "cursor": {
+        "name": "cursor",
+        "in": "query",
+        "description": "The `next_cursor` from the previous page.",
+        "schema": { "type": "string" }
+      },
+      "limit": {
+        "name": "limit",
+        "in": "query",
+        "description": "Page size, clamped to 1 to 500.",
+        "schema": { "type": "integer", "minimum": 1, "maximum": 500, "default": 500 }
+      },
+      "pairingId": {
+        "name": "pairing_id",
+        "in": "query",
+        "required": true,
+        "schema": { "type": "string", "pattern": "^[0-9a-fA-F-]{8,40}$" }
+      },
+      "pairingSlot": {
+        "name": "slot",
+        "in": "query",
+        "required": true,
+        "schema": { "type": "string", "enum": ["np", "tp", "mk"] }
+      }
+    },
+    "responses": {
+      "Empty": {
+        "description": "Done.",
+        "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false } } }
+      },
+      "BadRequest": {
+        "description": "Malformed request (`invalid_envelope`, `bad_request`, or `device_required`).",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "Unauthorized": {
+        "description": "Missing, unknown, or revoked token (`unauthorized`), a token from before a device removal (`session_revoked`), or a removed device (`device_revoked`). Sign in again.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "EmailUnverified": {
+        "description": "Only when the server runs with the verify-to-sync gate on: the account's email is not confirmed yet (`email_unverified`). Reads still work.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "QuotaExceeded": {
+        "description": "Over the tier's storage quota (`storage_quota`) or, on free accounts, the promoted-item cap (`vault_cap`).",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "NotFound": {
+        "description": "No such object (`not_found`).",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "TooLarge": {
+        "description": "Over the tier's per-item size cap (`too_large`).",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "RateLimited": {
+        "description": "Too many requests (`rate_limited`). Back off and retry.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "Unconfigured": {
+        "description": "This server has no pairing relay (`unconfigured`).",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "BillingUnconfigured": {
+        "description": "This server has no billing (`billing_unconfigured`). Every self-hosted server answers this.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "description": "Every non-2xx JSON reply.",
+        "required": ["error", "message"],
+        "properties": {
+          "error": { "type": "string", "description": "A stable code, for example `storage_quota`." },
+          "message": { "type": "string", "description": "Human text. Do not match on it." }
+        },
+        "examples": [{ "error": "storage_quota", "message": "storage quota exceeded" }]
+      },
+      "Ok": {
+        "type": "object",
+        "required": ["ok"],
+        "properties": { "ok": { "type": "boolean", "const": true } }
+      },
+      "Stale": {
+        "type": "object",
+        "required": ["stale"],
+        "properties": {
+          "stale": { "type": "boolean", "description": "true means the write was ignored because a newer or winning record already stands. Treat it as done." }
+        }
+      },
+      "KeyParams": {
+        "type": "object",
+        "description": "Stored and returned as sent. Safe to hold server-side: the master key inside is wrapped under a key derived from the passphrase.",
+        "required": ["v", "salt", "argon2", "mk_nonce", "wrapped_mk"],
+        "properties": {
+          "v": { "type": "integer", "const": 1 },
+          "salt": { "type": "string", "description": "16 random bytes, base64." },
+          "argon2": {
+            "type": "object",
+            "required": ["m_kib", "t", "p"],
+            "properties": {
+              "m_kib": { "type": "integer", "description": "Memory in KiB." },
+              "t": { "type": "integer", "description": "Iterations." },
+              "p": { "type": "integer", "description": "Parallelism." }
+            }
+          },
+          "mk_nonce": { "type": "string", "description": "24-byte nonce, base64." },
+          "wrapped_mk": { "type": "string", "description": "The sealed master key, base64." }
+        },
+        "examples": [
+          {
+            "v": 1,
+            "salt": "QkJCQkJCQkJCQkJCQkJCQg==",
+            "argon2": { "m_kib": 65536, "t": 3, "p": 4 },
+            "mk_nonce": "<base64 24 bytes>",
+            "wrapped_mk": "<base64 48 bytes>"
+          }
+        ]
+      },
+      "Envelope": {
+        "type": "object",
+        "description": "One encrypted relic. The plaintext fields are the minimum the server needs to enforce quotas and ordering; everything about the item is inside `ct`.",
+        "required": ["v", "uid", "created_at", "updated_at", "byte_size", "promoted", "n", "ct"],
+        "properties": {
+          "v": { "type": "integer", "const": 1 },
+          "uid": { "type": "string", "description": "Must equal the uid in the path." },
+          "created_at": { "type": "integer", "description": "Unix seconds." },
+          "updated_at": { "type": "integer", "description": "Unix seconds. Last writer wins on this." },
+          "byte_size": { "type": "integer", "minimum": 0, "description": "The item's plaintext size, charged against the storage quota." },
+          "promoted": { "type": "boolean", "description": "Kept in the vault (exempt from the free history ring)." },
+          "blob_key": { "type": "string", "description": "The blob this relic references, if any. Omitted for text." },
+          "n": { "type": "string", "description": "24-byte nonce, base64." },
+          "ct": { "type": "string", "description": "The sealed payload, base64." }
+        },
+        "examples": [
+          {
+            "v": 1,
+            "uid": "0190a8e2-7c4d-7000-8000-1a2b3c4d5e6f",
+            "created_at": 1765400000,
+            "updated_at": 1765400000,
+            "byte_size": 1234,
+            "promoted": false,
+            "n": "<base64 24 bytes>",
+            "ct": "<base64 ciphertext>"
+          }
+        ]
+      },
+      "RelicList": {
+        "type": "object",
+        "required": ["items", "next_cursor"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/Envelope" } },
+          "next_cursor": { "type": ["string", "null"], "description": "Pass back as `cursor`. Null on the last page." }
+        }
+      },
+      "Tombstone": {
+        "type": "object",
+        "required": ["v", "uid", "deleted_at"],
+        "properties": {
+          "v": { "type": "integer", "const": 1 },
+          "uid": { "type": "string" },
+          "deleted_at": { "type": "integer", "description": "Unix seconds." }
+        }
+      },
+      "TombstoneList": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/Tombstone" } }
+        }
+      },
+      "BlobKey": {
+        "type": "object",
+        "required": ["key"],
+        "properties": {
+          "key": { "type": "string", "description": "The blob id you sent. Put it in the envelope's `blob_key`." }
+        }
+      },
+      "MpuCreateRequest": {
+        "type": "object",
+        "required": ["declared_size"],
+        "properties": {
+          "declared_size": { "type": "integer", "minimum": 1, "description": "The total size you are about to upload, in bytes." }
+        }
+      },
+      "MpuCreateResponse": {
+        "type": "object",
+        "required": ["upload_id", "part_size", "max_parts"],
+        "properties": {
+          "upload_id": { "type": "string" },
+          "part_size": { "type": "integer", "description": "Bytes per part. Currently 67108864 (64 MiB)." },
+          "max_parts": { "type": "integer", "description": "How many parts the tier's cap allows." }
+        }
+      },
+      "MpuPart": {
+        "type": "object",
+        "required": ["part", "etag"],
+        "properties": {
+          "part": { "type": "integer" },
+          "etag": { "type": "string" }
+        }
+      },
+      "MpuCompleteRequest": {
+        "type": "object",
+        "required": ["upload_id", "parts"],
+        "properties": {
+          "upload_id": { "type": "string" },
+          "parts": { "type": "array", "minItems": 1, "items": { "$ref": "#/components/schemas/MpuPart" } }
+        }
+      },
+      "Aborted": {
+        "type": "object",
+        "required": ["aborted"],
+        "properties": { "aborted": { "type": "boolean", "const": true } }
+      },
+      "AiRecord": {
+        "type": "object",
+        "description": "A sealed generated title and tags for one relic.",
+        "required": ["v", "uid", "ai_at", "level", "n", "ct"],
+        "properties": {
+          "v": { "type": "integer", "const": 1 },
+          "uid": { "type": "string" },
+          "ai_at": { "type": "integer", "description": "Unix seconds the result was produced." },
+          "level": { "type": "integer", "description": "The enrichment level of the models that produced it. Higher wins." },
+          "device": { "type": ["string", "null"], "description": "Which device produced it. Set by the server on reads." },
+          "n": { "type": "string", "description": "24-byte nonce, base64." },
+          "ct": { "type": "string", "description": "The sealed payload, base64, at most 48 KiB." }
+        }
+      },
+      "AiList": {
+        "type": "object",
+        "required": ["items", "next_cursor"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/AiRecord" } },
+          "next_cursor": { "type": ["string", "null"] }
+        }
+      },
+      "ClaimRequest": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "type": "object",
+              "required": ["uid"],
+              "properties": {
+                "uid": { "type": "string" },
+                "level": { "type": "integer", "default": 0, "description": "The level this device can produce." }
+              }
+            }
+          }
+        }
+      },
+      "ClaimResponse": {
+        "type": "object",
+        "required": ["granted", "done", "lease_expires_at"],
+        "properties": {
+          "granted": { "type": "array", "items": { "type": "string" }, "description": "Uids this device now holds a lease on." },
+          "done": {
+            "type": "array",
+            "description": "Uids that already have a result at this level or higher. Stop asking.",
+            "items": {
+              "type": "object",
+              "required": ["uid", "level"],
+              "properties": { "uid": { "type": "string" }, "level": { "type": "integer" } }
+            }
+          },
+          "lease_expires_at": { "type": "integer", "description": "Unix seconds. Zero when nothing was requested." }
+        }
+      },
+      "ReleaseRequest": {
+        "type": "object",
+        "required": ["uids"],
+        "properties": { "uids": { "type": "array", "items": { "type": "string" } } }
+      },
+      "ReleaseResponse": {
+        "type": "object",
+        "required": ["released"],
+        "properties": { "released": { "type": "integer" } }
+      },
+      "Account": {
+        "type": "object",
+        "required": ["tier", "storage_used", "storage_quota", "vault_count", "vault_cap", "history_count", "history_cap", "evicted_count", "devices_cap"],
+        "properties": {
+          "tier": { "type": "string", "enum": ["free", "pro", "max"] },
+          "storage_used": { "type": "integer", "description": "Bytes." },
+          "storage_quota": { "type": ["integer", "null"], "description": "Bytes. Null means unlimited." },
+          "vault_count": { "type": "integer", "description": "Promoted items." },
+          "vault_cap": { "type": ["integer", "null"], "description": "Null on paid tiers." },
+          "history_count": { "type": "integer", "description": "Unpromoted items still in view." },
+          "history_cap": { "type": ["integer", "null"], "description": "The free history ring. Null on paid tiers." },
+          "evicted_count": { "type": "integer", "description": "Older copies held back by the ring that come straight back on an upgrade. Always 0 on paid tiers." },
+          "devices_cap": { "type": ["integer", "null"], "description": "Null means unlimited." }
+        },
+        "examples": [
+          {
+            "tier": "free",
+            "storage_used": 10485760,
+            "storage_quota": 262144000,
+            "vault_count": 12,
+            "vault_cap": 25,
+            "history_count": 500,
+            "history_cap": 500,
+            "evicted_count": 37,
+            "devices_cap": 3
+          }
+        ]
+      },
+      "Deleted": {
+        "type": "object",
+        "required": ["deleted", "objects"],
+        "properties": {
+          "deleted": { "type": "boolean", "const": true },
+          "objects": { "type": "integer", "description": "How many stored objects were removed." }
+        }
+      },
+      "Device": {
+        "type": "object",
+        "required": ["device_id", "label", "platform", "last_seen_at", "app_version", "this_device"],
+        "properties": {
+          "device_id": { "type": "string" },
+          "label": { "type": ["string", "null"] },
+          "platform": { "type": ["string", "null"] },
+          "last_seen_at": { "type": "integer", "description": "Unix seconds, moved at most hourly." },
+          "app_version": { "type": ["string", "null"] },
+          "this_device": { "type": "boolean", "description": "True for the device that made the request, when it sent `X-Relic-Device`." }
+        }
+      },
+      "DeviceList": {
+        "type": "object",
+        "required": ["devices"],
+        "properties": { "devices": { "type": "array", "items": { "$ref": "#/components/schemas/Device" } } }
+      },
+      "DeviceRegistration": {
+        "type": "object",
+        "required": ["device_id"],
+        "properties": {
+          "device_id": { "type": "string", "maxLength": 64 },
+          "label": { "type": "string" },
+          "platform": { "type": "string", "description": "For example `windows`, `macos`, `linux`, `android`, `ios`, `web`." },
+          "app_version": { "type": "string", "maxLength": 32 }
+        }
+      },
+      "DeviceRename": {
+        "type": "object",
+        "required": ["label"],
+        "properties": { "label": { "type": "string", "minLength": 1, "maxLength": 64 } }
+      },
+      "DeviceRemoved": {
+        "type": "object",
+        "required": ["ok", "sessions_revoked"],
+        "properties": {
+          "ok": { "type": "boolean", "const": true },
+          "sessions_revoked": { "type": "boolean", "description": "Whether every session on the account was actually signed out." }
+        }
+      },
+      "DeviceCapError": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Error" },
+          {
+            "type": "object",
+            "required": ["devices"],
+            "properties": { "devices": { "type": "array", "items": { "$ref": "#/components/schemas/Device" } } }
+          }
+        ]
+      },
+      "PairingStart": {
+        "type": "object",
+        "required": ["pairing_id"],
+        "properties": { "pairing_id": { "type": "string", "format": "uuid" } }
+      },
+      "PairingOffer": {
+        "type": "object",
+        "required": ["pairing_id", "slot", "blob"],
+        "properties": {
+          "pairing_id": { "type": "string", "pattern": "^[0-9a-fA-F-]{8,40}$" },
+          "slot": { "type": "string", "enum": ["np", "tp", "mk"] },
+          "blob": { "type": "string", "minLength": 1, "maxLength": 8192, "description": "Sealed, base64. Opaque to the server." }
+        }
+      },
+      "PairingBlob": {
+        "type": "object",
+        "required": ["blob"],
+        "properties": { "blob": { "type": "string" } }
+      },
+      "ShareCreated": {
+        "type": "object",
+        "required": ["id", "url", "expires_at"],
+        "properties": {
+          "id": { "type": "string" },
+          "url": { "type": "string", "format": "uri", "description": "The link without the key. The client appends `#<key>`." },
+          "expires_at": { "type": "integer", "description": "Unix seconds." }
+        }
+      },
+      "Plan": {
+        "type": "object",
+        "required": ["price_id", "tier", "interval", "amount", "currency"],
+        "properties": {
+          "price_id": { "type": "string" },
+          "tier": { "type": "string", "enum": ["pro", "max"] },
+          "interval": { "type": ["string", "null"], "enum": ["month", "year", null] },
+          "amount": { "type": ["integer", "null"], "description": "In the currency's minor unit (cents)." },
+          "currency": { "type": "string" }
+        }
+      },
+      "PlanList": {
+        "type": "object",
+        "required": ["plans"],
+        "properties": { "plans": { "type": "array", "items": { "$ref": "#/components/schemas/Plan" } } }
+      },
+      "CheckoutRequest": {
+        "type": "object",
+        "required": ["price_id"],
+        "properties": {
+          "price_id": { "type": "string", "description": "From `/stripe/plans`." },
+          "source": { "type": "string", "description": "Which upgrade button opened this checkout. Recorded on the Stripe session when it is one of the known tags; anything else is dropped and the checkout still goes through." }
+        }
+      },
+      "RedirectUrl": {
+        "type": "object",
+        "required": ["url"],
+        "properties": { "url": { "type": "string", "format": "uri" } }
+      }
+    }
+  }
+}

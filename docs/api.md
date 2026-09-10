@@ -3,6 +3,10 @@
 Cloudflare Worker, JSON over HTTPS. Implements SPEC §8 against R2 (objects) +
 D1 (accounts, tokens, counters).
 
+A machine-readable OpenAPI 3.1 description of every route below is
+`docs/openapi.json`, served at https://relic.space/openapi.json. The worker
+test `worker/test/openapi.test.ts` fails when the two drift.
+
 ## Auth (implemented — Supabase JWT bridge)
 
 `Authorization: Bearer <token>` on every route. Two token kinds are accepted
@@ -76,6 +80,25 @@ Deletes relic object + referenced blob (from the envelope's plaintext
 A later `PUT` for a uid with a live tombstone is ignored (`200 {"stale":true}`)
 so offline devices can't resurrect deleted relics.
 
+### AI records — `/ai/*` (generated title + tags, sealed)
+
+The enrichment result for a relic (a title and tags the on-device models
+produced) syncs as its own sealed record so every device shows the same title
+and only one device does the work (`worker/src/ai.ts`). The Worker never sees
+the title: `ct` is sealed under AAD `relic.ai.v1:<uid>`.
+
+- `POST /ai/claim` `{ "items": [{ "uid", "level" }] }` (≤64, needs
+  `X-Relic-Device`) — one device wins a 10-minute lease per uid.
+  → `200 { "granted": [uid], "done": [{ "uid", "level" }], "lease_expires_at" }`.
+  A uid in neither list is leased by a live peer.
+- `POST /ai/release` `{ "uids": [...] }` — hand back leases you will not use.
+  → `200 { "released": n }`.
+- `PUT /ai/:uid` `{ "v": 1, "uid", "ai_at", "level", "n", "ct" }` (`ct` ≤ 48 KiB)
+  — publish. Not LWW: a higher level wins, at equal level the earliest result
+  stands, a device may amend its own. A losing write is `200 { "stale": true }`.
+- `GET /ai?since=<ts>&cursor=<c>&limit=<n≤500>` — pull on the records' own
+  `ai_at` cursor. → `200 { "items": [...], "next_cursor" }`.
+
 ### `GET /tombstones?since=<ts>`
 → `200 { "items": [ { "uid": "...", "deleted_at": ... } ] }`.
 Tombstones are GC'd after **90 days** (`worker/src/sweep.ts`): a device
@@ -140,6 +163,8 @@ no `iat` and are grandfathered.
   Enforces the per-tier device cap; at cap returns `409` **with the current
   device list** so the client can offer "remove one."
 - `GET /account/devices` — list registered devices.
+- `PATCH /account/devices/:id` `{ "label" }` — rename. → `200 { "ok": true }`,
+  `404` if the device is unknown or revoked.
 - `DELETE /account/devices/:id` — remove **and sign the account out**. Revokes
   every refresh token at the IdP (GoTrue `POST /logout?scope=global`) and stamps
   `accounts.min_valid_iat`, so access tokens issued before the removal are
@@ -151,10 +176,14 @@ no `iat` and are grandfathered.
   `X-Relic-Device`.
 
 ### Pairing relay — `/pair/*` (device onboarding)
-Short-lived KV relay for the QR join flow: `POST /pair/start`,
-`POST /pair/offer` (sealed opaque blobs, both directions), `GET /pair/poll`,
-`GET /pair/claim` (single-use, deletes the record). The server never sees
-plaintext secrets.
+Short-lived KV relay for the QR join flow. The server never sees plaintext
+secrets; slots (`np`, `tp`, `mk`) hold opaque sealed blobs for 120 s.
+- `POST /pair/start` → `200 { "pairing_id" }` (the channel key rides only in
+  the QR).
+- `POST /pair/offer` `{ "pairing_id", "slot", "blob" }` (blob ≤ 8 KiB) → `204`.
+- `GET /pair/poll?pairing_id=&slot=` → `200 { "blob" }`, or `204` when absent,
+  expired, or consumed (all three look the same on purpose).
+- `GET /pair/claim?pairing_id=&slot=` — same, but single-use: deletes the slot.
 
 ### Share links — `/share`, `/s/:id`
 E2EE one-way shares (`worker/src/share.ts`): 
@@ -162,14 +191,22 @@ E2EE one-way shares (`worker/src/share.ts`):
   AES-GCM sealed payload; client mints the id (409 on collision → re-mint).
   → `200 { "url": "https://relic.space/s/<id>" }`; the key travels only in the
   URL fragment.
-- `GET /s/:id` — recipient page (HTML, no account needed); 
-  `GET /share/:id` / `GET /share/:id/blob` — the sealed payload/blob it fetches;
-  `DELETE /share/:id` — revoke. Expired/over-viewed shares are swept by cron.
+- `GET /s/:id` — recipient page (HTML, no account needed). Never counts a view.
+- `GET /share/:id/blob` — the sealed payload the page fetches on Reveal. This
+  is the fetch that counts a view; `410 share_gone` once expired or used up.
+- `DELETE /share/:id` — revoke. Expired/over-viewed shares are swept by cron.
 
 ### Billing — `/stripe/*`
-`GET /stripe/plans` (public price/tier table), `POST /stripe/checkout`,
-`POST /stripe/portal`, `POST /stripe/webhook` (signature-verified; events
-applied idempotently via `billing_events`, queue-buffered when bound).
+- `GET /stripe/plans` — public price/tier table (`{ "plans": [...] }`, cached
+  5 minutes; empty on a server with no billing).
+- `POST /stripe/checkout` → `200 { "url" }` (see below for the body).
+- `POST /stripe/portal` → `200 { "url" }`, `409 no_subscription` when there is
+  nothing to manage.
+- `POST /stripe/webhook` — signature-verified; events applied idempotently via
+  `billing_events`, queue-buffered when bound.
+
+Every billing route answers `503 billing_unconfigured` on a server without a
+Stripe key (every self-host).
 `POST /stripe/checkout` takes `{ price_id, source? }`; a `source` on the
 allowed list rides through to Stripe as `metadata.source` on the Checkout
 Session and the Subscription, so we can see which upgrade button converts.
@@ -177,6 +214,13 @@ Anything off the list is dropped and the checkout still goes through.
 The grace-sweep cron emails each account it downgrades ("plan lapsed, your
 data is safe", via Resend, best-effort) so a lapse is never discovered via a
 402.
+
+### Live-sync doorbell — `GET /sync/socket` (WebSocket)
+
+Authed upgrade (`Upgrade: websocket`) forwarded to the account's Durable
+Object. A write on one device rings the others, content-free; they answer
+with a normal pull. `501 no_socket` on a server without the binding
+(self-host), and the client falls back to polling.
 
 ## Tier limits (enforced here — `worker/src/tiers.ts` is the source of truth)
 
