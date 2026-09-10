@@ -2,10 +2,13 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:relic_app/data/help_urls.dart';
 
-/// Every key the desktop app links to must resolve, and every page must live
+/// Every key the app links to must resolve, and every page must live
 /// under relic.space/help. A dead "Learn more" is worse than none.
 void main() {
   const wired = [
+    'settings.phone',
+    'mobile.iosShortcut',
+    'mobile.quickCapture',
     'settings.general',
     'settings.capture',
     'settings.searchAi',

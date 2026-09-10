@@ -8,6 +8,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/controls.dart';
+import '../widgets/learn_more.dart';
 import '../widgets/relic_mark.dart';
 
 /// Detect the platform and show the matching quick-capture walkthrough:
@@ -164,6 +165,12 @@ class _QuickCaptureTutorial extends StatelessWidget {
                       ],
                       const SizedBox(height: Insets.xxl),
                       _usage(c),
+                      const SizedBox(height: Insets.lg),
+                      LearnMore(
+                        ios ? 'mobile.iosShortcut' : 'mobile.quickCapture',
+                        label: 'Full guide on the web',
+                        size: 12,
+                      ),
                     ],
                   ),
                 ),
