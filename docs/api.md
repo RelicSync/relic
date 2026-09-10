@@ -3,6 +3,10 @@
 Cloudflare Worker, JSON over HTTPS. Implements SPEC §8 against R2 (objects) +
 D1 (accounts, tokens, counters).
 
+A machine-readable OpenAPI 3.1 description of every route below is
+`docs/openapi.json`, served at https://relic.space/openapi.json. The worker
+test `worker/test/openapi.test.ts` fails when the two drift.
+
 ## Auth (implemented — Supabase JWT bridge)
 
 `Authorization: Bearer <token>` on every route. Two token kinds are accepted
