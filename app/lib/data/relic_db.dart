@@ -862,6 +862,108 @@ class RelicDb {
     }
   }
 
+  /// [upsert] for a batch: one transaction, statements prepared once.
+  ///
+  /// This is the incremental cousin of [bulkLoad]. A sync pass on the phone
+  /// pulls up to 500 relics a page, and [upsert] per relic meant 500
+  /// transactions and 4000 statement compilations on the UI isolate, with
+  /// the regex text scanners run inline for each one. Here the rows may
+  /// already exist (it is a real upsert, index rows deleted and rewritten),
+  /// and [derived] lets the caller hand in the scanner output from another
+  /// isolate, as [bulkLoad] does. A relic missing from [derived], or one that
+  /// already carries attachment text (which the derived rows do not include),
+  /// takes the same inline path [upsert] takes.
+  void upsertMany(
+    Iterable<Relic> relics, {
+    bool Function(Relic)? haveBlob,
+    Map<String, IndexText>? derived,
+  }) {
+    final ins = _db.prepare(
+      '''INSERT INTO relics
+         (uid, created_at, updated_at, kind, source, promoted, byte_size,
+          device, mime, filename, blob_key, content_hash, have_blob,
+          tags, user_tags, title, note, content, preview, attachments,
+          rich)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(uid) DO UPDATE SET
+           created_at=excluded.created_at, updated_at=excluded.updated_at,
+           kind=excluded.kind, source=excluded.source, promoted=excluded.promoted,
+           byte_size=excluded.byte_size, device=excluded.device, mime=excluded.mime,
+           filename=excluded.filename, blob_key=excluded.blob_key,
+           content_hash=excluded.content_hash,
+           tags=excluded.tags, user_tags=excluded.user_tags, title=excluded.title,
+           note=excluded.note, content=excluded.content, preview=excluded.preview,
+           attachments=excluded.attachments, rich=excluded.rich''',
+    );
+    final attSel = _db.prepare(
+      'SELECT attachment_text FROM relics WHERE uid = ?',
+    );
+    final delFts = _db.prepare('DELETE FROM relics_fts WHERE uid = ?');
+    final insFts = _db.prepare(
+      'INSERT INTO relics_fts (uid, named, body, aux, tags) VALUES (?,?,?,?,?)',
+    );
+    final delTri = _db.prepare('DELETE FROM relics_tri WHERE uid = ?');
+    final insTri = _db.prepare(
+      'INSERT INTO relics_tri (uid, body) VALUES (?,?)',
+    );
+    _db.execute('BEGIN');
+    try {
+      for (final r in relics) {
+        ins.execute([
+          r.uid,
+          r.createdAt,
+          r.updatedAt,
+          kindToStr(r.kind),
+          r.source.name,
+          r.promoted ? 1 : 0,
+          r.byteSize,
+          r.device,
+          r.mime,
+          r.filename,
+          r.blobKey,
+          r.content == null ? null : _hash(r.content!),
+          (haveBlob?.call(r) ?? false) ? 1 : 0,
+          jsonEncode(r.tags),
+          jsonEncode(r.userTags),
+          r.title,
+          r.note,
+          r.content,
+          r.preview,
+          r.attachments.isEmpty
+              ? null
+              : jsonEncode(Attachment.listToJson(r.attachments)),
+          r.rich == null ? null : jsonEncode(r.rich!.toJson()),
+        ]);
+        final attRs = attSel.select([r.uid]);
+        final att = attRs.isEmpty
+            ? ''
+            : (attRs.first['attachment_text'] as String?) ?? '';
+        final d = (att.isEmpty && derived != null) ? derived[r.uid] : null;
+        if (d == null) {
+          // Same recipe as [upsert]: attachment text rides in the body and
+          // trigram rows, and only the inline path knows how to fold it in.
+          _writeIndexRows(_db, r, att);
+          continue;
+        }
+        delFts.execute([r.uid]);
+        insFts.execute([r.uid, d.named, d.body, d.aux, d.tags]);
+        delTri.execute([r.uid]);
+        insTri.execute([r.uid, d.tri]);
+      }
+      _db.execute('COMMIT');
+    } catch (e) {
+      _db.execute('ROLLBACK');
+      rethrow;
+    } finally {
+      ins.dispose();
+      attSel.dispose();
+      delFts.dispose();
+      insFts.dispose();
+      delTri.dispose();
+      insTri.dispose();
+    }
+  }
+
   /// Load a whole corpus into a FRESH database in one pass.
   ///
   /// [upsert] is correct per relic but expensive per relic: it opens its own
