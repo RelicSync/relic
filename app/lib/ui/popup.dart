@@ -678,7 +678,10 @@ class _PopupViewState extends State<PopupView> {
         Expanded(
           child: Text(
             text,
-            maxLines: oneLine ? 1 : 2,
+            // A 360 dp phone has two buttons on this row and about 200 dp
+            // left for the words, so the unfolded line needs three rows
+            // there or the cap sentence never shows.
+            maxLines: oneLine ? 1 : (mob ? 3 : 2),
             overflow: TextOverflow.ellipsis,
             style: RelicTheme.sans(
                 size: mob ? 12.5 : 11.5, color: c.textSecondary),
@@ -688,7 +691,9 @@ class _PopupViewState extends State<PopupView> {
         GhostButton(
           label: 'Upgrade',
           style: GhostStyle.filled,
-          size: mob ? 34 : 26,
+          // 40 on a phone: the smallest target that is comfortable to hit,
+          // and the pill stays shorter than the square buttons around it.
+          size: mob ? 40 : 26,
           fontSize: mob ? 12.5 : 11,
           onTap: () => widget.onUpgrade?.call('ring_strip'),
         ),
@@ -726,6 +731,9 @@ class _PopupViewState extends State<PopupView> {
                     n == 1
                         ? 'End of your free history. 1 more is waiting.'
                         : 'End of your free history. $n more are waiting.',
+                    // Ellipsis with no line limit draws one line. A phone
+                    // needs two for the sentence to fit beside the button.
+                    maxLines: mob ? 2 : 1,
                     overflow: TextOverflow.ellipsis,
                     style: RelicTheme.sans(
                         size: mob ? 12.5 : 11.5, color: c.textMuted),

@@ -8,6 +8,8 @@
 // store-safe build and a self-hosted server.
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
+import 'package:flutter/services.dart' show FontLoader, rootBundle;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:relic_app/data/repo.dart';
@@ -89,6 +91,29 @@ void main() {
     ));
     await tester.pump(const Duration(milliseconds: 300));
   }
+
+  /// Load the shipped fonts so a wrap-and-fit assertion measures the real
+  /// glyphs. Same recipe as the screenshot harnesses.
+  Future<void> realFonts(WidgetTester tester) => tester.runAsync(() async {
+        Future<void> load(String family, List<String> assets) async {
+          final loader = FontLoader(family);
+          for (final a in assets) {
+            loader.addFont(rootBundle.load(a));
+          }
+          await loader.load();
+        }
+
+        await load('StackSansHeadline', ['assets/fonts/StackSansHeadline.ttf']);
+        await load('StackSansText', ['assets/fonts/StackSansText.ttf']);
+        await load('JetBrainsMono', ['assets/fonts/JetBrainsMono.ttf']);
+        await load('IBMPlexSans', ['assets/fonts/IBMPlexSans.ttf']);
+        await load('IBMPlexMono', [
+          'assets/fonts/IBMPlexMono-Regular.ttf',
+          'assets/fonts/IBMPlexMono-Medium.ttf',
+          'assets/fonts/IBMPlexMono-SemiBold.ttf',
+          'assets/fonts/IBMPlexMono-Bold.ttf',
+        ]);
+      });
 
   Future<_RingRepo> repoWith(AccountInfo? a) async {
     final repo = _RingRepo(a);
@@ -196,6 +221,31 @@ void main() {
 
       expect(find.text('7 older copies waiting'), findsOneWidget);
       expect(find.byIcon(LucideIcons.chevronDown), findsOneWidget);
+    });
+
+    testWidgets('says the whole line on a phone once unfolded', (tester) async {
+      // The test font draws every glyph as a wide box, so this one layout
+      // question needs the fonts the app really ships.
+      await realFonts(tester);
+      final repo = await repoWith(
+          _acct(historyCount: 500, historyCap: 500, evictedCount: 312));
+      await pump(tester, repo, upgrades: [], mobile: true);
+      await tester.tap(find.byIcon(LucideIcons.chevronDown));
+      await tester.pump();
+
+      // 360 dp wide, two buttons on the row: the sentence that names the cap
+      // has to wrap onto a third line rather than lose its second half.
+      const line = '312 older copies are waiting for you. The free plan shows '
+          'your last 500.';
+      final paragraph = tester.renderObject<RenderParagraph>(find.text(line));
+      expect(paragraph.didExceedMaxLines, isFalse);
+
+      // The footer sits beside its own Upgrade, so it wraps rather than
+      // dropping the count.
+      const footer = 'End of your free history. 312 more are waiting.';
+      await toFooter(tester, find.text(footer));
+      final tail = tester.renderObject<RenderParagraph>(find.text(footer));
+      expect(tail.didExceedMaxLines, isFalse);
     });
 
     testWidgets('rides above the list in the mini picker too', (tester) async {
