@@ -167,7 +167,7 @@ E2EE one-way shares (`worker/src/share.ts`):
   → `200 { "url": "https://relic.space/s/<id>" }`; the key travels only in the
   URL fragment.
 - `GET /s/:id` — recipient page (HTML, no account needed); 
-  `GET /share/:id` / `GET /share/:id/blob` — the sealed payload/blob it fetches;
+  `GET /share/:id/blob` — the sealed payload it fetches (this is the fetch that counts a view);
   `DELETE /share/:id` — revoke. Expired/over-viewed shares are swept by cron.
 
 ### Billing — `/stripe/*`
