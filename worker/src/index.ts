@@ -19,7 +19,7 @@ import {
 import { readUsage, ringDelta, usageDelta } from "./usage";
 import { type Auth, authenticate, REV_TTL, revKey } from "./auth";
 import { clampLimit, CORS, err, json } from "./http";
-import { clientIp, rateLimit } from "./ratelimit";
+import { clientIp, rateLimit, withRateLimitHeaders } from "./ratelimit";
 import { deleteAccount, revokeSupabaseSessions } from "./account";
 import {
   createShare,
@@ -400,8 +400,9 @@ export async function listRelics(url: URL, env: Env, auth: Auth): Promise<Respon
   return json({ items, next_cursor: next });
 }
 
-export default {
-  async fetch(req: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+// The router. Wrapped by fetch() below, which stamps the RateLimit headers
+// on whatever a gated handler returned (src/ratelimit.ts).
+async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
     const path = url.pathname;
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
@@ -409,7 +410,7 @@ export default {
     // Liveness probe (public, cheap). 200 = router up + D1 answering; used by
     // uptime monitoring. Reuses the public per-IP limiter.
     if (path === "/health" && req.method === "GET") {
-      const limited = await rateLimit(env.RL_PLANS, clientIp(req));
+      const limited = await rateLimit(req, env.RL_PLANS, "RL_PLANS", clientIp(req));
       if (limited) return limited;
       try {
         await env.DB.prepare("SELECT 1").first();
@@ -423,7 +424,7 @@ export default {
     // plan listing is public pricing info.
     if (path === "/stripe/webhook" && req.method === "POST") return stripeWebhook(req, env);
     if (path === "/stripe/plans" && req.method === "GET") {
-      const limited = await rateLimit(env.RL_PLANS, clientIp(req)); // per-IP (pre-auth)
+      const limited = await rateLimit(req, env.RL_PLANS, "RL_PLANS", clientIp(req)); // per-IP (pre-auth)
       return limited ?? listPlans(env);
     }
 
@@ -431,12 +432,12 @@ export default {
     // the view count; only the ciphertext fetch does (see src/share.ts).
     const sharePageMatch = path.match(/^\/s\/([A-Za-z0-9_-]{1,64})$/);
     if (sharePageMatch && req.method === "GET") {
-      const limited = await rateLimit(env.RL_SHARE_VIEW, clientIp(req));
+      const limited = await rateLimit(req, env.RL_SHARE_VIEW, "RL_SHARE_VIEW", clientIp(req));
       return limited ?? sharePageResponse(env, sharePageMatch[1]);
     }
     const shareBlobMatch = path.match(/^\/share\/([A-Za-z0-9_-]{1,64})\/blob$/);
     if (shareBlobMatch && req.method === "GET") {
-      const limited = await rateLimit(env.RL_SHARE_VIEW, clientIp(req));
+      const limited = await rateLimit(req, env.RL_SHARE_VIEW, "RL_SHARE_VIEW", clientIp(req));
       return limited ?? fetchShareBlob(env, ctx, shareBlobMatch[1]);
     }
 
@@ -465,7 +466,7 @@ export default {
     // rateLimit() fails open on a missing binding, so self-host and the test
     // runtime (no RL_* bindings at all) behave byte-identically to before.
     if (isDataPlane(path)) {
-      const limited = await rateLimit(env.RL_SYNC, auth.account);
+      const limited = await rateLimit(req, env.RL_SYNC, "RL_SYNC", auth.account);
       if (limited) return limited;
     }
 
@@ -479,22 +480,22 @@ export default {
 
     // --- billing (authed: identity = the bearer / Supabase JWT) ---
     if (path === "/stripe/checkout" && req.method === "POST") {
-      const limited = await rateLimit(env.RL_BILLING, auth.account);
+      const limited = await rateLimit(req, env.RL_BILLING, "RL_BILLING", auth.account);
       return limited ?? createCheckout(req, env, auth);
     }
     if (path === "/stripe/portal" && req.method === "POST") {
-      const limited = await rateLimit(env.RL_BILLING, auth.account);
+      const limited = await rateLimit(req, env.RL_BILLING, "RL_BILLING", auth.account);
       return limited ?? createPortal(req, env, auth);
     }
 
     // --- share links (create/revoke; viewing is public, above) ---
     if (path === "/share" && req.method === "POST") {
-      const limited = await rateLimit(env.RL_SHARE, auth.account);
+      const limited = await rateLimit(req, env.RL_SHARE, "RL_SHARE", auth.account);
       return limited ?? createShare(req, url, env, auth);
     }
     const shareMatch = path.match(/^\/share\/([A-Za-z0-9_-]{1,64})$/);
     if (shareMatch && req.method === "DELETE" && isShareId(shareMatch[1])) {
-      const limited = await rateLimit(env.RL_SHARE, auth.account);
+      const limited = await rateLimit(req, env.RL_SHARE, "RL_SHARE", auth.account);
       return limited ?? revokeShare(env, auth, shareMatch[1]);
     }
 
@@ -593,7 +594,7 @@ export default {
     // Per-account gate on the writes/claims (start/offer/claim); /pair/poll is a
     // cheap KV read left ungated so the client's poll loop isn't throttled.
     if (path === "/pair/start" || path === "/pair/offer" || path === "/pair/claim") {
-      const limited = await rateLimit(env.RL_PAIR, auth.account);
+      const limited = await rateLimit(req, env.RL_PAIR, "RL_PAIR", auth.account);
       if (limited) return limited;
     }
     if (path === "/pair/start" && req.method === "POST") {
@@ -639,7 +640,7 @@ export default {
 
     // --- device registry (docs/cloudflare/13 §7) ---
     if (path === "/account/devices" && req.method === "POST") {
-      const limited = await rateLimit(env.RL_DEVICE, auth.account);
+      const limited = await rateLimit(req, env.RL_DEVICE, "RL_DEVICE", auth.account);
       if (limited) return limited;
       let b: { device_id?: string; label?: string; platform?: string; app_version?: string };
       try {
@@ -692,7 +693,7 @@ export default {
     }
     const devMatch = path.match(/^\/account\/devices\/([A-Za-z0-9_-]{1,64})$/);
     if (devMatch && req.method === "PATCH") {
-      const limited = await rateLimit(env.RL_DEVICE, auth.account);
+      const limited = await rateLimit(req, env.RL_DEVICE, "RL_DEVICE", auth.account);
       if (limited) return limited;
       let b: { label?: string };
       try {
@@ -710,7 +711,7 @@ export default {
       return json({ ok: true });
     }
     if (devMatch && req.method === "DELETE") {
-      const limited = await rateLimit(env.RL_DEVICE, auth.account);
+      const limited = await rateLimit(req, env.RL_DEVICE, "RL_DEVICE", auth.account);
       if (limited) return limited;
       const removedAt = Math.floor(Date.now() / 1000);
       // Removing a device has to reach the IdP, because the refresh token still
@@ -782,11 +783,16 @@ export default {
       if (auth.supabase && auth.tokenIssuedAt !== undefined && nowS - auth.tokenIssuedAt > maxAgeS) {
         return err(403, "stale_token", "sign-in too old for account deletion; refresh and retry");
       }
-      const limited = await rateLimit(env.RL_ACCOUNT, auth.account);
+      const limited = await rateLimit(req, env.RL_ACCOUNT, "RL_ACCOUNT", auth.account);
       return limited ?? deleteAccount(env, auth);
     }
 
     return err(404, "not_found", `no route: ${req.method} ${path}`);
+}
+
+export default {
+  async fetch(req: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+    return withRateLimitHeaders(req, await route(req, env, ctx));
   },
 
   // Stripe billing queue consumer (only invoked when STRIPE_QUEUE is bound and a
