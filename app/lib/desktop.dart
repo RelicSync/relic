@@ -17,6 +17,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app_globals.dart';
+import 'data/help_urls.dart';
 import 'platform/app_activation.dart';
 import 'platform/app_install.dart';
 import 'platform/clipboard_bridge.dart';
@@ -563,6 +564,8 @@ class _RealAppState extends State<RealApp>
                 MenuItem(key: 'pause_10', label: 'For 10 minutes'),
                 MenuItem(key: 'pause_60', label: 'For 1 hour'),
                 MenuItem(key: 'pause_inf', label: 'Until I resume it'),
+                MenuItem.separator(),
+                MenuItem(key: 'pause_help', label: 'About pausing…'),
               ]),
             ),
           // The queue changes what a global chord does while being invisible
@@ -593,6 +596,7 @@ class _RealAppState extends State<RealApp>
           if (_lastUpdateNote.isNotEmpty)
             MenuItem(key: 'update_note', label: _lastUpdateNote, disabled: true),
           MenuItem.separator(),
+          MenuItem(key: 'help', label: 'Help…'),
           MenuItem(key: 'quit', label: 'Quit Relic'),
         ],
       ),
@@ -744,11 +748,18 @@ class _RealAppState extends State<RealApp>
       // Wayland refuses synthetic input to unprivileged apps outright; there
       // is no grant to ask for, so say so once and stop.
       _pasteGrantHintShown = true;
-      _notify(
-        'Copied — press Ctrl+V to paste',
-        'Wayland does not let apps paste for you. Log in with the "Ubuntu on '
+      final n = actionableNotification(
+        title: 'Copied, press Ctrl+V to paste',
+        body:
+            'Wayland does not let apps paste for you. Log in with the "Ubuntu on '
             'Xorg" session (or your desktop\'s X11 option) for one-click paste.',
+        actionLabel: 'Learn more',
+        onActivate: () => _openHelpPage('linux.wayland'),
+        isLinux: true,
       );
+      try {
+        n.show();
+      } catch (_) {}
     }
     return false;
   }
@@ -1332,6 +1343,14 @@ class _RealAppState extends State<RealApp>
   /// broken. Esc still closes; pin defeats blur only.
   bool _pinned = false;
 
+  /// A help page in the system browser, by the wiki's stable key.
+  Future<void> _openHelpPage(String key) async {
+    try {
+      await launchUrl(Uri.parse(helpUrl(key)),
+          mode: LaunchMode.externalApplication);
+    } catch (_) {}
+  }
+
   void _notify(String title, String body) {
     try {
       LocalNotification(title: title, body: body).show();
@@ -1745,6 +1764,10 @@ class _RealAppState extends State<RealApp>
         if (_pendingUpdate case final u?) await _runSelfUpdate(u);
       case 'update_note':
         break; // disabled status line
+      case 'help':
+        await _openHelpPage('tray.menu');
+      case 'pause_help':
+        await _openHelpPage('tray.pause');
       case 'quit':
         await trayManager.destroy();
         await windowManager.destroy();

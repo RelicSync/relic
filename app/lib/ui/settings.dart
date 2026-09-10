@@ -42,6 +42,7 @@ import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
 import 'connect_dialog.dart';
 import '../widgets/controls.dart';
+import '../widgets/learn_more.dart';
 import '../widgets/fields.dart';
 import '../widgets/passphrase_field.dart';
 import '../widgets/relic_mark.dart';
@@ -467,7 +468,7 @@ class _SettingsViewState extends State<SettingsView>
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _paneTitle(c, 'General'),
+            _paneTitle(c, 'General', help: 'settings.general'),
             _toggleRow(
               c,
               'Launch Relic at login',
@@ -549,7 +550,7 @@ class _SettingsViewState extends State<SettingsView>
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _paneTitle(c, 'Capture'),
+            _paneTitle(c, 'Capture', help: 'settings.capture'),
             _toggleRow(
               c,
               'Capture text',
@@ -621,7 +622,7 @@ class _SettingsViewState extends State<SettingsView>
       case 2:
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [_paneTitle(c, 'Search and AI'), _mlSection(c)],
+          children: [_paneTitle(c, 'Search and AI', help: 'settings.searchAi'), _mlSection(c)],
         );
       case 3:
         return _storagePane(c);
@@ -655,7 +656,7 @@ class _SettingsViewState extends State<SettingsView>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _paneTitle(c, 'Sync and account'),
+        _paneTitle(c, 'Sync and account', help: 'settings.sync'),
         if (ringFirst) _row(c, _billingActions(c, acct.tier)),
         _row(
           c,
@@ -1013,7 +1014,7 @@ class _SettingsViewState extends State<SettingsView>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _paneTitle(c, 'Vault and storage'),
+        _paneTitle(c, 'Vault and storage', help: 'settings.vault'),
         if (acct != null) ...[
           _storageUsage(c, acct),
           _row(
@@ -1737,6 +1738,8 @@ class _SettingsViewState extends State<SettingsView>
                       style: RelicTheme.sans(
                           size: 11.5, color: c.textMuted, height: 1.4),
                     ),
+                    const SizedBox(height: 4),
+                    const LearnMore('backup.setup'),
                   ],
                 ),
               ),
@@ -2117,7 +2120,7 @@ class _SettingsViewState extends State<SettingsView>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _paneTitle(c, 'About'),
+        _paneTitle(c, 'About', help: 'settings.about'),
         const SizedBox(height: 6),
         Row(
           children: [
@@ -2238,6 +2241,7 @@ class _SettingsViewState extends State<SettingsView>
           spacing: 18,
           runSpacing: 8,
           children: [
+            _accentLink(c, 'Help and FAQ', () => openHelp('help.faq')),
             _accentLink(c, 'Website',
                 () => _openUrl('https://relic.space')),
             _accentLink(c, 'Contact support',
@@ -3109,9 +3113,23 @@ class _SettingsViewState extends State<SettingsView>
 
   /// The pane's own title. Headline face: this is the biggest type on the
   /// screen and the thing that tells you which section you are looking at.
-  Widget _paneTitle(RelicColors c, String t) => Padding(
+  /// The pane's headline, with the help page for that pane at the far end:
+  /// every pane has one, so the link lives here and not on each row.
+  Widget _paneTitle(RelicColors c, String t, {String? help}) => Padding(
     padding: const EdgeInsets.fromLTRB(0, Insets.md, 0, Insets.sm),
-    child: Text(t, style: RelicTheme.headline(size: 22, color: c.text)),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Expanded(
+          child: Text(t, style: RelicTheme.headline(size: 22, color: c.text)),
+        ),
+        if (help != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: LearnMore(help),
+          ),
+      ],
+    ),
   );
 
   /// A group heading *inside* a pane — the system's small uppercase kicker,
@@ -3381,6 +3399,10 @@ class _SettingsViewState extends State<SettingsView>
             registerFailed: repo.failedHotkeys.contains('stackPop'),
           ),
         ],
+        const Padding(
+          padding: EdgeInsets.only(top: Insets.md),
+          child: LearnMore('hotkey.change', label: 'How to change a shortcut'),
+        ),
       ],
     );
   }
@@ -4136,6 +4158,11 @@ class _HotkeyRowState extends State<_HotkeyRow> {
                         : c.textMuted,
                   ),
                 ),
+                if (widget.registerFailed) ...[
+                  const SizedBox(height: 3),
+                  const LearnMore('hotkey.registerFailed',
+                      label: 'Why a shortcut is refused'),
+                ],
               ],
             ),
           ),

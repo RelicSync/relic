@@ -16,6 +16,7 @@ import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/brand.dart';
 import '../widgets/controls.dart';
+import '../widgets/learn_more.dart';
 import '../widgets/passphrase_field.dart';
 
 /// The desktop device-onboarding flow (docs/cloudflare/13-device-onboarding.md),
@@ -844,6 +845,11 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
               () => _go(_Step.pairCode)),
           _door(c, LucideIcons.keyRound, 'I lost my vault passphrase',
               'Use your recovery kit.', () => _go(_Step.recovery)),
+          const Padding(
+            padding: EdgeInsets.only(bottom: Insets.md),
+            child: LearnMore('fix.lostPassphrase',
+                label: 'What to do if you lost your passphrase'),
+          ),
           const SizedBox(height: Insets.xs),
           _back(() => _go(_viaOAuth ? _Step.welcome : _Step.signIn)),
         ]);

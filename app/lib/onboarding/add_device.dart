@@ -20,6 +20,7 @@ import '../services/onboarding_service.dart';
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/controls.dart';
+import '../widgets/learn_more.dart';
 import '../widgets/drill_shell.dart';
 import '../widgets/passphrase_field.dart';
 
@@ -249,6 +250,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
     final c = RelicTheme.of(context);
     return DrillShell(
       title: 'Add a device',
+      actions: const [LearnMore('sync.addDevice')],
       center: true,
       child: _body(c),
     );
@@ -552,6 +554,13 @@ class _RecoveryKitScreenState extends State<RecoveryKitScreen> {
     final c = RelicTheme.of(context);
     return DrillShell(
       title: 'Recovery kit',
+      // First run reads the first-run page; a later look at the kit reads
+      // the kit's own page.
+      actions: [
+        LearnMore(widget.requireDownload
+            ? 'onboarding.recoveryKit'
+            : 'privacy.recoveryKit'),
+      ],
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -925,6 +934,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
     final c = RelicTheme.of(context);
     return DrillShell(
       title: 'Security',
+      actions: const [LearnMore('privacy.recoveryKit')],
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
