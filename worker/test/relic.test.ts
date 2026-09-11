@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { deleteRelic, listRelics, putRelic } from "../src/index";
+import { deleteRelic, listRelics, listWaiting, putRelic } from "../src/index";
 import { blobR2Key } from "../src/blob";
 import { TIERS } from "../src/tiers";
 import { setupSchema } from "./helpers";
@@ -362,6 +362,28 @@ describe("putRelic — history ring GC (free, never-billed)", () => {
     expect(free).toContain("unew");
     // Same rows, paid tier: no ring, so the pull carries everything.
     expect(await pulledUids(PRO)).toContain("u1");
+  }, 60_000);
+
+  it("GET /waiting lists the held-back copies as date-only ghosts, newest first", async () => {
+    const ring = TIERS.free.ring;
+    await seedRing(ring);
+    await put(FREE, "unew", { created_at: 10_000, updated_at: 10_000 });
+    await put(FREE, "unew2", { created_at: 10_001, updated_at: 10_001 });
+    // u1 and u2 are the two oldest, so they are the two behind the ring.
+    const free = await (await listWaiting(E, FREE as never)).json<{
+      count: number;
+      items: { uid: string; created_at: number }[];
+    }>();
+    expect(free.count).toBe(2);
+    expect(free.items).toEqual([
+      { uid: "u2", created_at: 2 },
+      { uid: "u1", created_at: 1 },
+    ]);
+    // A ghost is a date and a uid, nothing else leaves the server.
+    expect(Object.keys(free.items[0]).sort()).toEqual(["created_at", "uid"]);
+    // No ring on a paid tier, so nothing is waiting there.
+    const pro = await (await listWaiting(E, PRO as never)).json<{ count: number; items: unknown[] }>();
+    expect(pro).toEqual({ count: 0, items: [] });
   }, 60_000);
 
   it("an image past the ring is deleted outright, blob and all", async () => {

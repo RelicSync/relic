@@ -201,6 +201,7 @@ A small Worker is the front door; clients use the `http` backend pointed at it. 
 - `GET /relics?cursor=&limit=` — newest-first encrypted relics, paginated by `updated_at`.
 - `DELETE /relic/:uid` — delete relic + blob, write tombstone.
 - `GET /tombstones?since=` — deletions for incremental sync.
+- `GET /waiting` — the copies the free history ring is holding back, as uid and date only (see api.md).
 - `POST /blob` — store an encrypted binary blob (photo/file), returns `key`.
 - `GET /blob/:key` — return an encrypted blob (edge-cached; free egress).
 - Layout in R2: `users/<account>/relics/<uid>` (encrypted relic envelopes) + `users/<account>/blob/<uuid>` (encrypted payloads) + `users/<account>/tombstones/<uid>`.

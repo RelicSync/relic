@@ -133,8 +133,8 @@ const isSyncWrite = (method: string, path: string): boolean =>
 // deliberately absent: the DO's own MAX_SOCKETS cap governs that, and a
 // long-lived upgrade is not a request-rate problem.
 const isDataPlane = (path: string): boolean =>
-  path === "/relics" || path === "/tombstones" || path === "/keyparams" ||
-  path === "/ai" || path.startsWith("/relic/") || path.startsWith("/blob") ||
+  path === "/relics" || path === "/tombstones" || path === "/waiting" ||
+  path === "/keyparams" || path === "/ai" || path.startsWith("/relic/") || path.startsWith("/blob") ||
   path.startsWith("/ai/");
 
 function syncWriteGate(env: Env, auth: Auth, method: string, path: string): Response | null {
@@ -365,6 +365,28 @@ export async function putRelic(req: Request, env: Env, auth: Auth, uid: string, 
   return json({ stale: false });
 }
 
+/// The copies the free ring is holding back, as uid and original copy time
+/// only. A client draws them as greyed placeholders, so the person can see what
+/// an upgrade brings back instead of reading a number on a strip. No content,
+/// no size, no kind: a ghost is a date, nothing more. Paid tiers have no ring,
+/// so they always get an empty list, and `count` mirrors `evicted_count` on
+/// GET /account so the two can never disagree about how many are waiting.
+const WAITING_LIMIT = 500;
+
+export async function listWaiting(env: Env, auth: Auth): Promise<Response> {
+  if (TIERS[auth.tier].ring === null) return json({ count: 0, items: [] });
+  const usage = await readUsage(env, auth.account);
+  const rows = await env.DB.prepare(
+    `SELECT uid, created_at FROM relic_meta
+      WHERE account_id = ?1 AND promoted = 0 AND evicted = 1
+      ORDER BY created_at DESC LIMIT ?2`,
+  ).bind(auth.account, WAITING_LIMIT).all<{ uid: string; created_at: number }>();
+  return json({
+    count: usage.evicted,
+    items: rows.results.map((r) => ({ uid: r.uid, created_at: r.created_at })),
+  });
+}
+
 export async function listRelics(url: URL, env: Env, auth: Auth): Promise<Response> {
   const since = Number(url.searchParams.get("since") ?? 0);
   const limit = clampLimit(url.searchParams.get("limit"));
@@ -546,6 +568,7 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
       ).bind(auth.account, since).all<{ uid: string; deleted_at: number }>();
       return json({ items: rows.results.map((t) => ({ v: 1, uid: t.uid, deleted_at: t.deleted_at })) });
     }
+    if (path === "/waiting" && req.method === "GET") return listWaiting(env, auth);
 
     // --- blobs ---
     if (path === "/blob" && req.method === "POST") {

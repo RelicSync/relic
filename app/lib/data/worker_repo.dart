@@ -448,6 +448,7 @@ class WorkerRepo implements RelicRepo {
 
   SyncState _sync = const SyncState(SyncKind.offline);
   AccountInfo? _account;
+  List<WaitingCopy> _waiting = const [];
   SyncSocket? _syncSocket; // live-sync doorbell (foreground); null until first pull
 
   /// True while the doorbell socket is connected. The mobile poll widens when
@@ -861,6 +862,15 @@ class WorkerRepo implements RelicRepo {
   SyncState get sync => _sync;
   @override
   AccountInfo? get account => _account;
+  @override
+  List<WaitingCopy> get waiting => _waiting;
+  // Desktop-only education; a phone never shows either.
+  @override
+  bool get keepHintShown => true;
+  @override
+  Future<void> markKeepHintShown() async {}
+  @override
+  String? get keepHotkeyLabel => null;
 
   // --- key -----------------------------------------------------------------
 
@@ -1169,6 +1179,28 @@ class WorkerRepo implements RelicRepo {
           );
         }
       } catch (_) {}
+      // The copies behind the free ring, as dates only. Only asked for when
+      // the account says something is waiting; a failed fetch keeps the last
+      // list rather than flickering the ghost rows away.
+      if ((_account?.evictedCount ?? 0) == 0) {
+        _waiting = const [];
+      } else {
+        try {
+          final w = await http
+              .get(Uri.parse(_u('/waiting')), headers: _headers)
+              .timeout(kNetTimeout);
+          if (w.statusCode == 200) {
+            final j = jsonDecode(w.body) as Map<String, dynamic>;
+            _waiting = [
+              for (final it in (j['items'] as List? ?? const []))
+                WaitingCopy(
+                  uid: (it as Map<String, dynamic>)['uid'] as String,
+                  createdAt: (it['created_at'] as num).toInt(),
+                ),
+            ];
+          }
+        } catch (_) {}
+      }
 
       // relics changed since the cursor
       var changed = false;

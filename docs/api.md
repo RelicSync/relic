@@ -106,6 +106,14 @@ Tombstones are GC'd after **90 days** (`worker/src/sweep.ts`): a device
 offline longer than that can resurrect a deleted relic on reconnect —
 accepted trade for a bounded table.
 
+### `GET /waiting`
+→ `200 { "count": n, "items": [ { "uid": "...", "created_at": ... } ] }`.
+The copies the free history ring is holding back: `count` is the account's
+`evicted_count`, and `items` is up to 500 of them, newest first, as uid and
+original copy time only. No content, no size, no kind. A client draws them as
+greyed placeholders so the person can see what an upgrade brings back. Always
+`{ "count": 0, "items": [] }` on pro and max.
+
 ### `POST /blob?id=<blob-id>`
 Body: raw encrypted bytes (`nonce ‖ ct`). `id` is client-generated
 (`[A-Za-z0-9-]{8,64}`) because the AEAD's AAD binds it before upload.
@@ -247,7 +255,7 @@ test keeps equal to `worker/wrangler.example.toml`):
 |---|---|---|
 | `public` | /health, /stripe/plans | 30 per minute per IP |
 | `share-view` | /s/:id, /share/:id/blob | 30 per minute per IP |
-| `sync` | the data plane: /keyparams, /relics, /relic/:uid, /tombstones, /blob*, /ai* | 900 per minute per account |
+| `sync` | the data plane: /keyparams, /relics, /relic/:uid, /tombstones, /waiting, /blob*, /ai* | 900 per minute per account |
 | `billing` | /stripe/checkout, /stripe/portal | 12 per minute per account |
 | `share` | creating and revoking shares | 10 per minute per account |
 | `pair` | /pair/* | 40 per minute per account |

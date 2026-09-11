@@ -338,6 +338,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   int _lastSyncAt = 0; // epoch s of the last successful pull; 0 = never
   String? _syncScope;
   AccountInfo? _remoteAccount;
+  List<WaitingCopy> _waiting = const [];
   @override
   bool get syncEnabled => _mk != null;
 
@@ -718,6 +719,19 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     _trayHintShown = true;
     _savePrefs();
   }
+
+  /// One-time "nothing kept yet" hint, shown once the list is long enough.
+  bool _keepHintShown = false;
+  @override
+  bool get keepHintShown => _keepHintShown;
+  @override
+  Future<void> markKeepHintShown() async {
+    _keepHintShown = true;
+    _savePrefs();
+  }
+
+  @override
+  String? get keepHotkeyLabel => _hkPromote.display;
 
   Appearance get appearance => _appearance;
   bool get launchAtLogin => _launchAtLogin;
@@ -1623,6 +1637,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _vaultAnimation = j['vault_animation'] as bool? ?? true;
         _coachSeen = j['coach_seen'] as bool? ?? false;
         _trayHintShown = j['tray_hint_shown'] as bool? ?? false;
+        _keepHintShown = j['keep_hint_shown'] as bool? ?? false;
         _demoNudgeShown = j['demo_nudge_dismissed'] as bool? ?? false;
         _captureText = j['capture_text'] as bool? ?? true;
         _captureImages = j['capture_images'] as bool? ?? true;
@@ -1726,6 +1741,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           'vault_animation': _vaultAnimation,
           'coach_seen': _coachSeen,
           'tray_hint_shown': _trayHintShown,
+          'keep_hint_shown': _keepHintShown,
           'demo_nudge_dismissed': _demoNudgeShown,
           'capture_text': _captureText,
           'capture_images': _captureImages,
@@ -6247,12 +6263,61 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         );
       }
     } catch (_) {}
+    await _fetchWaiting();
   }
 
+  /// The copies behind the free ring, as dates only. Asked for only when the
+  /// account says something is waiting, so a paid plan or an older server
+  /// costs nothing here. A failed fetch keeps the last list rather than
+  /// flickering the ghost rows away.
+  Future<void> _fetchWaiting() async {
+    if ((_remoteAccount?.evictedCount ?? 0) == 0) {
+      _waiting = const [];
+      return;
+    }
+    try {
+      final r = await http
+          .get(Uri.parse(_u('/waiting')), headers: _h)
+          .timeout(kNetTimeout);
+      if (r.statusCode != 200) return;
+      final j = jsonDecode(r.body) as Map<String, dynamic>;
+      _waiting = [
+        for (final w in (j['items'] as List? ?? const []))
+          WaitingCopy(
+            uid: (w as Map<String, dynamic>)['uid'] as String,
+            createdAt: (w['created_at'] as num).toInt(),
+          ),
+      ];
+    } catch (_) {}
+  }
+
+  @override
+  List<WaitingCopy> get waiting => _waiting;
+
   // --- billing (Upgrade / Manage), backed by the Worker /stripe/* routes ---
+  List<BillingPlan>? _plansCache;
+  DateTime _plansAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Cached for six hours once the server answers, one minute when it does
+  /// not. The popup asks on every open now that the strip names the price, and
+  /// the plans route is per-IP rate limited.
   @override
   Future<List<BillingPlan>> billingPlans() async {
     if (_syncUrl == null) return const [];
+    final cached = _plansCache;
+    if (cached != null) {
+      final ttl = cached.isEmpty
+          ? const Duration(minutes: 1)
+          : const Duration(hours: 6);
+      if (DateTime.now().difference(_plansAt) < ttl) return cached;
+    }
+    final plans = await _loadPlans();
+    _plansCache = plans;
+    _plansAt = DateTime.now();
+    return plans;
+  }
+
+  Future<List<BillingPlan>> _loadPlans() async {
     try {
       final r = await http.get(Uri.parse(_u('/stripe/plans')), headers: _h);
       if (r.statusCode != 200) return const [];

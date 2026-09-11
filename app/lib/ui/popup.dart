@@ -196,6 +196,7 @@ class _PopupViewState extends State<PopupView> {
   final _kCompose = GlobalKey();
   final _kSettings = GlobalKey();
   final _kList = GlobalKey();
+  final _kScope = GlobalKey();
   bool _showCoach = false;
   Scope _scope = Scope.all;
   SortMode _sort = SortMode.relevance;
@@ -250,6 +251,15 @@ class _PopupViewState extends State<PopupView> {
   /// desktop popup). It lives in State only, so it comes back on every launch.
   /// There is no way to dismiss it while copies are waiting.
   bool? _ringStripCollapsed;
+
+  /// The plan an Upgrade would buy, so the strip and the footer can name the
+  /// price. Asked for once per popup, only while there is something to sell
+  /// (an [onUpgrade] host and a repo that talks to billing); the repo caches
+  /// the answer. Null until it lands, and the sentences do without it.
+  BillingPlan? _proPlan;
+
+  /// "$7 a month", or null when the price is not known yet.
+  String? get _price => _proPlan?.priceSentence;
 
   /// The live "Deleted" undo toast and its restore action, set on delete and
   /// cleared when the toast leaves the queue. Drives Ctrl/Cmd+Z — undo works
@@ -346,6 +356,7 @@ class _PopupViewState extends State<PopupView> {
     widget.repo.changes.addListener(_onChange);
     _toasts.addListener(_onChange);
     _scroll.addListener(_onScroll);
+    _loadProPlan();
     // One-time housekeeping: clear stale "open in default app" temp files.
     if (!_prunedViewCache) {
       _prunedViewCache = true;
@@ -368,6 +379,7 @@ class _PopupViewState extends State<PopupView> {
       _applyQuery();
       _recomputeCollections();
       _maybeShowCoach();
+      _maybeShowKeepHint();
       // Cold-start save & annotate: the request arrived with the first build.
       if (widget.annotate != null) _openAnnotate(widget.annotate!);
     });
@@ -492,12 +504,39 @@ class _PopupViewState extends State<PopupView> {
               'Open any item to edit its tags and description. Relic auto-tags, but a quick tweak makes it far easier to find later.',
         ),
         CoachStep(
+          targetKey: _kScope,
+          title: 'Keep what matters',
+          body:
+              'Copies come and go. Keep one and it stays forever, on every device: select a row and click the gem, or press ${Platform.isMacOS ? '⌘' : 'Ctrl+'}K. Vault shows only what you kept.',
+        ),
+        CoachStep(
           targetKey: _kSettings,
           title: 'Hotkeys and settings',
           body:
               'Set the global hotkey to summon Relic from anywhere, plus capture preferences and more, in Settings.',
         ),
       ];
+
+  /// One toast, once per install, for the person who has copied plenty and
+  /// kept nothing: the gem never says its own name, so somebody has to. Waits
+  /// for the coach marks to be over so the two never stack, and for a list
+  /// long enough that "keep" has something to apply to.
+  void _maybeShowKeepHint() {
+    if (Platform.isAndroid || Platform.isIOS) return;
+    final repo = widget.repo;
+    if (repo.keepHintShown || !repo.coachMarksSeen) return;
+    if ((repo.account?.vaultCount ?? 1) != 0) return;
+    if (repo.all.length < 20) return;
+    repo.markKeepHintShown();
+    _toasts.show(ToastMsg(
+      'Nothing kept yet. Select a row and click the gem to keep it forever.',
+      severity: ToastSeverity.accent,
+      icon: LucideIcons.gem,
+      action: 'Learn more',
+      onAction: () => openHelp('keep.vault'),
+      duration: const Duration(seconds: 8),
+    ));
+  }
 
   /// Slim persistent nudge shown while the vault isn't synced (demo / local-only).
   Widget _connectBanner(RelicColors c) => GestureDetector(
@@ -639,11 +678,31 @@ class _PopupViewState extends State<PopupView> {
   /// The free history ring, said out loud. Nearly full is one warning line;
   /// full names how many copies are waiting behind the plan. The chevron folds
   /// it to a short line for this session. It cannot be dismissed.
+  /// Fetch the plan the ring surfaces sell, so they can say what it costs.
+  /// Nothing to do without an upgrade host (a store-safe build) or a repo with
+  /// no billing (local-only, self-hosted). Failure leaves the price out.
+  void _loadProPlan() {
+    if (widget.onUpgrade == null || widget.repo is! BillingRepo) return;
+    final billing = widget.repo as BillingRepo;
+    unawaited(billing.billingPlans().then((plans) {
+      if (!mounted || plans.isEmpty) return;
+      final pick = plans.firstWhere(
+        (p) => p.tier == 'pro' && p.interval == 'month',
+        orElse: () => plans.firstWhere(
+          (p) => p.tier == 'pro',
+          orElse: () => plans.first,
+        ),
+      );
+      setState(() => _proPlan = pick);
+    }).catchError((_) {}));
+  }
+
   Widget _historyStrip(RelicColors c, AccountInfo a, {required bool mini}) {
     final mob = RelicTheme.isMobileOf(context);
     final n = a.evictedCount;
     final cap = a.historyCap;
     final capped = a.ringCapped;
+    final price = _price;
     // Only the full state has a short line to fold down to, so it is the only
     // one with a chevron. The mini picker and phones start folded: one is all
     // list, the other has no room to spare.
@@ -657,6 +716,14 @@ class _PopupViewState extends State<PopupView> {
           'stop showing.';
     } else if (collapsed) {
       text = n == 1 ? '1 older copy waiting' : '$n older copies waiting';
+    } else if (price != null) {
+      // The price is the one thing a person needs to decide, so once it is
+      // known it takes the second sentence.
+      text = n == 1
+          ? '1 older copy is waiting for you. Pro keeps every copy for '
+                '$price.'
+          : '$n older copies are waiting for you. Pro keeps every copy for '
+                '$price.';
     } else {
       text = n == 1
           ? '1 older copy is waiting for you. The free plan shows your '
@@ -712,9 +779,25 @@ class _PopupViewState extends State<PopupView> {
   }
 
   /// The last row of a full result list when copies are waiting: the end of
-  /// what the free plan will show, and what is behind it.
-  Widget _ringFooter(RelicColors c, int n) {
+  /// what the free plan will show, and what is behind it. [inRange] is the
+  /// date-search case, where [n] counts only the copies from that time.
+  Widget _ringFooter(RelicColors c, int n, {bool inRange = false}) {
     final mob = RelicTheme.isMobileOf(context);
+    final price = _price;
+    final String text;
+    if (inRange) {
+      text = n == 1
+          ? '1 copy from that time is waiting.'
+          : '$n copies from that time are waiting.';
+    } else if (price != null) {
+      text = n == 1
+          ? '1 more is waiting. Pro brings it back for $price.'
+          : '$n more are waiting. Pro brings them back for $price.';
+    } else {
+      text = n == 1
+          ? 'End of your free history. 1 more is waiting.'
+          : 'End of your free history. $n more are waiting.';
+    }
     return Padding(
       padding: EdgeInsets.fromLTRB(
           Insets.sm, Insets.sm, Insets.sm, mob ? Insets.xxl : Insets.md),
@@ -729,9 +812,7 @@ class _PopupViewState extends State<PopupView> {
               children: [
                 Flexible(
                   child: Text(
-                    n == 1
-                        ? 'End of your free history. 1 more is waiting.'
-                        : 'End of your free history. $n more are waiting.',
+                    text,
                     // Ellipsis with no line limit draws one line. A phone
                     // needs two for the sentence to fit beside the button.
                     maxLines: mob ? 2 : 1,
@@ -750,6 +831,71 @@ class _PopupViewState extends State<PopupView> {
                   ),
                 ),
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// One copy the free plan is holding back, drawn where it would sit in the
+  /// list: a date and nothing else, greyed, because that is all the server
+  /// sends for it. Tapping it starts an upgrade, which is what brings it back.
+  Widget _ghostRow(RelicColors c, WaitingCopy w, int nowSecs) {
+    final mob = RelicTheme.isMobileOf(context);
+    final age = nowSecs - w.createdAt;
+    final when = age < 3 * 86400
+        ? '${relativeAge(w.createdAt, nowSecs)} ago'
+        : formatCaptureDate(w.createdAt);
+    return Semantics(
+      button: true,
+      label: 'A copy from $when, waiting behind the free plan',
+      child: GestureDetector(
+        onTap: () => widget.onUpgrade?.call('ring_ghost'),
+        behavior: HitTestBehavior.opaque,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: SizedBox(
+            height: mob ? 52 : 44,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(children: [
+                Container(
+                  width: 22,
+                  height: 22,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(Radii.tag),
+                    border: Border.all(color: c.border, width: 1),
+                  ),
+                  alignment: Alignment.center,
+                  child: Icon(LucideIcons.history,
+                      size: 12, color: c.textFaintest),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'A copy from $when',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: RelicTheme.sans(
+                            size: mob ? 13 : 12.5, color: c.textFaint),
+                      ),
+                      const SizedBox(height: 1),
+                      Text(
+                        'Waiting behind the free plan',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: RelicTheme.mono(
+                            size: 10.5, color: c.textFaintest),
+                      ),
+                    ],
+                  ),
+                ),
+              ]),
             ),
           ),
         ),
@@ -918,6 +1064,15 @@ class _PopupViewState extends State<PopupView> {
   /// The active date range: a manual pick wins, else one parsed from the box.
   DateRange? get _effectiveRange =>
       _manualRange ?? (_parsed?.hasRange == true ? _parsed!.range : null);
+
+  /// The waiting copies made inside [range], newest first. The same half-open
+  /// `[after, before)` rule the search itself applies to `createdAt`.
+  List<WaitingCopy> _waitingIn(DateRange range) => [
+        for (final w in widget.repo.waiting)
+          if ((range.after == null || w.createdAt >= range.after!) &&
+              (range.before == null || w.createdAt < range.before!))
+            w,
+      ];
 
   /// True when anything is constraining the list (text, a tag, or a date range).
   bool get _searching =>
@@ -1863,6 +2018,16 @@ class _PopupViewState extends State<PopupView> {
                   close();
                   _edit(r);
                 }),
+            // Keep sits next to Edit because the menu is where a Windows user
+            // looks first, and the gem on the row never says its own name.
+            _MenuRow(
+                label: r.promoted ? 'Take out of the Vault' : 'Keep forever',
+                icon: LucideIcons.gem,
+                height: rowH,
+                onTap: () {
+                  close();
+                  _promote(r);
+                }),
             _MenuRow(
                 label: 'Share',
                 icon: LucideIcons.share2,
@@ -2370,7 +2535,11 @@ class _PopupViewState extends State<PopupView> {
             final showSortLabel = box.maxWidth >= 470;
             return Row(
               children: [
-                ScopeBar(scope: _scope, onChanged: _onScopeChanged, compact: true),
+                ScopeBar(
+                    key: _kScope,
+                    scope: _scope,
+                    onChanged: _onScopeChanged,
+                    compact: true),
                 const SizedBox(width: Insets.md),
                 Expanded(
                   child: (searching || present.isEmpty)
@@ -2672,6 +2841,17 @@ class _PopupViewState extends State<PopupView> {
       }
       return KeyEventResult.handled;
     }
+    // Ctrl/Cmd+K: keep the selected item, or take it back out. Enter copies
+    // and K keeps, so the two things a person does most from the keyboard
+    // sit on the two keys the cheatsheet names first.
+    if (e.logicalKey == LogicalKeyboardKey.keyK &&
+        (HardwareKeyboard.instance.isControlPressed ||
+            HardwareKeyboard.instance.isMetaPressed) &&
+        _dialog == null) {
+      final res = _results;
+      if (_selected < res.length) unawaited(_promote(res[_selected]));
+      return KeyEventResult.handled;
+    }
     // Ctrl/Cmd+F: put the caret in the search box with the existing query
     // selected, so the next keystroke replaces it. Type-to-search already
     // covers the empty case; this is the one every iPad keyboard user reaches
@@ -2825,10 +3005,34 @@ class _PopupViewState extends State<PopupView> {
     // list. Zero means no footer. The mini picker gets none: the strip above it
     // already says the same thing, in less room.
     final ringAcct = _ringAccount;
-    final ringFooter =
-        (!mini && ringAcct != null && ringAcct.ringCapped)
-            ? ringAcct.evictedCount
-            : 0;
+    final capped = !mini && ringAcct != null && ringAcct.ringCapped;
+    // The ghosts: the copies behind the plan, drawn as dated rows so the loss
+    // is something a person can see. Browsing shows the three newest above
+    // the footer. A date search shows the ones from that time instead, and
+    // the footer counts those. A text search shows none: the server keeps no
+    // words for them, so nothing could say whether they match.
+    final range = _effectiveRange;
+    final List<WaitingCopy> ghosts;
+    final int ringFooter;
+    var footerInRange = false;
+    if (!capped) {
+      ghosts = const [];
+      ringFooter = 0;
+    } else if (!searching) {
+      ghosts = widget.repo.waiting.take(3).toList();
+      ringFooter = ringAcct.evictedCount;
+    } else if (range != null) {
+      final inRange = _waitingIn(range);
+      ghosts = inRange.take(5).toList();
+      ringFooter = inRange.isEmpty ? ringAcct.evictedCount : inRange.length;
+      footerInRange = inRange.isNotEmpty;
+    } else {
+      ghosts = const [];
+      ringFooter = ringAcct.evictedCount;
+    }
+    // Only once the list has run out: ghosts sit after the last real row, and
+    // a page still to load is not the last row.
+    final ghostRows = widget.repo.hasMore ? const <WaitingCopy>[] : ghosts;
 
     return Focus(
       focusNode: _rootFocus,
@@ -2936,9 +3140,16 @@ class _PopupViewState extends State<PopupView> {
                                           : (_dateChipLabel ?? '')),
                                 evictedCount:
                                     widget.repo.account?.evictedCount ?? 0,
+                                waitingInRange:
+                                    range == null ? 0 : _waitingIn(range).length,
                                 onUpgrade: widget.onUpgrade,
                               )
-                            : (_showCoach ? _coachSampleTile(c) : const _Empty()))
+                            : _showCoach
+                                ? _coachSampleTile(c)
+                                : _scope == Scope.vault
+                                    ? _EmptyVault(
+                                        hotkey: widget.repo.keepHotkeyLabel)
+                                    : const _Empty())
                       : _maybeRefresh(
                           c,
                           ListView.builder(
@@ -2954,6 +3165,7 @@ class _PopupViewState extends State<PopupView> {
                             padding: const EdgeInsets.symmetric(horizontal: 12),
                             itemCount: results.length +
                                 (widget.repo.hasMore ? 1 : 0) +
+                                ghostRows.length +
                                 (ringFooter > 0 ? 1 : 0),
                             itemBuilder: (_, i) {
                               if (i >= results.length) {
@@ -2968,7 +3180,17 @@ class _PopupViewState extends State<PopupView> {
                                     },
                                   );
                                 }
-                                return _ringFooter(c, ringFooter);
+                                final g = i - results.length;
+                                if (g < ghostRows.length) {
+                                  return _ghostRow(
+                                    c,
+                                    ghostRows[g],
+                                    DateTime.now().millisecondsSinceEpoch ~/
+                                        1000,
+                                  );
+                                }
+                                return _ringFooter(c, ringFooter,
+                                    inRange: footerInRange);
                               }
                               final r = results[i];
                               final mob = RelicTheme.isMobileOf(context);
@@ -3212,6 +3434,88 @@ class _Empty extends StatelessWidget {
                 ],
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The Vault scope with nothing kept in it. The generic empty state says
+/// "copy anything and it lands here", which is the opposite of how the Vault
+/// fills, so this one says how to keep something instead. It is the one
+/// screen a person who has never kept anything is sure to reach.
+class _EmptyVault extends StatelessWidget {
+  /// The keep-the-last-thing hotkey as a person would read it ("Ctrl + Shift
+  /// + W"), or null where there is no such hotkey to name.
+  final String? hotkey;
+  const _EmptyVault({this.hotkey});
+  @override
+  Widget build(BuildContext context) {
+    final c = RelicTheme.of(context);
+    final mod = Platform.isMacOS ? '⌘' : 'Ctrl+';
+    final hk = hotkey;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(Insets.xxxl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 66,
+              height: 66,
+              decoration: BoxDecoration(
+                color: c.panel,
+                borderRadius: BorderRadius.circular(Radii.card),
+                border: Border.all(color: c.border, width: 1),
+                boxShadow: Shadows.card(c),
+              ),
+              alignment: Alignment.center,
+              child: RelicMark(size: 28, color: c.textFaintest, filled: false),
+            ),
+            const SizedBox(height: Insets.xl),
+            Text(
+              'Nothing kept yet',
+              style: RelicTheme.headline(size: 17, color: c.text),
+            ),
+            const SizedBox(height: Insets.sm),
+            SizedBox(
+              width: 260,
+              child: Text(
+                'Copies come and go. Keep one and it stays forever, on every '
+                'device. Select a row and click the gem, or press ${mod}K.',
+                textAlign: TextAlign.center,
+                style: RelicTheme.sans(
+                  size: 12.5,
+                  color: c.textMuted,
+                  height: 1.5,
+                ),
+              ),
+            ),
+            if (hk != null) ...[
+              const SizedBox(height: Insets.xxl),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: Insets.md, vertical: Insets.sm),
+                decoration: BoxDecoration(
+                  color: c.tagBg,
+                  borderRadius: BorderRadius.circular(Radii.pill),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(LucideIcons.keyboard, size: 13, color: c.tagText),
+                    const SizedBox(width: 7),
+                    Text(
+                      '$hk keeps the last thing you copied',
+                      style: RelicTheme.mono(size: 11, color: c.tagText),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: Insets.lg),
+            const LearnMore('keep.vault', label: 'How the Vault works'),
           ],
         ),
       ),
@@ -3506,6 +3810,7 @@ class _HelpSheet extends StatelessWidget {
     return [
       ('Up / Down', 'move selection'),
       ('Enter', 'copy the selected item'),
+      ('${mod}K', 'keep the selected item forever'),
       ('${mod}F', 'jump back to the search box'),
       (modClick, 'multi-select'),
       ('Shift+Click', 'select a range'),
@@ -3627,17 +3932,25 @@ class _NoMatches extends StatelessWidget {
   /// that just came up empty may well have been looking for one of them, which
   /// is the moment this whole thing exists for.
   final int evictedCount;
+
+  /// Of those, the ones made inside the date the search asked for. When the
+  /// search had a date and some are from then, the line says so, because a
+  /// specific miss is a much stronger reason than a general count.
+  final int waitingInRange;
   final Future<void> Function(String source)? onUpgrade;
   const _NoMatches({
     required this.query,
     this.evictedCount = 0,
+    this.waitingInRange = 0,
     this.onUpgrade,
   });
   @override
   Widget build(BuildContext context) {
     final c = RelicTheme.of(context);
+    // Scrolls rather than overflows: with the history strip and a date chip
+    // above it, a short window has less room than the ring line needs.
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(Insets.xxxl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -3685,11 +3998,17 @@ class _NoMatches extends StatelessWidget {
                       TextSpan(
                         children: [
                           TextSpan(
-                            text: evictedCount == 1
-                                ? '1 older copy is not searchable on the '
-                                    'free plan. '
-                                : '$evictedCount older copies are not '
-                                    'searchable on the free plan. ',
+                            text: waitingInRange > 0
+                                ? (waitingInRange == 1
+                                    ? '1 copy from that time is waiting '
+                                        'behind the free plan. '
+                                    : '$waitingInRange copies from that time '
+                                        'are waiting behind the free plan. ')
+                                : evictedCount == 1
+                                    ? '1 older copy is not searchable on the '
+                                        'free plan. '
+                                    : '$evictedCount older copies are not '
+                                        'searchable on the free plan. ',
                           ),
                           TextSpan(
                             text: 'Upgrade',
