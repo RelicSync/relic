@@ -19,6 +19,7 @@ import 'api.dart';
 import 'backup_file.dart';
 import 'crash_log.dart';
 import 'blob_upload.dart';
+import 'net.dart';
 import 'bundle.dart';
 import 'package:relic_crypto/relic_crypto.dart';
 import 'recovery.dart';
@@ -265,8 +266,69 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   bool _aiConverged = false; // the one-time publish of pre-existing AI titles
   Timer? _syncTimer;
   SyncSocket? _syncSocket; // live-sync doorbell; null until first connect
-  bool _online = false;
+  // "Online" is a verdict, not the fate of the last request. One failed
+  // request (a pull the server refused, a keep-alive the edge had already
+  // closed, an account fetch that hung) used to flip this false on the spot,
+  // and the chip read "Offline" until the next cycle undid it, up to 45
+  // seconds later with the doorbell up. The popup is hidden most of the time,
+  // so opening it was when the user caught that state: "Offline", then
+  // "Synced" a few seconds on. Now a failure starts a streak: the chip keeps
+  // its green dot for [offlineGrace], a quick retry probes the server after
+  // [retryDelay] (doubling up to [_retryMax] while it keeps failing), and any
+  // success ends the streak. Only a streak that outlives the grace reads as
+  // offline. The idle state before the first cycle is "synced" for the same
+  // reason: the app has not learned anything bad yet. Assigning [_online]
+  // records the fate of one request; the chip reads [_offlineForReal].
+  int? _offlineSinceMs; // start of the current failure streak; null = none
+  Timer? _offlineTimer; // repaints the chip when the grace runs out
+  Timer? _retryTimer; // the one quick retry a failure arms
+  Duration _retryIn = retryDelay;
+  static const _retryMax = Duration(seconds: 30);
+
+  /// How long a failure streak may run before the chip says "Offline".
+  @visibleForTesting
+  static Duration offlineGrace = const Duration(seconds: 15);
+
+  /// The first quick retry after a failed request; doubles per failure.
+  @visibleForTesting
+  static Duration retryDelay = const Duration(seconds: 3);
+
+  set _online(bool v) {
+    if (v) {
+      _clearFailureStreak();
+      return;
+    }
+    if (_mk == null || _syncUrl == null || _disposed) return; // disconnected
+    _offlineSinceMs ??= _nowMs;
+    _offlineTimer ??= Timer(offlineGrace, () {
+      _offlineTimer = null;
+      if (!_disposed) notifyListeners();
+    });
+    _retryTimer ??= Timer(_retryIn, () {
+      _retryTimer = null;
+      final next = _retryIn * 2;
+      _retryIn = next > _retryMax ? _retryMax : next;
+      if (_mk != null && !_disposed) unawaited(_syncCycle());
+    });
+  }
+
+  void _clearFailureStreak() {
+    _offlineSinceMs = null;
+    _offlineTimer?.cancel();
+    _offlineTimer = null;
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    _retryIn = retryDelay;
+  }
+
+  /// Whether the current failure streak has outlived the grace.
+  bool get _offlineForReal {
+    final since = _offlineSinceMs;
+    return since != null && _nowMs - since >= offlineGrace.inMilliseconds;
+  }
+
   bool _flushing = false;
+  bool _flushAgain = false; // a kick that arrived mid-flush; run once more
   bool _pulling = false;
   bool _manualSync = false; // a user-triggered syncNow() is in flight
   // Blob upload progress by relic uid (0..1) while a push is uploading its blob.
@@ -461,6 +523,16 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   /// queued ops stay observable instead of going to a network.
   @visibleForTesting
   void debugSetMasterKey(Uint8List? mk) => _mk = mk;
+
+  /// Test seam: bind sync to [url] with [mk] and no sign-in, poll timer or
+  /// socket, so a local fake server can watch the push and pull paths and
+  /// nothing but the code under test can move the queue.
+  @visibleForTesting
+  void debugBindSync(String url, Uint8List mk, {String token = 'test'}) {
+    _syncUrl = url.replaceAll(RegExp(r'/+$'), '');
+    _syncToken = token;
+    _mk = mk;
+  }
 
   /// For the QR-pairing + device-registry screens (shared with mobile): the
   /// unlocked master key to deliver, and the current Worker bearer token.
@@ -1700,10 +1772,20 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   // after the DB is closed — those check this flag instead.
   bool _disposed = false;
 
+  // A sync cycle the retry timer started can still be in flight when the
+  // host lets go of the repo (an account switch, a test); a late repaint on
+  // a disposed notifier is an assertion in debug builds.
+  @override
+  void notifyListeners() {
+    if (_disposed) return;
+    super.notifyListeners();
+  }
+
   @override
   void dispose() {
     _disposed = true;
     _syncTimer?.cancel();
+    _clearFailureStreak();
     _enrichTimer?.cancel();
     _secretClearTimer?.cancel();
     _backupTimer?.cancel();
@@ -2277,7 +2359,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     if (pending > 0) return SyncState(SyncKind.pending, pending: pending);
     final rejected = _db?.rejectionCount() ?? 0;
     if (rejected > 0) return SyncState(SyncKind.quotaFull, pending: rejected);
-    if (!_online) return const SyncState(SyncKind.offline);
+    if (_offlineForReal) return const SyncState(SyncKind.offline);
     // Copies waiting behind the free ring. Ranked last of the unhealthy states
     // because it is the only one nothing is actually wrong with.
     return ringSyncState(_remoteAccount) ?? const SyncState(SyncKind.synced);
@@ -4869,6 +4951,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     _mk = null;
     _remoteAccount = null;
     _online = false;
+    _clearFailureStreak();
     _supabaseMode = false;
     _selfHost = false;
     _refreshToken = null;
@@ -5105,10 +5188,19 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
 
   Future<void> _flushPending() async {
     final db = _db;
-    if (_flushing || db == null || _mk == null || _syncUrl == null) return;
+    if (db == null || _mk == null || _syncUrl == null) return;
+    if (_flushing) {
+      // A capture landed while a pass was draining. Dropping its kick left
+      // the new item "Syncing…" until the next poll, 45 seconds with the
+      // doorbell up. Run exactly one more pass after this one instead; a
+      // burst of kicks collapses into that same pass.
+      _flushAgain = true;
+      return;
+    }
     _flushing = true;
     var changed = false;
     var skipped = 0;
+    var stalled = false; // the server could not be reached; a retry is armed
     try {
       for (final p in db.pendingOps()) {
         final result = p.op == 'push'
@@ -5116,6 +5208,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
             : await _deleteRemote(p.uid, p.queuedAt);
         if (result.kind == _OutboundKind.retry) {
           _online = false;
+          stalled = true;
           break;
         }
         if (result.kind == _OutboundKind.skip) {
@@ -5134,6 +5227,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         db.clearOp(p.uid, p.op);
         changed = true;
       }
+      // Rows flip to "Synced" the moment their push lands, not once the AI
+      // records queued behind them have gone out too.
+      if (changed) notifyListeners();
       // Generated titles and tags this device owes its peers. Drained after the
       // relic queue on purpose: a record whose relic has not reached the server
       // yet is useless to the other devices, since they cannot apply it to a
@@ -5141,8 +5237,13 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       await _pushAiRecords();
     } finally {
       _flushing = false;
+      if (_flushAgain) {
+        _flushAgain = false;
+        // A stalled pass leaves the queue to the retry timer; running again
+        // now would only fail the same way.
+        if (!stalled) unawaited(_flushPending());
+      }
     }
-    if (changed) notifyListeners();
   }
 
   Future<_Outbound> _flushPush(String uid) async {
@@ -5217,11 +5318,13 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         'n': sealed['n'],
         'ct': sealed['ct'],
       };
-      final resp = await http.put(
-        Uri.parse(_u('/relic/${r.uid}')),
-        headers: {..._h, 'Content-Type': 'application/json'},
-        body: jsonEncode(env),
-      );
+      final resp = await http
+          .put(
+            Uri.parse(_u('/relic/${r.uid}')),
+            headers: {..._h, 'Content-Type': 'application/json'},
+            body: jsonEncode(env),
+          )
+          .timeout(_putTimeout);
       if (resp.statusCode >= 200 && resp.statusCode < 300) {
         _online = true;
         emailUnverified.value = false;
@@ -5254,12 +5357,14 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   Future<_Outbound> _deleteRemote(String uid, int deletedAt) async {
     if (_mk == null) return _retry;
     try {
-      final resp = await http.delete(
-        Uri.parse(
-          _u('/relic/$uid'),
-        ).replace(queryParameters: {'deleted_at': '$deletedAt'}),
-        headers: _h,
-      );
+      final resp = await http
+          .delete(
+            Uri.parse(
+              _u('/relic/$uid'),
+            ).replace(queryParameters: {'deleted_at': '$deletedAt'}),
+            headers: _h,
+          )
+          .timeout(kNetTimeout);
       if ((resp.statusCode >= 200 && resp.statusCode < 300) ||
           resp.statusCode == 404) {
         _online = true;
@@ -5277,6 +5382,14 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
 
   bool _permanentSyncStatus(int status) =>
       status == 400 || status == 402 || status == 409 || status == 413;
+
+  // Bounds on a single request. Without them a socket the edge had silently
+  // dropped sat in "Syncing…" for the OS's own connect timeout (about 20
+  // seconds on Windows) before the queue could notice and retry. A relic put
+  // carries up to a 256 KB rich flavor on top of the text; a page of 500
+  // envelopes is the largest read.
+  static const _putTimeout = Duration(seconds: 20);
+  static const _pageTimeout = Duration(seconds: 30);
 
   Future<void> _pullRemote() async {
     final db = _db;
@@ -5296,10 +5409,12 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           'limit': '500',
           'cursor': ?cursor,
         };
-        final resp = await http.get(
-          Uri.parse(_u('/relics')).replace(queryParameters: q),
-          headers: _h,
-        );
+        final resp = await http
+            .get(
+              Uri.parse(_u('/relics')).replace(queryParameters: q),
+              headers: _h,
+            )
+            .timeout(_pageTimeout);
         if (resp.statusCode != 200) {
           appendSyncLog(
             'pull /relics -> ${resp.statusCode} '
@@ -5327,12 +5442,14 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       } while (cursor != null);
       if (maxU - 1 > _cursor) _cursor = maxU - 1;
 
-      final tr = await http.get(
-        Uri.parse(
-          _u('/tombstones'),
-        ).replace(queryParameters: {'since': '$_tombCursor'}),
-        headers: _h,
-      );
+      final tr = await http
+          .get(
+            Uri.parse(
+              _u('/tombstones'),
+            ).replace(queryParameters: {'since': '$_tombCursor'}),
+            headers: _h,
+          )
+          .timeout(_pageTimeout);
       if (tr.statusCode == 200) {
         final items = (jsonDecode(tr.body)['items'] as List)
             .cast<Map<String, dynamic>>();
@@ -5952,18 +6069,20 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       try {
         final sealed =
             await RelicCrypto.sealAiPayload(_mk!, rec.uid, rec.toPayload());
-        final resp = await http.put(
-          Uri.parse(_u('/ai/${rec.uid}')),
-          headers: {..._h, 'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'v': 1,
-            'uid': rec.uid,
-            'ai_at': rec.at,
-            'level': rec.level,
-            'n': sealed['n'],
-            'ct': sealed['ct'],
-          }),
-        );
+        final resp = await http
+            .put(
+              Uri.parse(_u('/ai/${rec.uid}')),
+              headers: {..._h, 'Content-Type': 'application/json'},
+              body: jsonEncode({
+                'v': 1,
+                'uid': rec.uid,
+                'ai_at': rec.at,
+                'level': rec.level,
+                'n': sealed['n'],
+                'ct': sealed['ct'],
+              }),
+            )
+            .timeout(kNetTimeout);
         if (resp.statusCode >= 200 && resp.statusCode < 300) {
           // Settled either way: `stale: true` means a peer's result won, which
           // is an answer, not a failure. Retrying would loop forever.
@@ -5992,14 +6111,16 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       var maxAt = _aiCursor;
       String? cursor;
       do {
-        final resp = await http.get(
-          Uri.parse(_u('/ai')).replace(queryParameters: {
-            'since': '$_aiCursor',
-            'limit': '500',
-            'cursor': ?cursor,
-          }),
-          headers: _h,
-        );
+        final resp = await http
+            .get(
+              Uri.parse(_u('/ai')).replace(queryParameters: {
+                'since': '$_aiCursor',
+                'limit': '500',
+                'cursor': ?cursor,
+              }),
+              headers: _h,
+            )
+            .timeout(_pageTimeout);
         if (resp.statusCode != 200) return changed;
         final body = jsonDecode(resp.body) as Map<String, dynamic>;
         final items = (body['items'] as List).cast<Map<String, dynamic>>();
@@ -6106,7 +6227,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
 
   Future<void> _fetchAccount() async {
     try {
-      final a = await http.get(Uri.parse(_u('/account')), headers: _h);
+      final a = await http
+          .get(Uri.parse(_u('/account')), headers: _h)
+          .timeout(kNetTimeout);
       if (a.statusCode == 200) {
         final j = jsonDecode(a.body) as Map<String, dynamic>;
         _remoteAccount = AccountInfo(
