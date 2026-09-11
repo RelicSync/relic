@@ -28,11 +28,16 @@ jobs:
         working-directory: app
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
+      # The repo requires every action, nested ones included, to be pinned to
+      # a full commit sha, and subosito/flutter-action pulls actions/cache in
+      # by tag, which fails the job at setup. So Flutter comes straight from
+      # its own repo at the pinned stable version, the way its docs install it.
+      - name: Flutter ${{ env.FLUTTER_VERSION }}
+        shell: bash
+        run: |
+          git clone --depth 1 --branch "$FLUTTER_VERSION" \
+            https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
       - run: flutter config --enable-windows-desktop
       - run: flutter pub get
       - name: Build
@@ -64,11 +69,16 @@ jobs:
             libgtk-3-dev liblzma-dev libjsoncpp-dev libsecret-1-dev \
             libkeybinder-3.0-dev libayatana-appindicator3-dev libnotify-dev \
             libwebkit2gtk-4.1-dev
-      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
+      # The repo requires every action, nested ones included, to be pinned to
+      # a full commit sha, and subosito/flutter-action pulls actions/cache in
+      # by tag, which fails the job at setup. So Flutter comes straight from
+      # its own repo at the pinned stable version, the way its docs install it.
+      - name: Flutter ${{ env.FLUTTER_VERSION }}
+        shell: bash
+        run: |
+          git clone --depth 1 --branch "$FLUTTER_VERSION" \
+            https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
       - name: Build tarball + AppImage
         # Fetches the onnxruntime library and appimagetool itself; the sift
         # sidecar and the relic CLI are built from this checkout.
