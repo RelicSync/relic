@@ -764,7 +764,9 @@ class _ResultRowState extends State<ResultRow> {
         ),
         const SizedBox(width: 5),
         GhostButton(
-          // Relic gem — filled when in the vault, outline when not.
+          // Relic gem — filled when in the vault, outline when not. The
+          // tooltip is the only place the gem says what it does, and "keep"
+          // is the word the rest of the app uses for it.
           iconBuilder: (sz, fg) => RelicMark(
             size: sz,
             color: r.promoted ? c.accent : fg,
@@ -772,6 +774,7 @@ class _ResultRowState extends State<ResultRow> {
           ),
           size: 28,
           swallowTap: true,
+          tooltip: r.promoted ? 'Take out of the Vault' : 'Keep forever',
           onTap: widget.onPromoteToggle,
         ),
         if (r.isSecret) ...[
@@ -860,6 +863,7 @@ class _ResultRowState extends State<ResultRow> {
           ),
           size: 28,
           swallowTap: true,
+          tooltip: r.promoted ? 'Take out of the Vault' : 'Keep forever',
           onTap: widget.onPromoteToggle,
         ),
         if (widget._showOpen) ...[

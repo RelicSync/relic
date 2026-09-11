@@ -152,6 +152,22 @@ class BillingPlan {
   String get tierLabel =>
       tier.isEmpty ? tier : '${tier[0].toUpperCase()}${tier.substring(1)}';
 
+  /// The price as a person would say it: "$7 a month", "$60 a year". Null when
+  /// the amount is unknown, so a sentence can leave the price out rather than
+  /// print a blank.
+  String? get priceSentence {
+    final a = amount;
+    if (a == null) return null;
+    final whole = a / 100;
+    final price = a % 100 == 0 ? whole.toStringAsFixed(0) : whole.toStringAsFixed(2);
+    final per = interval == 'year'
+        ? ' a year'
+        : interval == 'month'
+            ? ' a month'
+            : '';
+    return '\$$price$per';
+  }
+
   /// e.g. "Pro · $4/mo" or "Max · $120/yr".
   String get label {
     final per = interval == 'year'
@@ -230,12 +246,26 @@ class _Inert implements Listenable {
   void removeListener(VoidCallback listener) {}
 }
 
+/// One copy the free history ring is holding back: when it was made, and
+/// nothing else. The server sends no content, size or kind for these, so the
+/// popup can draw a greyed row with a date and no more (`GET /waiting`).
+class WaitingCopy {
+  final String uid;
+  final int createdAt; // epoch seconds, when the copy was made
+  const WaitingCopy({required this.uid, required this.createdAt});
+}
+
 /// What the popup needs from a backend, independent of how it's implemented.
 abstract class RelicRepo {
   Future<void> load();
   List<Relic> get all;
   SyncState get sync;
   AccountInfo? get account;
+
+  /// The copies behind the free ring, newest first, or nothing at all: a paid
+  /// plan, a self-hosted server, a local-only vault and an older server all
+  /// land here as an empty list. Refreshed with [account] on every pull.
+  List<WaitingCopy> get waiting => const [];
 
   /// Fires whenever the stored items change underneath the UI: a pull landed, a
   /// delete arrived from another device, a desktop's analysis of an item
@@ -267,6 +297,15 @@ abstract class RelicRepo {
   /// override or leave as-is); LocalDeskRepo persists it.
   bool get coachMarksSeen => true;
   Future<void> markCoachMarksSeen() async {}
+
+  /// The one-time "nothing kept yet" hint (desktop). Same shape as the coach
+  /// marks: default true = never show; LocalDeskRepo persists it.
+  bool get keepHintShown => true;
+  Future<void> markKeepHintShown() async {}
+
+  /// The keep-the-last-thing hotkey as a person would read it ("Ctrl + Shift
+  /// + W"), for the screens that teach it. Null where there is no such hotkey.
+  String? get keepHotkeyLabel => null;
 
   /// Whether the vault is connected to cross-device sync. Default true so the
   /// desktop "sign in to sync" banner only shows where it's actually meaningful.
@@ -702,6 +741,14 @@ class MemoryRepo implements RelicRepo {
   bool get coachMarksSeen => true;
   @override
   Future<void> markCoachMarksSeen() async {}
+  @override
+  bool get keepHintShown => true;
+  @override
+  Future<void> markKeepHintShown() async {}
+  @override
+  String? get keepHotkeyLabel => null;
+  @override
+  List<WaitingCopy> get waiting => const [];
   @override
   bool get pasteStackOn => false;
   @override
