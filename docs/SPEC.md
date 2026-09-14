@@ -49,7 +49,7 @@ restates the enforced limits.
 | | Free | Pro ($7/mo or $60/yr) | Max ($12/mo or $96/yr) |
 |---|---|---|---|
 | Stream | rolling 500 items | unlimited, never expires | unlimited, never expires |
-| Vault (promoted) | 25 | unlimited | unlimited |
+| Vault (promoted) | 100 | unlimited | unlimited |
 | Storage quota | 250 MB | 25 GB | 250 GB |
 | Max relic size | 10 MB | 100 MB | 500 MB |
 | Devices | 3 | 10 | unlimited |
@@ -352,7 +352,7 @@ afternoon. The quota is a blob budget in everything but name.
 - Open protocol publication for third-party clients (max-trust path).
 
 ### Open questions (parked, not blocking)
-- Whether the free vault cap (25) is the right number.
+- Whether the free vault cap (100, raised from 25 on 2026-09-14) is the right number.
 - Whether free-tier stream expiry is count-based (500) or also time-based.
 - Mobile platform order for the lens.
 - Collections model details (flat vs nested; relic in multiple collections?).

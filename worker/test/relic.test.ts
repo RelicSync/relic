@@ -213,7 +213,7 @@ describe("putRelic — byte_size plausibility floor", () => {
 });
 
 describe("putRelic — vault cap", () => {
-  it("rejects promoting past the free vault cap (25)", async () => {
+  it("rejects promoting past the free vault cap (100)", async () => {
     for (let i = 0; i < TIERS.free.vault; i++) await seedMeta(`v${i}`, { promoted: true });
     const res = await put(FREE, "new", { promoted: true, updated_at: 2000 });
     expect(res.status).toBe(402);

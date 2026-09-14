@@ -293,7 +293,7 @@ sends none of these headers and never answers 429.
 | per-item size | 10 MB | 100 MB | 500 MB |
 | storage quota | 250 MB | 25 GB | 250 GB |
 | stream | prune unpromoted past 500 | unlimited | unlimited |
-| vault | 25 promoted | unlimited | unlimited |
+| vault | 100 promoted | unlimited | unlimited |
 | devices | 3 | 10 | unlimited |
 
 ## R2 layout
