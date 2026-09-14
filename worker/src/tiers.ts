@@ -12,7 +12,7 @@ export const GB = 1024 * MB;
 // `shareBytes` = max ciphertext size per share.
 export const TIERS = {
   free: {
-    item: 10 * MB, storage: 250 * MB, vault: 25, ring: 500, devices: 3,
+    item: 10 * MB, storage: 250 * MB, vault: 100, ring: 500, devices: 3,
     shares: 10, shareBytes: 5 * MB,
   },
   pro: {

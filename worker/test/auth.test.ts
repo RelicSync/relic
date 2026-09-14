@@ -151,7 +151,7 @@ describe("tiers", () => {
   });
 
   it("has the expected caps", () => {
-    expect(TIERS.free.vault).toBe(25);
+    expect(TIERS.free.vault).toBe(100);
     expect(TIERS.pro.vault).toBeNull();
     expect(TIERS.max.ring).toBeNull();
     expect(TIERS.free.storage).toBe(250 * 1024 * 1024);

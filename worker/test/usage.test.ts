@@ -229,23 +229,25 @@ describe("account_usage: the caps still bite", () => {
     await setupSchema(E.DB);
   });
 
-  // The three cases below each drive 25+ sequential writes through the real
-  // handler (R2 object + D1 batch apiece). Alone that is ~200ms, but test files
+  // The three cases below each drive 25 to 100 sequential writes through the
+  // real handler (R2 object + D1 batch apiece). Alone that is well under a
+  // second, but test files
   // run concurrently against one miniflare instance and one D1, so under a full
   // run they contend and can pass 30x that, enough to trip the 5s default and
   // fail on timing rather than on behaviour. Bounded explicitly here rather than
   // globally, because these are the only tests in the suite shaped this way.
-  const SLOW = 30_000;
+  const SLOW = 60_000;
 
-  it("free tier still refuses the 26th kept relic", async () => {
-    for (let i = 0; i < 25; i++) {
+  it("free tier still refuses the kept relic past the cap", async () => {
+    const cap = TIERS.free.vault;
+    for (let i = 0; i < cap; i++) {
       const r = await put(`u${i}`, 10, true);
       expect(await r.json()).toEqual({ stale: false });
     }
-    expect(await cached()).toEqual({ bytes_used: 250, vault_count: 25 });
-    const over = await put("u25", 10, true);
+    expect(await cached()).toEqual({ bytes_used: cap * 10, vault_count: cap });
+    const over = await put(`u${cap}`, 10, true);
     expect(over.status).toBe(402);
-    expect(await cached()).toEqual({ bytes_used: 250, vault_count: 25 }); // unchanged
+    expect(await cached()).toEqual({ bytes_used: cap * 10, vault_count: cap }); // unchanged
   }, SLOW);
 
   // free is 250 MB of storage in 10 MB items, so 25 unpromoted relics sit

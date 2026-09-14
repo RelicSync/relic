@@ -792,7 +792,7 @@ class MemoryRepo implements RelicRepo {
     usedBytes: 12897484,
     quotaBytes: 262144000,
     vaultCount: 8,
-    vaultCap: 25,
+    vaultCap: 100,
   );
 
   int get _now => DateTime.now().millisecondsSinceEpoch ~/ 1000;

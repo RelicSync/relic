@@ -802,7 +802,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     switch (account?.tier) {
       case 'Free':
         return const RetentionLimits(
-          vaultCount: 500,
+          vaultCount: 100,
           storageBytes: 250 * 1024 * 1024,
           ringMin: 500,
           ringMax: 500,
