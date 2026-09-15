@@ -13,6 +13,7 @@ import '../data/api.dart';
 import '../data/device_directory.dart';
 import '../models/relic.dart' show relativeAge;
 import '../data/pairing.dart';
+import '../data/pairing_link.dart';
 import '../platform/store_safe.dart';
 import '../data/recovery.dart';
 import '../data/save_prefs.dart';
@@ -126,11 +127,16 @@ class AddDeviceScreen extends StatefulWidget {
   /// screen mints a v2 QR *and* a typed pairing code (both account-bound); when
   /// null (legacy device-token repos) it falls back to today's v1-QR-only screen.
   final String? accountId;
+
+  /// The account email, when known. It rides in the pairing link so the phone
+  /// can preselect this identity at sign-in (`login_hint`). Optional.
+  final String? accountEmail;
   const AddDeviceScreen(
       {super.key,
       required this.masterKey,
       required this.bearer,
-      this.accountId});
+      this.accountId,
+      this.accountEmail});
 
   @override
   State<AddDeviceScreen> createState() => _AddDeviceScreenState();
@@ -145,6 +151,14 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
   String? _sas;
   String? _error;
   TrustedDevicePairing? _pairing;
+
+  /// How many times the screen has quietly minted a fresh code after the
+  /// previous one timed out unanswered. A code lives ~2 minutes (the relay
+  /// TTL). A phone that has to install Relic first takes longer than that, so
+  /// while this screen stays open it keeps a live code on display instead of
+  /// showing an error. Capped so an abandoned window stops polling the relay.
+  int _remints = 0;
+  static const int maxRemints = 7; // ~15 minutes of fresh codes
 
   @override
   void initState() {
@@ -162,7 +176,13 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
   /// Tear down whatever session is live and mint a fresh one. Backs the
   /// "Try again" on the error screen: the relay slots are single-use with a
   /// ~2-minute TTL, so recovery is always a brand-new QR/code, never a resume.
+  /// A manual retry also resets the quiet re-mint budget.
   void _restart() {
+    _remints = 0;
+    _remint();
+  }
+
+  void _remint() {
     _pairing?.cancel();
     setState(() {
       _pairing = null;
@@ -189,7 +209,14 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
       if (!mounted) return;
       setState(() {
         _pairing = trusted;
-        _qr = trusted.qr;
+        // Account mode: the QR is an https link a phone camera can open
+        // (docs/onboarding-funnel-2026-09.md, Workstream C). The payload rides
+        // in the fragment, so the server never sees the channel key. Legacy
+        // repos keep the bare string.
+        _qr = widget.accountId == null
+            ? trusted.qr
+            : PairingLink.build(trusted.qr,
+                issuedAt: DateTime.now(), email: widget.accountEmail);
         _code = widget.accountId == null ? null : trusted.code;
         _phase = _Phase.waiting;
       });
@@ -202,13 +229,19 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
     } on PairingCancelled {
       // The screen was disposed mid-handshake; nothing to show.
     } on PairingTimeout {
-      if (mounted) {
-        setState(() {
-          _error = 'No device connected in time. The code is only live for '
-              'about two minutes.';
-          _phase = _Phase.error;
-        });
+      if (!mounted) return;
+      // Nobody scanned in time. Keep a live code on screen (see [_remints])
+      // rather than making the person click Try again every two minutes.
+      if (_phase == _Phase.waiting && _remints < maxRemints) {
+        _remints++;
+        _remint();
+        return;
       }
+      setState(() {
+        _error = 'No device connected in time. The code is only live for '
+            'about two minutes.';
+        _phase = _Phase.error;
+      });
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -265,7 +298,11 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
           Text('Scan this with your other device',
               style: RelicTheme.headline(size: 17, color: c.text)),
           const SizedBox(height: Insets.sm),
-          Text('On the new device: open Relic, choose Add this device, then Scan a QR.',
+          Text(
+              widget.accountId == null
+                  ? 'On the new device: open Relic, choose Add this device, then Scan a QR.'
+                  : "Point your phone's camera at it and tap the link. "
+                      'If Relic is already on the phone, you can also scan it from inside Relic under Add this device.',
               textAlign: TextAlign.center,
               style: RelicTheme.sans(
                   size: 13, color: c.textSecondary, height: 1.5)),
@@ -328,7 +365,11 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
             ),
           ],
           const SizedBox(height: Insets.xxl),
-          Text('Waiting for the other device…',
+          Text(
+              widget.accountId == null
+                  ? 'Waiting for the other device…'
+                  : 'Waiting for the other device… The code refreshes itself while this window is open.',
+              textAlign: TextAlign.center,
               style: RelicTheme.sans(size: 12.5, color: c.textMuted)),
         ]);
       case _Phase.confirm:
