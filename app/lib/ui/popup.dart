@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
-import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/foundation.dart' show ValueListenable, visibleForTesting;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' show RefreshIndicator;
 import 'package:flutter/services.dart';
@@ -36,6 +36,57 @@ import 'toast.dart';
 /// row. The host sizes that window to its contents, so it has to be able to
 /// add this on ([RealApp] `_miniSize`).
 const double kHistoryStripHeight = 40;
+
+/// How many saved items it takes before the desktop offers to add a phone.
+/// One number, one place to change it.
+const int addPhoneNudgeThreshold = 20;
+
+/// The notice below is for a vault that is still new. Once this many items
+/// have been saved here, the person has settled in and it stays away.
+const int secondVaultNoticeMaxItems = 20;
+
+/// Whether to show the "you may have started a second vault" notice.
+///
+/// It fires for the person who signed up again on this computer instead of
+/// linking it to the vault they already have: the account is connected, this
+/// desktop is the only device on it, nothing in the list has ever come from
+/// anywhere else, and the list is still short. The last rule keeps it off the
+/// screen of someone who only ever uses one computer. [anyFromOtherDevice] is
+/// true when the caller cannot tell, so an unknown device label keeps the
+/// notice away.
+@visibleForTesting
+bool showSecondVaultNotice({
+  required bool connected,
+  required int? deviceCount,
+  required bool anyFromOtherDevice,
+  required int itemCount,
+  required bool dismissed,
+}) =>
+    connected &&
+    deviceCount == 1 &&
+    !anyFromOtherDevice &&
+    itemCount < secondVaultNoticeMaxItems &&
+    !dismissed;
+
+/// Whether to show the one-time "add your phone" nudge.
+///
+/// The person is on the desktop, they have saved a real amount, and this
+/// computer is still the only device on the account.
+@visibleForTesting
+bool showAddPhoneNudge({
+  required bool desktop,
+  required bool coachSeen,
+  required bool connected,
+  required int? deviceCount,
+  required int itemCount,
+  required bool shown,
+}) =>
+    desktop &&
+    coachSeen &&
+    connected &&
+    deviceCount == 1 &&
+    itemCount >= addPhoneNudgeThreshold &&
+    !shown;
 
 /// "2 days, 3 hours from now" — the two largest non-zero units of the gap
 /// between now and [remindAtMs], up to months. Used in the reminder-set toast.
@@ -153,6 +204,25 @@ class PopupView extends StatefulWidget {
   /// iOS gate, so there is no second store-safe check in here.
   final Future<void> Function(String source)? onUpgrade;
 
+  /// Desktop only: how many devices this account has, null while unknown. The
+  /// host owns it and fills it from the device registry, which can be offline,
+  /// so null is the normal starting value and every surface that reads it
+  /// stays quiet until a real number lands.
+  final ValueListenable<int?>? deviceCount;
+
+  /// Desktop only: open the pairing screen, so a phone can join this vault.
+  /// Null hides the "add your phone" nudge entirely.
+  final VoidCallback? onAddDevice;
+
+  /// Desktop only: the way out of a second vault. The host reopens onboarding
+  /// so the person can sign in with the account they already use elsewhere.
+  final VoidCallback? onJoinExistingVault;
+
+  /// Desktop only: the label this computer captures under (the host passes
+  /// `Platform.localHostname`). Lets the list tell "saved here" apart from
+  /// "arrived from another device". Null means we cannot tell.
+  final String? thisDeviceLabel;
+
   const PopupView({
     super.key,
     required this.repo,
@@ -175,6 +245,10 @@ class PopupView extends StatefulWidget {
     this.pausedUntil,
     this.onResumeCapture,
     this.onUpgrade,
+    this.deviceCount,
+    this.onAddDevice,
+    this.onJoinExistingVault,
+    this.thisDeviceLabel,
   });
 
   @override
@@ -350,6 +424,9 @@ class _PopupViewState extends State<PopupView> {
     widget.resetSignal?.addListener(_resetSearchState);
     widget.summonSignal?.addListener(_focusSearchOnSummon);
     widget.miniSignal?.addListener(_onChange);
+    // The device count lands from the network, so it is usually still null on
+    // the first frame. Retry the phone nudge when the real number turns up.
+    widget.deviceCount?.addListener(_onDeviceCount);
     // Repaint when the store changes under us. Both hosts already listen for
     // their own reasons, but the open editor is this widget's dialog and the
     // late-arriving analysis it needs to show belongs to this widget to notice.
@@ -379,7 +456,9 @@ class _PopupViewState extends State<PopupView> {
       _applyQuery();
       _recomputeCollections();
       _maybeShowCoach();
-      _maybeShowKeepHint();
+      // One nudge at a time: the phone nudge waits if the keep hint just went
+      // up, so the two never stack on the same summon.
+      if (!_maybeShowKeepHint()) _maybeShowAddPhoneNudge();
       // Cold-start save & annotate: the request arrived with the first build.
       if (widget.annotate != null) _openAnnotate(widget.annotate!);
     });
@@ -398,6 +477,10 @@ class _PopupViewState extends State<PopupView> {
     if (!identical(widget.summonSignal, old.summonSignal)) {
       old.summonSignal?.removeListener(_focusSearchOnSummon);
       widget.summonSignal?.addListener(_focusSearchOnSummon);
+    }
+    if (!identical(widget.deviceCount, old.deviceCount)) {
+      old.deviceCount?.removeListener(_onDeviceCount);
+      widget.deviceCount?.addListener(_onDeviceCount);
     }
     if (!identical(widget.repo, old.repo)) {
       old.repo.changes.removeListener(_onChange);
@@ -521,12 +604,14 @@ class _PopupViewState extends State<PopupView> {
   /// kept nothing: the gem never says its own name, so somebody has to. Waits
   /// for the coach marks to be over so the two never stack, and for a list
   /// long enough that "keep" has something to apply to.
-  void _maybeShowKeepHint() {
-    if (Platform.isAndroid || Platform.isIOS) return;
+  /// Returns true when the hint went up on this call, so the caller knows not
+  /// to stack another nudge on top of it.
+  bool _maybeShowKeepHint() {
+    if (Platform.isAndroid || Platform.isIOS) return false;
     final repo = widget.repo;
-    if (repo.keepHintShown || !repo.coachMarksSeen) return;
-    if ((repo.account?.vaultCount ?? 1) != 0) return;
-    if (repo.all.length < 20) return;
+    if (repo.keepHintShown || !repo.coachMarksSeen) return false;
+    if ((repo.account?.vaultCount ?? 1) != 0) return false;
+    if (repo.all.length < 20) return false;
     repo.markKeepHintShown();
     _toasts.show(ToastMsg(
       'Nothing kept yet. Select a row and click the gem to keep it forever.',
@@ -536,7 +621,109 @@ class _PopupViewState extends State<PopupView> {
       onAction: () => openHelp('keep.vault'),
       duration: const Duration(seconds: 8),
     ));
+    return true;
   }
+
+  /// One toast, once per install, for the person whose whole vault lives on
+  /// this one computer. They already use Relic every day, so the phone is the
+  /// next thing worth having, and it is one screen away.
+  void _maybeShowAddPhoneNudge() {
+    if (widget.onAddDevice == null) return;
+    final repo = widget.repo;
+    if (!showAddPhoneNudge(
+      desktop: !(Platform.isAndroid || Platform.isIOS),
+      coachSeen: repo.coachMarksSeen,
+      connected: repo.account != null,
+      deviceCount: widget.deviceCount?.value,
+      itemCount: repo.all.length,
+      shown: repo.addPhoneNudgeShown,
+    )) {
+      return;
+    }
+    repo.markAddPhoneNudgeShown();
+    _toasts.show(ToastMsg(
+      'Add your phone. Your vault travels with you.',
+      severity: ToastSeverity.accent,
+      icon: LucideIcons.smartphone,
+      action: 'Add a device',
+      onAction: () => widget.onAddDevice?.call(),
+      duration: const Duration(seconds: 8),
+    ));
+  }
+
+  /// The device count arrived (or changed). Repaint, because the second-vault
+  /// notice reads it, and give the phone nudge another go.
+  void _onDeviceCount() {
+    if (!mounted) return;
+    setState(() {});
+    _maybeShowAddPhoneNudge();
+  }
+
+  /// True when every item in the list was saved on this computer. A null
+  /// [PopupView.thisDeviceLabel] means we cannot tell, which counts as no.
+  bool get _allSavedHere {
+    final label = widget.thisDeviceLabel;
+    if (label == null) return false;
+    return widget.repo.all.every((r) => r.device == label);
+  }
+
+  void _dismissSecondVaultNotice() {
+    unawaited(widget.repo.markSecondVaultNoticeDismissed());
+    setState(() {});
+  }
+
+  /// Slim notice for the person who signed up again here instead of linking
+  /// this computer to the vault they already have. Nothing has ever arrived
+  /// from another device and this is the only device on the account, so an
+  /// empty-looking list is very likely a second vault.
+  Widget _secondVaultNotice(RelicColors c) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(
+            Insets.lg, Insets.sm, Insets.sm, Insets.sm),
+        decoration: BoxDecoration(
+          color: c.tagBg,
+          border: Border(bottom: BorderSide(color: c.border, width: 1)),
+        ),
+        child: Row(children: [
+          Icon(LucideIcons.link, size: 14, color: c.accent),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(
+              'Expecting things you saved on another device? '
+              'You may have started a second vault.',
+              style: RelicTheme.sans(size: 11.5, color: c.textSecondary),
+            ),
+          ),
+          const SizedBox(width: Insets.sm),
+          GestureDetector(
+            onTap: widget.onJoinExistingVault,
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                decoration: BoxDecoration(
+                  gradient: Gradients.gold,
+                  borderRadius: BorderRadius.circular(Radii.pill),
+                ),
+                child: Text('Link it',
+                    style: RelicTheme.sans(
+                        size: 11,
+                        weight: FontWeight.w600,
+                        color: c.onAccent)),
+              ),
+            ),
+          ),
+          const SizedBox(width: 2),
+          GhostIconButton(
+            icon: LucideIcons.x,
+            size: 24,
+            iconSize: 13,
+            tooltip: 'Hide this',
+            onTap: _dismissSecondVaultNotice,
+          ),
+        ]),
+      );
 
   /// Slim persistent nudge shown while the vault isn't synced (demo / local-only).
   Widget _connectBanner(RelicColors c) => GestureDetector(
@@ -973,6 +1160,7 @@ class _PopupViewState extends State<PopupView> {
     widget.resetSignal?.removeListener(_resetSearchState);
     widget.summonSignal?.removeListener(_focusSearchOnSummon);
     widget.miniSignal?.removeListener(_onChange);
+    widget.deviceCount?.removeListener(_onDeviceCount);
     widget.repo.changes.removeListener(_onChange);
     _toasts.removeListener(_onChange);
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
@@ -3093,6 +3281,23 @@ class _PopupViewState extends State<PopupView> {
                     widget.repo.syncEnabled &&
                     widget.repo.mergeOfferCount > 0)
                   _mergeOfferBanner(c),
+                // Desktop only, and never in the mini picker: the mini picker
+                // is one row tall and belongs to whatever you were typing in.
+                if (!mini &&
+                    !(Platform.isAndroid || Platform.isIOS) &&
+                    widget.deviceCount != null)
+                  ValueListenableBuilder<int?>(
+                    valueListenable: widget.deviceCount!,
+                    builder: (_, count, _) => showSecondVaultNotice(
+                      connected: widget.repo.account != null,
+                      deviceCount: count,
+                      anyFromOtherDevice: !_allSavedHere,
+                      itemCount: widget.repo.all.length,
+                      dismissed: widget.repo.secondVaultNoticeDismissed,
+                    )
+                        ? _secondVaultNotice(c)
+                        : const SizedBox.shrink(),
+                  ),
                 if (!mini && widget.capturePaused != null)
                   ValueListenableBuilder<bool>(
                     valueListenable: widget.capturePaused!,
