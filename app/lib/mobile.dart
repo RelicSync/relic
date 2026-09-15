@@ -17,6 +17,7 @@ import 'data/boot_trace.dart';
 import 'data/device_directory.dart';
 import 'data/help_urls.dart';
 import 'data/oauth_flow.dart';
+import 'data/pairing_link.dart';
 import 'data/repo.dart';
 import 'data/save_prefs.dart';
 import 'data/secure_key_store.dart';
@@ -30,6 +31,7 @@ import 'platform/store_safe.dart';
 import 'theme/relic_theme.dart';
 import 'theme/tokens.dart';
 import 'ui/dialogs.dart';
+import 'ui/phone_expectation.dart';
 import 'ui/popup.dart';
 import 'ui/quick_capture_tutorial.dart';
 import 'widgets/chrome.dart' show SyncKind;
@@ -81,9 +83,14 @@ class _Creds {
   static Future<bool> tutorialShown() async => (await _s.read(key: _kTut)) == '1';
   static Future<void> markTutorialShown() => _s.write(key: _kTut, value: '1');
 
-  static const _kPromo = 'relic.promo.addDeviceShown';
-  static Future<bool> promoShown() async => (await _s.read(key: _kPromo)) == '1';
-  static Future<void> markPromoShown() => _s.write(key: _kPromo, value: '1');
+  /// One-time flag for the "Relic on a phone works differently" screen. Kept
+  /// out of [clear] with the tutorial flag, for the same reason: it is about
+  /// the phone, not about the account signed in on it.
+  static const _kPhoneExpectation = 'phone_expectation_seen';
+  static Future<bool> phoneExpectationSeen() async =>
+      (await _s.read(key: _kPhoneExpectation)) == '1';
+  static Future<void> markPhoneExpectationSeen() =>
+      _s.write(key: _kPhoneExpectation, value: '1');
 
   // Fingerprints of recently captured shares, so a share intent Android
   // re-delivers on a later launch-from-recents isn't captured twice. See
@@ -225,6 +232,28 @@ class _Creds {
 /// How the app picks light vs dark.
 enum Appearance { system, dark, light }
 
+/// What a tapped pairing link should do on this phone.
+enum PairLinkAction {
+  /// Open onboarding on the link, so this phone joins that vault.
+  openOnboarding,
+
+  /// Say the phone already has a vault and leave it alone.
+  alreadyLinked,
+}
+
+/// A phone can only hold one vault at a time, so a pairing link is only ever
+/// acted on by a phone that has none. Joining from a phone that is already
+/// connected would swap the vault on screen for someone else's, which is
+/// never what tapping a link meant.
+@visibleForTesting
+PairLinkAction pairLinkAction({
+  required bool hasRepo,
+  required bool browseOnly,
+}) =>
+    hasRepo && !browseOnly
+        ? PairLinkAction.alreadyLinked
+        : PairLinkAction.openOnboarding;
+
 class MobileApp extends StatefulWidget {
   /// The persisted appearance ('system' | 'dark' | 'light'), resolved by
   /// [runMobileApp] before the first frame so boot paints the right theme.
@@ -314,6 +343,18 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   bool _browseOnly = false;
   bool _reconnectMode = false;
   bool _onboardAtSignIn = false;
+
+  /// OnboardingFlow.startReturning: open on the "I already use Relic on
+  /// another device" door. Set by the second-vault notice's Link it.
+  bool _onboardReturning = false;
+
+  /// A pairing link the OS handed us (`https://relic.space/pair#…` or
+  /// `relic://pair#…`). Held until onboarding connects or is dismissed.
+  PairingLink? _pairingLink;
+
+  /// How many devices are on this account, null while unknown. Feeds the
+  /// second-vault notice, which stays quiet until a real number lands.
+  final ValueNotifier<int?> _deviceCount = ValueNotifier(null);
   bool _emailBannerDismissed = false; // verify-to-sync banner, session-only
   final SecureKeyStore _keyStore = SecureKeyStore.forPlatform();
   // The bottom sheet must open from a context *below* MaterialApp's Navigator;
@@ -428,6 +469,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     _linkSub?.cancel();
     __repo?.changes.removeListener(_onRepoChanged);
     __repo?.sessionRevoked.removeListener(_onRepoChanged);
+    _deviceCount.dispose();
     super.dispose();
   }
 
@@ -670,10 +712,13 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   /// Shared post-connect setup: prefetch thumbs, flush queued shares, start the
   /// live refresh loop.
   void _onConnected(WorkerRepo repo) {
-    // Clear any onboarding-escape / reconnect state now that we're connected.
+    // Clear any onboarding-escape / reconnect / pairing state now that we're
+    // connected.
     _browseOnly = false;
     _reconnectMode = false;
     _onboardAtSignIn = false;
+    _onboardReturning = false;
+    _pairingLink = null;
     repo.deviceLabel = _deviceName; // apply device-local prefs to captures
     repo.autoVault = _autoVault;
     repo.maskSecrets = _maskSecrets;
@@ -692,59 +737,28 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     // straight after syncDelta, which is the first moment the token is valid.
     _startPolling();
     _flushPending();
-    _maybeShowTutorialOnce();
-    _maybePromo();
+    unawaited(_maybeShowFirstRunScreens());
+    // Both feed the second-vault notice, and both are quiet until they land:
+    // an unknown device count and an unread dismissal flag keep it hidden.
+    unawaited(_refreshDeviceCount(repo));
+    unawaited(repo.loadSecondVaultNoticePref().whenComplete(() {
+      if (mounted) setState(() {});
+    }));
   }
 
-  /// One-time, dismissible nudge to add another device (the "promotion journey").
-  bool _promo = false;
-  Future<void> _maybePromo() async {
-    if (await _Creds.promoShown()) return;
-    if (mounted) setState(() => _promo = true);
-  }
-
-  Widget _addDeviceBanner(RelicColors c) => Material(
-        color: c.surface,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 6, 8),
-          child: Row(
-            children: [
-              Icon(LucideIcons.qrCode, color: c.accent, size: 18),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text('Use Relic on your computer too. Add a device.',
-                    style: RelicTheme.sans(size: 12.5, color: c.text)),
-              ),
-              TextButton(
-                onPressed: () => _dismissPromo(open: true),
-                child: Text('Add',
-                    style: RelicTheme.sans(
-                        size: 13,
-                        color: c.accentMuted,
-                        weight: FontWeight.w600)),
-              ),
-              IconButton(
-                icon: Icon(LucideIcons.x, size: 16, color: c.textMuted),
-                onPressed: () => _dismissPromo(),
-              ),
-            ],
-          ),
-        ),
-      );
-
-  void _dismissPromo({bool open = false}) {
-    _Creds.markPromoShown();
-    setState(() => _promo = false);
-    final r = _repo;
-    final mk = r?.masterKey;
-    final c = _navKey.currentContext;
-    if (open && r != null && mk != null && c != null) {
-      Navigator.of(c).push(MaterialPageRoute(
-          builder: (_) => AddDeviceScreen(
-              masterKey: mk,
-              bearer: () async => r.token,
-              accountId: r.supabaseUserId)));
-    }
+  /// Ask the registry how many devices are on this account. Never throws, and
+  /// leaves the count as it was when the answer cannot be read, so an offline
+  /// moment does not make the notice flicker.
+  Future<void> _refreshDeviceCount(WorkerRepo repo) async {
+    if (repo.baseUrl.isEmpty) return;
+    try {
+      final list = await DeviceDirectory(
+        baseUrl: repo.baseUrl,
+        bearer: () async => repo.token,
+        deviceId: await DeviceId.get(),
+      ).listOrNull();
+      if (list != null) _deviceCount.value = list.length;
+    } catch (_) {/* offline or a server hiccup: keep the count we had */}
   }
 
   /// Read-only empty state (no repo): the "Not now" escape from onboarding and
@@ -845,6 +859,38 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
           ),
         ),
       );
+
+  /// The one-time first-connect run, in order: what a phone actually does,
+  /// then how to get things into it. The expectation screen goes first because
+  /// it is the frame the walkthrough hangs on.
+  Future<void> _maybeShowFirstRunScreens() async {
+    await _maybeShowPhoneExpectationOnce();
+    await _maybeShowTutorialOnce();
+  }
+
+  /// Say plainly, once, that a phone does not watch the clipboard. People who
+  /// only ever install the phone app wait for captures that can never come,
+  /// and give up inside a day. Stays reachable from the settings sheet.
+  Future<void> _maybeShowPhoneExpectationOnce() async {
+    if (await _Creds.phoneExpectationSeen()) return;
+    await _Creds.markPhoneExpectationSeen();
+    await Future.delayed(const Duration(milliseconds: 500)); // let the list settle
+    await _openPhoneExpectation();
+  }
+
+  Future<void> _openPhoneExpectation() async {
+    final ctx = _navKey.currentContext;
+    if (!mounted || ctx == null || !ctx.mounted) return;
+    await showPhoneExpectation(
+      ctx,
+      colors: _dark ? RelicColors.dark : RelicColors.light,
+      onSendDownloadLink: () async {
+        final r = _repo;
+        if (r == null) throw StateError('Connect first, then try again.');
+        await r.sendDownloadLink();
+      },
+    );
+  }
 
   /// Auto-open the quick-capture walkthrough the first time the user connects,
   /// and never again (it stays available from Settings → Set up quick capture).
@@ -1009,7 +1055,11 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
 
   /// Guided "switch account": same warning as disconnect, but after clearing the
   /// saved connection it re-opens onboarding on the sign-in step.
-  Future<void> _confirmSwitchAccount() async {
+  ///
+  /// [returning] is the second-vault notice's way out: the same clearing, but
+  /// the flow opens on the "I already use Relic on another device" door
+  /// instead, because that is exactly what the person just said.
+  Future<void> _confirmSwitchAccount({bool returning = false}) async {
     final ctx = _navKey.currentContext;
     if (ctx == null) return;
     final colors = _dark ? RelicColors.dark : RelicColors.light;
@@ -1061,7 +1111,9 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
         _captureRepo = null;
         _browseOnly = false;
         _reconnectMode = false;
-        _onboardAtSignIn = true; // land on sign-in for the new account
+        _pairingLink = null;
+        _onboardAtSignIn = !returning; // land on sign-in for the new account
+        _onboardReturning = returning;
       });
     }
   }
@@ -1178,7 +1230,11 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   }
 
   void _handleUri(Uri uri) {
-    if (uri.scheme != 'relic') return;
+    // A pairing link arrives as https://relic.space/pair#… (Universal Links /
+    // App Links) or as the relic://pair fallback, so the scheme gate has to
+    // let both through. Everything else still has to be ours.
+    final pair = PairingLink.fromUri(uri);
+    if (pair == null && uri.scheme != 'relic') return;
     // app_links delivers the launch URI via BOTH getInitialLink and the stream;
     // ignore an identical URI seen within a couple of seconds (still allows a
     // genuine repeat capture later).
@@ -1191,10 +1247,34 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     }
     _lastLink = s;
     _lastLinkAt = now;
-    if (uri.host == 'auth-callback') {
+    if (pair != null) {
+      _handlePairLink(pair);
+    } else if (uri.host == 'auth-callback') {
       OAuthFlow.deliverMobileCallback(uri); // browser OAuth code -> onboarding
     } else if (uri.host == 'capture' || uri.path.contains('capture')) {
       _captureFromTrigger(uri);
+    }
+  }
+
+  /// A pairing link the OS handed us. A phone with a vault already on it says
+  /// so and stays put; a phone with none opens onboarding straight on the
+  /// link, so the scan step is skipped entirely.
+  void _handlePairLink(PairingLink link) {
+    switch (pairLinkAction(hasRepo: _repo != null, browseOnly: _browseOnly)) {
+      case PairLinkAction.alreadyLinked:
+        _toast(
+            'This phone is already linked to a vault. To join a different one, '
+            'switch account first.',
+            seconds: 6);
+      case PairLinkAction.openOnboarding:
+        if (!mounted) return;
+        setState(() {
+          _pairingLink = link;
+          _browseOnly = false;
+          _reconnectMode = false;
+          _onboardAtSignIn = false;
+          _onboardReturning = false; // the link implies it
+        });
     }
   }
 
@@ -1433,11 +1513,11 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   String? mimeType(SharedMediaFile f) => f.mimeType;
   String _basename(String path) => path.split(RegExp(r'[\\/]')).last;
 
-  void _toast(String msg) {
+  void _toast(String msg, {int seconds = 2}) {
     final ctx = _navKey.currentContext;
     if (ctx == null) return;
     ScaffoldMessenger.of(ctx).showSnackBar(
-      SnackBar(content: Text(msg), duration: const Duration(seconds: 2)),
+      SnackBar(content: Text(msg), duration: Duration(seconds: seconds)),
     );
   }
 
@@ -1657,6 +1737,11 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
                       Navigator.pop(sheetCtx);
                       final c = _navKey.currentContext;
                       if (c != null) showQuickCaptureTutorial(c, colors: colors);
+                    }),
+                    _sheetItem(colors, LucideIcons.smartphone,
+                        'How Relic works on a phone', () {
+                      Navigator.pop(sheetCtx);
+                      unawaited(_openPhoneExpectation());
                     }),
                     _sheetItem(colors, LucideIcons.repeat, 'Switch account', () {
                       Navigator.pop(sheetCtx);
@@ -2193,9 +2278,12 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
         autoVault: _autoVault,
         onConnected: _persistAndConnect,
         startAtSignIn: _onboardAtSignIn,
+        startReturning: _onboardReturning,
+        pairingLink: _pairingLink,
         onBrowseOnly: () => setState(() {
           _browseOnly = true;
           _reconnectMode = false;
+          _pairingLink = null; // dismissed: the link is spent
         }),
       );
     } else {
@@ -2220,12 +2308,17 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
         onUpgrade: storeSafeBuild
             ? null
             : (source) => _openUpgradeGuidance(source: source),
+        // The second-vault notice: the phone is where people sign up again
+        // instead of linking, so it belongs here as much as on the desktop.
+        deviceCount: _deviceCount,
+        thisDeviceLabel: _deviceName,
+        onJoinExistingVault: () =>
+            unawaited(_confirmSwitchAccount(returning: true)),
       );
-      // Stack banners above the list: the add-device promo and the
-      // verify-to-sync notice (email not confirmed). Both dismiss per-session.
+      // Stack banners above the list: signed-out (the session was revoked) and
+      // the verify-to-sync notice (email not confirmed).
       final banners = <Widget>[
         if (_repo!.sessionRevoked.value) _signedOutBanner(colors),
-        if (_promo) _addDeviceBanner(colors),
         if (_repo!.emailUnverified.value && !_emailBannerDismissed)
           _verifyBanner(colors),
       ];
