@@ -870,6 +870,14 @@ class WorkerRepo implements RelicRepo {
   @override
   Future<void> markKeepHintShown() async {}
   @override
+  bool get secondVaultNoticeDismissed => true;
+  @override
+  Future<void> markSecondVaultNoticeDismissed() async {}
+  @override
+  bool get addPhoneNudgeShown => true;
+  @override
+  Future<void> markAddPhoneNudgeShown() async {}
+  @override
   String? get keepHotkeyLabel => null;
 
   // --- key -----------------------------------------------------------------

@@ -197,6 +197,11 @@ class _RealAppState extends State<RealApp>
   /// cannot change while the process lives.
   final BundleLocation? _installOffer = applicationsInstallOfferForThisProcess();
   final _navKey = GlobalKey<NavigatorState>(); // Esc pops drill-down routes
+
+  /// How many devices this account has, null while unknown. Read from the
+  /// device registry, which can be offline, so null is normal and the popup
+  /// surfaces that depend on it stay quiet until a real number lands.
+  final ValueNotifier<int?> _deviceCount = ValueNotifier(null);
   bool _showingKit = false; // recovery-kit screen up: don't let blur hide it
   bool _emailBannerDismissed = false; // verify-to-sync banner, session-only
   DateTime? _shownAt; // when the popup was last summoned (guards blur-to-close)
@@ -388,12 +393,58 @@ class _RealAppState extends State<RealApp>
     // remote-remove handle). Reads before writing, so a renamed label is
     // never clobbered. tryAutoConnect already ran (runRealApp), so a bound
     // repo has a fresh bearer by now; unbound repos no-op on the null URL.
+    // Registration first, then the count, so this device is in the number the
+    // popup reads.
     unawaited(ensureDeviceRegistered(
       baseUrl: widget.repo.syncUrl,
       bearer: () async => widget.repo.syncBearer,
       label: Platform.localHostname,
       onlyIfMissing: true,
+    ).whenComplete(_refreshDeviceCount));
+  }
+
+  /// Ask the registry how many devices are on this account. Never throws, and
+  /// leaves the count as it was when the answer cannot be read, so an offline
+  /// moment does not make surfaces flicker.
+  Future<void> _refreshDeviceCount() async {
+    final url = widget.repo.syncUrl;
+    if (url == null || url.isEmpty) {
+      _deviceCount.value = null;
+      return;
+    }
+    try {
+      final list = await DeviceDirectory(
+        baseUrl: url,
+        bearer: () async => widget.repo.syncBearer,
+        deviceId: await DeviceId.get(),
+      ).listOrNull();
+      if (list != null) _deviceCount.value = list.length;
+    } catch (_) {/* offline or a server hiccup: leave the count as it was */}
+  }
+
+  /// Open the pairing screen so a phone (or another computer) can join this
+  /// vault. It needs room and it must not be blurred away mid-scan, so it gets
+  /// the same treatment as the recovery kit.
+  Future<void> _openAddDevice() async {
+    final mk = widget.repo.masterKey;
+    final nav = _navKey.currentState;
+    if (mk == null || nav == null) return;
+    _toAppMode();
+    if (mounted) setState(() => _showingKit = true);
+    await _sizeWindow(520, 620);
+    await _present(foreground: true);
+    _visible = true;
+    await nav.push(MaterialPageRoute(
+      builder: (_) => AddDeviceScreen(
+        masterKey: mk,
+        bearer: () async => widget.repo.syncBearer,
+        accountId: widget.repo.supabaseUserId,
+      ),
     ));
+    if (!mounted) return;
+    setState(() => _showingKit = false);
+    await _sizeWindow(_popupDims.width, _popupDims.height);
+    await _refreshDeviceCount();
   }
 
   @override
@@ -434,6 +485,7 @@ class _RealAppState extends State<RealApp>
     _popupResetTick.dispose();
     _popupSummonTick.dispose();
     _miniMode.dispose();
+    _deviceCount.dispose();
     super.dispose();
   }
 
@@ -508,6 +560,7 @@ class _RealAppState extends State<RealApp>
             onUpgrade: _upgradeToPro);
       },
     );
+    unawaited(_refreshDeviceCount());
     if (repo.vaultJustCreated && repo.masterKey != null) {
       repo.vaultJustCreated = false;
       final kit = RecoveryKit.fromMk(repo.masterKey!, repo.accountEmail ?? '');
@@ -2195,6 +2248,19 @@ class _RealAppState extends State<RealApp>
         setState(() {
           _connecting = true;
           _onboardStartAtSignIn = false;
+        });
+        _sizeWindow(520, 560);
+      },
+      deviceCount: _deviceCount,
+      thisDeviceLabel: Platform.localHostname,
+      onAddDevice: () => unawaited(_openAddDevice()),
+      // Back into onboarding at the sign-in step, so the person can use the
+      // account they already have on their other device.
+      onJoinExistingVault: () {
+        _toAppMode();
+        setState(() {
+          _connecting = true;
+          _onboardStartAtSignIn = true;
         });
         _sizeWindow(520, 560);
       },
