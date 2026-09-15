@@ -10,6 +10,7 @@ import '../data/device_directory.dart';
 import '../data/oauth_flow.dart';
 import '../data/pairing.dart';
 import '../data/recovery.dart';
+import '../data/pairing_link.dart';
 import '../data/selfhost_link.dart';
 import '../data/supabase_auth.dart';
 import '../data/worker_repo.dart';
@@ -37,12 +38,25 @@ class OnboardingFlow extends StatefulWidget {
   /// Quiet "Not now" escape on the welcome screen: exit into the host's
   /// browse-only empty state (no repo). Null hides the affordance.
   final VoidCallback? onBrowseOnly;
+
+  /// Open on the returning door ("I already use Relic on another device"):
+  /// the flow asks for the account used there and never offers to create a
+  /// vault. Set by the host's second-vault notice. [startAtSignIn] wins.
+  final bool startReturning;
+
+  /// A pairing link the OS handed the app (https://relic.space/pair#… or
+  /// relic://pair#…). Implies [startReturning]; after sign-in the flow joins
+  /// with the link's payload straight away instead of opening the scanner,
+  /// and the link's email preselects the account at the provider.
+  final PairingLink? pairingLink;
   const OnboardingFlow({
     super.key,
     required this.onConnected,
     this.defaultDeviceName = 'Phone',
     this.autoVault = true,
     this.startAtSignIn = false,
+    this.startReturning = false,
+    this.pairingLink,
     this.onBrowseOnly,
   });
 
