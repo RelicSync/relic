@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:hashlib/hashlib.dart';
 
+import 'pairing_link.dart';
 import 'recovery.dart' show Crockford;
 
 /// QR device-transfer pairing (docs/cloudflare/13-device-onboarding.md §5).
@@ -83,7 +84,9 @@ class PairingCrypto {
     String? accountHint,
     String? relayHint
   }) parseQr(String qr) {
-    final parts = qr.trim().split(':');
+    // A scanned https://relic.space/pair#… (or relic://pair#…) link carries
+    // the same payload in its fragment; the bare string still parses as before.
+    final parts = PairingLink.unwrap(qr).trim().split(':');
     if (parts.length < 4 || parts[0] != 'relic-pair') {
       throw const FormatException('not a relic pairing QR');
     }

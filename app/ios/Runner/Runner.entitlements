@@ -6,6 +6,15 @@
 	<array>
 		<string>Default</string>
 	</array>
+	<!-- Universal Link: https://relic.space/pair#<payload> is the pairing QR a
+	     computer shows. iOS fetches relic.space/.well-known/apple-app-site-
+	     association (Team ID + this bundle id) and then opens the link in
+	     Relic instead of Safari. Needs the Associated Domains capability on
+	     the App ID; Xcode automatic signing adds it. -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:relic.space</string>
+	</array>
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>$(RELIC_APP_GROUP)</string>

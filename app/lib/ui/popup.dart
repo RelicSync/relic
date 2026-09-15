@@ -204,7 +204,7 @@ class PopupView extends StatefulWidget {
   /// iOS gate, so there is no second store-safe check in here.
   final Future<void> Function(String source)? onUpgrade;
 
-  /// Desktop only: how many devices this account has, null while unknown. The
+  /// How many devices this account has, null while unknown. The
   /// host owns it and fills it from the device registry, which can be offline,
   /// so null is the normal starting value and every surface that reads it
   /// stays quiet until a real number lands.
@@ -214,13 +214,14 @@ class PopupView extends StatefulWidget {
   /// Null hides the "add your phone" nudge entirely.
   final VoidCallback? onAddDevice;
 
-  /// Desktop only: the way out of a second vault. The host reopens onboarding
-  /// so the person can sign in with the account they already use elsewhere.
+  /// The way out of a second vault. The host reopens onboarding so the person
+  /// can sign in with the account they already use elsewhere.
   final VoidCallback? onJoinExistingVault;
 
-  /// Desktop only: the label this computer captures under (the host passes
-  /// `Platform.localHostname`). Lets the list tell "saved here" apart from
-  /// "arrived from another device". Null means we cannot tell.
+  /// The label this device captures under (a computer passes
+  /// `Platform.localHostname`, a phone its device name). Lets the list tell
+  /// "saved here" apart from "arrived from another device". Null means we
+  /// cannot tell.
   final String? thisDeviceLabel;
 
   const PopupView({
@@ -3281,11 +3282,11 @@ class _PopupViewState extends State<PopupView> {
                     widget.repo.syncEnabled &&
                     widget.repo.mergeOfferCount > 0)
                   _mergeOfferBanner(c),
-                // Desktop only, and never in the mini picker: the mini picker
-                // is one row tall and belongs to whatever you were typing in.
-                if (!mini &&
-                    !(Platform.isAndroid || Platform.isIOS) &&
-                    widget.deviceCount != null)
+                // Never in the mini picker: it is one row tall and belongs to
+                // whatever you were typing in. Everywhere else, including a
+                // phone, where signing up again instead of linking is the
+                // commonest way a vault ends up split in two.
+                if (!mini && widget.deviceCount != null)
                   ValueListenableBuilder<int?>(
                     valueListenable: widget.deviceCount!,
                     builder: (_, count, _) => showSecondVaultNotice(

@@ -442,6 +442,7 @@ class _RealAppState extends State<RealApp>
         masterKey: mk,
         bearer: () async => widget.repo.syncBearer,
         accountId: widget.repo.supabaseUserId,
+        accountEmail: widget.repo.accountEmail,
       ),
     ));
     if (!mounted) return;

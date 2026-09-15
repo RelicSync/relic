@@ -87,16 +87,24 @@ class SupabaseAuth {
 
   /// The GoTrue authorize URL that starts a provider login. The browser opens
   /// this; on success the provider redirects to [redirectTo] with `?code=...`.
+  ///
+  /// [loginHint] is the account email when this device already knows which
+  /// identity it should get (a pairing link from the trusted device carries
+  /// it). GoTrue forwards unknown query parameters to the provider, so Google
+  /// preselects that account instead of asking. Providers that do not know
+  /// `login_hint` ignore it.
   static Uri authorizeUrl(
     SupabaseProvider provider,
     String redirectTo,
-    String challenge,
-  ) =>
+    String challenge, {
+    String? loginHint,
+  }) =>
       _u('/authorize').replace(queryParameters: {
         'provider': _providerName(provider),
         'redirect_to': redirectTo,
         'code_challenge': challenge,
         'code_challenge_method': 's256',
+        if (loginHint != null && loginHint.isNotEmpty) 'login_hint': loginHint,
       });
 
   /// Exchange the authorization [code] for a session (PKCE). [codeVerifier] must

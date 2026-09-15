@@ -869,10 +869,35 @@ class WorkerRepo implements RelicRepo {
   bool get keepHintShown => true;
   @override
   Future<void> markKeepHintShown() async {}
+  /// The "you may have started a second vault" notice, once it has been
+  /// dismissed on this phone. Starts true so the notice stays off the screen
+  /// until [loadSecondVaultNoticePref] has actually read the flag; a phone
+  /// that has dismissed it must never see it flash on a relaunch.
+  bool _secondVaultDismissed = true;
+  static const _kSecondVaultDismissed = 'second_vault_notice_dismissed';
   @override
-  bool get secondVaultNoticeDismissed => true;
+  bool get secondVaultNoticeDismissed => _secondVaultDismissed;
   @override
-  Future<void> markSecondVaultNoticeDismissed() async {}
+  Future<void> markSecondVaultNoticeDismissed() async {
+    _secondVaultDismissed = true;
+    try {
+      await const FlutterSecureStorage()
+          .write(key: _kSecondVaultDismissed, value: '1');
+    } catch (_) {/* no key store (tests): the session still hides it */}
+  }
+
+  /// Read the dismissed flag from the phone's key store. The host calls this
+  /// once on connect; until it lands the notice stays hidden.
+  Future<void> loadSecondVaultNoticePref() async {
+    try {
+      _secondVaultDismissed =
+          (await const FlutterSecureStorage().read(key: _kSecondVaultDismissed)) ==
+              '1';
+    } catch (_) {
+      _secondVaultDismissed = true; // can't read it: say nothing
+    }
+  }
+
   @override
   bool get addPhoneNudgeShown => true;
   @override
@@ -992,6 +1017,29 @@ class WorkerRepo implements RelicRepo {
     }
     await _maybeRefresh();
     await SupabaseAuth.changeEmail(token, newEmail);
+  }
+
+  /// Email this account the link to the desktop app. The phone is the device
+  /// people install first and the computer is where Relic does the most, so
+  /// the first-run screen offers to put the link in their inbox rather than
+  /// asking them to type an address on a laptop later.
+  ///
+  /// The server holds the address and sends the mail; nothing is passed up
+  /// from here. 204 is a send, 429 means one went out recently, and 503 means
+  /// this server has no mail set up (a self-host without a mail key).
+  Future<void> sendDownloadLink() async {
+    await _maybeRefresh();
+    final r = await http
+        .post(Uri.parse(_u('/account/send-download-link')), headers: _headers)
+        .timeout(kNetTimeout);
+    if (r.statusCode == 204) return;
+    if (r.statusCode == 429) {
+      throw StateError('Already sent. Check your inbox.');
+    }
+    if (r.statusCode == 503) {
+      throw StateError("Email isn't set up on this server.");
+    }
+    throw StateError("Couldn't send the link. Try again later.");
   }
 
   /// Permanently delete the synced vault + account on the server (DELETE
