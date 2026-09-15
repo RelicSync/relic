@@ -64,13 +64,57 @@ class OnboardingFlow extends StatefulWidget {
   State<OnboardingFlow> createState() => _OnboardingFlowState();
 }
 
-enum _Step {
+/// Which step the flow opens on. People who already use Relic somewhere else
+/// were creating a second account on the phone and landing in an empty vault,
+/// so a fresh start now asks "is this your first device" before it asks how to
+/// sign in. The guided "switch account" entry still goes straight to the
+/// sign-in form. A caller that already asked the question ([startReturning]),
+/// or an OS-delivered pairing link, opens on the returning welcome.
+@visibleForTesting
+MobileStep firstMobileStep({
+  required bool startAtSignIn,
+  required bool startReturning,
+  required bool hasPairingLink,
+}) {
+  if (startAtSignIn) return MobileStep.signIn;
+  if (startReturning || hasPairingLink) return MobileStep.welcome;
+  return MobileStep.doors;
+}
+
+/// Where sign-in lands. An account with nothing in it normally goes on to set
+/// a vault passphrase, but someone who just said they already use Relic
+/// elsewhere has almost certainly signed in with the wrong account, so they
+/// get told that instead of quietly getting a second empty vault. With a vault
+/// and a live pairing link the flow joins straight away; an expired link drops
+/// to the scanner.
+@visibleForTesting
+MobileStep mobileStepAfterAuth({
+  required bool existingVault,
+  required bool returning,
+  required bool hasLink,
+  required bool linkExpired,
+}) {
+  if (!existingVault) {
+    return returning ? MobileStep.noVaultHere : MobileStep.oauthCreatePass;
+  }
+  if (hasLink) {
+    return linkExpired ? MobileStep.scanQr : MobileStep.joining;
+  }
+  return MobileStep.unlockChooser;
+}
+
+/// The steps of the mobile flow. Public only so the routing above can be
+/// tested without pumping the widget.
+enum MobileStep {
+  doors, // the first question: first device, or one that joins?
   welcome,
   create,
   confirmEmail, // email-confirmation required: created, awaiting the inbox link
   oauthCreatePass, // OAuth path: passphrase-only vault creation (already authed)
+  noVaultHere, // said they already use Relic, but this account is empty
   recoveryKit,
   signIn,
+  joining, // a pairing link is running the handshake for them
   unlockChooser,
   passphrase,
   scanQr,
@@ -83,7 +127,13 @@ enum _Step {
 
 class _OnboardingFlowState extends State<OnboardingFlow> {
   late final OnboardingService _svc;
-  _Step _step = _Step.welcome;
+  MobileStep _step = MobileStep.welcome;
+  // The user said they already use Relic on another device. Changes what
+  // welcome asks for, and guards the empty-account case after sign-in.
+  bool _returning = false;
+  // A pairing link is good for one join. After that the scanner takes over,
+  // so a retry can never replay a dead payload.
+  bool _linkSpent = false;
   bool _busy = false;
   String? _error;
   String? _notice; // non-error feedback (e.g. "reset link sent")
@@ -116,7 +166,16 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
   void initState() {
     super.initState();
     _deviceName = widget.defaultDeviceName;
-    if (widget.startAtSignIn) _step = _Step.signIn;
+    _returning = widget.startReturning || widget.pairingLink != null;
+    _step = firstMobileStep(
+      startAtSignIn: widget.startAtSignIn,
+      startReturning: widget.startReturning,
+      hasPairingLink: widget.pairingLink != null,
+    );
+    // The link carries the account the other device is signed in as, so the
+    // email form opens on it and the provider preselects it.
+    final hint = widget.pairingLink?.email;
+    if (hint != null && hint.isNotEmpty) _email = hint;
     DeviceId.get().then((id) => _svc = OnboardingService(deviceId: id));
   }
 
@@ -135,7 +194,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
     }
   }
 
-  void _go(_Step s) => setState(() {
+  void _go(MobileStep s) => setState(() {
         _error = null;
         _notice = null;
         _retry = null;
@@ -193,7 +252,13 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
     if (e is PairingAccountMismatch) return e.message;
     if (e is PairedKeyMismatch) return e.message;
     if (e is PairingTimeout) {
-      return 'Pairing timed out. The code is only live for about two minutes.';
+      const base =
+          'Pairing timed out. The code is only live for about two minutes.';
+      // Only a link brought them here without a scan, so only a link needs to
+      // send them back to the screen that mints a fresh one.
+      return widget.pairingLink == null
+          ? base
+          : '$base Scan the new one on your computer.';
     }
     final s = e.toString().replaceFirst('StateError: ', '').replaceFirst('Exception: ', '');
     return s.isEmpty ? 'Something went wrong.' : s;
@@ -242,7 +307,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
       await _routeAfterAuth();
     } on EmailConfirmationPending catch (e) {
       _pendingEmail = e.email;
-      _go(_Step.confirmEmail);
+      _go(MobileStep.confirmEmail);
     } catch (e) {
       setState(() => _error = _human(e));
     } finally {
@@ -257,7 +322,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
   void _enterRecoveryKit(WorkerRepo repo) {
     _pendingRepo = repo;
     _kitDownloaded = false;
-    _go(_Step.recoveryKit);
+    _go(MobileStep.recoveryKit);
   }
 
   Future<void> _resendConfirmation() => _run(() async {
@@ -321,12 +386,29 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
   /// yet) or unlock (existing vault). Auth != vault key, so a passphrase step
   /// still follows.
   Future<void> _startOAuth(SupabaseProvider provider) => _run(() async {
-        final session = await OAuthFlow.signInWithProvider(provider, desktop: false);
+        final session = await OAuthFlow.signInWithProvider(provider,
+            desktop: false, loginHint: widget.pairingLink?.email);
         _session = session;
         _viaOAuth = true;
         _email = session.email ?? '';
         await _routeAfterAuth();
       });
+
+  /// A door on the first screen: remember the answer, then ask how they want to
+  /// sign in.
+  void _pickDoor({required bool returning}) {
+    _returning = returning;
+    _go(MobileStep.welcome);
+  }
+
+  /// "Use a different account" on [MobileStep.noVaultHere]: drop the session we
+  /// just got and send them back to sign in as the account they actually use.
+  void _useAnotherAccount() {
+    _session = null;
+    _viaOAuth = false;
+    _returning = true;
+    _go(MobileStep.welcome);
+  }
 
   /// Post-sign-in routing: does this account already have a vault? A hard error
   /// (GET /keyparams not 200/404) leaves the user on the current step with a
@@ -340,7 +422,27 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
     try {
       final existing = await _svc.hasVault(_session!);
       _retry = null;
-      _go(existing ? _Step.unlockChooser : _Step.oauthCreatePass);
+      final link = _linkSpent ? null : widget.pairingLink;
+      final next = mobileStepAfterAuth(
+        existingVault: existing,
+        returning: _returning,
+        hasLink: link != null,
+        linkExpired: link?.isExpired() ?? false,
+      );
+      _go(next);
+      if (next == MobileStep.joining) {
+        _linkSpent = true;
+        if (mounted) setState(() => _busy = false);
+        await _joinWithLink(link!);
+        return;
+      }
+      if (next == MobileStep.scanQr && link != null) {
+        _linkSpent = true;
+        if (mounted) {
+          setState(() => _notice =
+              'That code has expired. Scan the new one on your computer.');
+        }
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -351,6 +453,20 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Run the handshake from a link the OS handed us, so a phone that scanned
+  /// the desktop's QR with its camera never has to open ours. Success lands on
+  /// the SAS screen; anything else falls back to the scanner, carrying the
+  /// reason across.
+  Future<void> _joinWithLink(PairingLink link) async {
+    await _onQrScanned(link.payload);
+    if (!mounted || _step != MobileStep.joining) return;
+    final err = _error;
+    setState(() {
+      _step = MobileStep.scanQr;
+      _error = err;
+    });
   }
 
   /// OAuth create path: make the vault under [passphrase] from the OAuth session.
@@ -399,7 +515,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
           _pairing = pairing;
           final sas = await pairing.handshake();
           _sas = sas;
-          _go(_Step.sas);
+          _go(MobileStep.sas);
         } catch (e) {
           // Reset on failure so the scanner accepts a fresh QR immediately —
           // without this the `_pairing == null` guard in onDetect silently
@@ -418,7 +534,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
           _pairing = pairing;
           final sas = await pairing.handshake();
           _sas = sas;
-          _go(_Step.sas);
+          _go(MobileStep.sas);
         } catch (e) {
           // Same reset as the QR path: a dead handshake must not leave a
           // half-open pairing behind the retry.
@@ -447,7 +563,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         if (mounted) {
           setState(() {
             _busy = false;
-            _step = _Step.unlockChooser;
+            _step = MobileStep.unlockChooser;
             _error = e.message;
           });
         }
@@ -469,7 +585,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
       _pairing = null;
       if (mounted) {
         setState(() {
-          _step = _Step.unlockChooser;
+          _step = MobileStep.unlockChooser;
           _error =
               '${_human(e)} Start again: choose Add a device on your other device, then scan the new code.';
         });
@@ -485,7 +601,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
     _pairing?.cancel();
     _pairing = null;
     setState(() {
-      _step = _Step.unlockChooser;
+      _step = MobileStep.unlockChooser;
       _error =
           'Pairing canceled. If the codes keep differing, someone may be interfering with your connection. Try again on a network you trust.';
     });
@@ -521,33 +637,39 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
 
   Widget _body(RelicColors c) {
     switch (_step) {
-      case _Step.welcome:
+      case MobileStep.doors:
+        return _doors(c);
+      case MobileStep.welcome:
         return _welcome(c);
-      case _Step.create:
+      case MobileStep.noVaultHere:
+        return _noVaultHereView(c);
+      case MobileStep.joining:
+        return _joiningView(c);
+      case MobileStep.create:
         return _createForm(c);
-      case _Step.confirmEmail:
+      case MobileStep.confirmEmail:
         return _confirmEmailView(c);
-      case _Step.oauthCreatePass:
+      case MobileStep.oauthCreatePass:
         return _oauthCreatePassView(c);
-      case _Step.recoveryKit:
+      case MobileStep.recoveryKit:
         return _recoveryKitView(c);
-      case _Step.signIn:
+      case MobileStep.signIn:
         return _signInForm(c);
-      case _Step.unlockChooser:
+      case MobileStep.unlockChooser:
         return _unlockChooser(c);
-      case _Step.passphrase:
+      case MobileStep.passphrase:
         return _passphraseView(c);
-      case _Step.scanQr:
+      case MobileStep.scanQr:
         return _scanView(c);
-      case _Step.codeEntry:
+      case MobileStep.codeEntry:
         return _codeEntryView(c);
-      case _Step.sas:
+      case MobileStep.sas:
         return _sasView(c);
-      case _Step.recoveryEntry:
+      case MobileStep.recoveryEntry:
         return _recoveryEntryView(c);
-      case _Step.selfHost:
+      case MobileStep.selfHost:
         return _selfHostForm(c);
-      case _Step.selfHostScan:
+      case MobileStep.selfHostScan:
         return _selfHostScanView(c);
     }
   }
@@ -561,6 +683,39 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children),
       );
 
+  // The first question. People installing Relic on a phone were making a new
+  // account here, landing in an empty vault, and never finding the things they
+  // had saved on their computer. Ask which one they are before asking how they
+  // want to sign in.
+  Widget _doors(RelicColors c) => _scroll(key: const ValueKey('doors'), [
+        const SizedBox(height: Insets.xxxl),
+        Center(child: RelicWordmark(markSize: 40, color: c.text)),
+        const SizedBox(height: Insets.xxxl),
+        Text('Is this your first device?',
+            textAlign: TextAlign.center,
+            style: RelicTheme.headline(size: 26, color: c.text, height: 1.2)),
+        const SizedBox(height: Insets.md),
+        Text(
+            'It decides whether this phone starts fresh or joins the vault you already have.',
+            textAlign: TextAlign.center,
+            style: RelicTheme.sans(size: 14, color: c.textSecondary, height: 1.5)),
+        const SizedBox(height: Insets.section),
+        _doorTile(
+            c,
+            Icons.auto_awesome,
+            'Start a new vault',
+            'Starts empty. If you already saved things in Relic on another device, choose the other door.',
+            () => _pickDoor(returning: false)),
+        _doorTile(
+            c,
+            Icons.devices,
+            'I already use Relic on another device',
+            'Add this phone to the vault you have there. Your saved things stay where they are.',
+            () => _pickDoor(returning: true)),
+        if (widget.onBrowseOnly != null)
+          _quietBtn(c, 'Not now', _busy ? null : widget.onBrowseOnly),
+      ]);
+
   Widget _welcome(RelicColors c) => _scroll(key: const ValueKey('welcome'), [
         const SizedBox(height: Insets.xxxl),
         // Wordmark follows the theme ink — the cream default is only readable
@@ -568,11 +723,17 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         Center(child: RelicWordmark(markSize: 40, color: c.text)),
         const SizedBox(height: Insets.xxxl),
         // The one hero line in the app: display face, set tight.
-        Text('Everything you copy,\non every device.',
+        Text(
+            _returning
+                ? 'Sign in with the account\nyou use there.'
+                : 'Everything you copy,\non every device.',
             textAlign: TextAlign.center,
             style: RelicTheme.headline(size: 30, color: c.text, height: 1.15)),
         const SizedBox(height: Insets.md),
-        Text('Sign in to sync and back up your vault, end-to-end encrypted.',
+        Text(
+            _returning
+                ? 'Use the same Google, GitHub, Apple or email account as your other device.'
+                : 'Sign in to sync and back up your vault, end-to-end encrypted.',
             textAlign: TextAlign.center,
             style: RelicTheme.sans(size: 14, color: c.textSecondary, height: 1.5)),
         const SizedBox(height: Insets.section),
@@ -597,14 +758,43 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         if (_error != null) _errorText(c, _error!),
         _retryButton(c),
         _orDivider(c),
-        _secondaryBtn(c, 'Create with email', _busy ? null : () => _go(_Step.create)),
-        const SizedBox(height: Insets.md),
-        _secondaryBtn(c, 'Add this device', _busy ? null : () => _go(_Step.signIn)),
+        // Someone adding a second device has an account already, so the only
+        // email door they get is the one that signs in.
+        if (_returning)
+          _secondaryBtn(
+              c, 'Sign in with email', _busy ? null : () => _go(MobileStep.signIn))
+        else
+          _secondaryBtn(
+              c, 'Create with email', _busy ? null : () => _go(MobileStep.create)),
         const SizedBox(height: Insets.xs),
-        _quietBtn(c, 'Use your own server', _busy ? null : () => _go(_Step.selfHost)),
-        if (widget.onBrowseOnly != null)
-          _quietBtn(c, 'Not now', _busy ? null : widget.onBrowseOnly),
+        _quietBtn(c, 'Use your own server', _busy ? null : () => _go(MobileStep.selfHost)),
+        _backBtn(c, () => _go(MobileStep.doors)),
       ]);
+
+  // The returning door plus an empty account means they almost certainly
+  // signed in with the wrong one. Say so before a second vault exists.
+  Widget _noVaultHereView(RelicColors c) =>
+      _scroll(key: const ValueKey('novault'), [
+        _header(c, 'This account has nothing saved',
+            "You're signed in, but this account has nothing in it yet. If you use Relic on another device, go back and sign in with the account you use there."),
+        _primaryBtn(c, 'Use a different account', _busy ? null : _useAnotherAccount),
+        const SizedBox(height: Insets.md),
+        _secondaryBtn(c, 'Start a new vault with this account',
+            _busy ? null : () => _go(MobileStep.oauthCreatePass)),
+      ]);
+
+  // A link from the desktop's QR already carries the payload, so there is
+  // nothing to scan and nothing to tap. Hold the screen while the handshake
+  // runs; it lands on the SAS check.
+  Widget _joiningView(RelicColors c) => Center(
+        key: const ValueKey('joining'),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          CircularProgressIndicator(color: c.accent),
+          const SizedBox(height: Insets.xxl),
+          Text('Connecting to your computer…',
+              style: RelicTheme.sans(size: 14, color: c.textMuted)),
+        ]),
+      );
 
   // OAuth create: already signed in via a provider; just set the vault passphrase.
   Widget _oauthCreatePassView(RelicColors c) {
@@ -634,7 +824,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
               }
               _createVaultViaSession(phrase.text);
             }),
-      _backBtn(c, () => _go(_Step.welcome)),
+      _backBtn(c, () => _go(MobileStep.welcome)),
     ]);
   }
 
@@ -669,7 +859,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
               }
               _signUpAccount();
             }),
-      _backBtn(c, () => _go(_Step.welcome)),
+      _backBtn(c, () => _go(MobileStep.welcome)),
     ]);
   }
 
@@ -721,11 +911,11 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
             ? null
             : () {
                 _email = _pendingEmail;
-                _go(_Step.signIn);
+                _go(MobileStep.signIn);
               }),
         const SizedBox(height: Insets.md),
         _secondaryBtn(c, 'Resend email', _busy ? null : _resendConfirmation),
-        _backBtn(c, () => _go(_Step.welcome)),
+        _backBtn(c, () => _go(MobileStep.welcome)),
       ]);
 
   Widget _signInForm(RelicColors c) {
@@ -788,20 +978,20 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         child: _quietBtn(
             c, 'Forgot password?', _busy ? null : () => _forgotPassword(email.text)),
       ),
-      _backBtn(c, () => _go(_Step.welcome)),
+      _backBtn(c, () => _go(MobileStep.welcome)),
     ]);
   }
 
   Widget _unlockChooser(RelicColors c) => _scroll(key: const ValueKey('chooser'), [
         _header(c, 'Unlock your vault', 'Choose how to unlock on this device.'),
         _doorTile(c, Icons.password, 'Enter your vault passphrase',
-            'Works anywhere.', () => _go(_Step.passphrase)),
+            'Works anywhere.', () => _go(MobileStep.passphrase)),
         _doorTile(c, Icons.qr_code_scanner, 'Scan a QR from another device',
-            'Fastest if you have Relic open elsewhere.', () => _go(_Step.scanQr)),
+            'Fastest if you have Relic open elsewhere.', () => _go(MobileStep.scanQr)),
         _doorTile(c, Icons.vpn_key, 'I lost my vault passphrase',
-            'Use your recovery kit.', () => _go(_Step.recoveryEntry)),
+            'Use your recovery kit.', () => _go(MobileStep.recoveryEntry)),
         if (_error != null) _errorText(c, _error!),
-        _backBtn(c, () => _go(_viaOAuth ? _Step.welcome : _Step.signIn)),
+        _backBtn(c, () => _go(_viaOAuth ? MobileStep.welcome : MobileStep.signIn)),
       ]);
 
   Widget _passphraseView(RelicColors c) {
@@ -817,7 +1007,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
               if (phrase.text.isEmpty) return;
               _unlockPassphrase(phrase.text);
             }),
-      _backBtn(c, () => _go(_Step.unlockChooser)),
+      _backBtn(c, () => _go(MobileStep.unlockChooser)),
     ]);
   }
 
@@ -836,9 +1026,12 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
               child: _busy
                   ? Center(child: CircularProgressIndicator(color: c.accent))
                   : MobileScanner(onDetect: (capture) {
+                      // The desktop now shows an https link, so a bare payload
+                      // is no longer the only shape a Relic QR comes in.
                       final raw = capture.barcodes
                           .map((b) => b.rawValue)
-                          .firstWhere((v) => v != null && v.startsWith('relic-pair:'),
+                          .firstWhere(
+                              (v) => v != null && PairingLink.looksLikePairing(v),
                               orElse: () => null);
                       if (raw != null && _pairing == null) _onQrScanned(raw);
                     }),
@@ -849,10 +1042,14 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
           Padding(
               padding: const EdgeInsets.symmetric(horizontal: Insets.xxl),
               child: _errorText(c, _error!)),
+        if (_notice != null)
+          Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Insets.xxl),
+              child: _noticeText(c, _notice!)),
         Padding(
           padding: const EdgeInsets.fromLTRB(Insets.xxl, Insets.sm, Insets.xxl, 0),
           child: TextButton(
-            onPressed: _busy ? null : () => _go(_Step.codeEntry),
+            onPressed: _busy ? null : () => _go(MobileStep.codeEntry),
             style: TextButton.styleFrom(
               foregroundColor: c.accentDeep,
               backgroundColor: c.tagBg,
@@ -866,7 +1063,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(Insets.xxl, 0, Insets.xxl, Insets.xxl),
-          child: _backBtn(c, () => _go(_Step.unlockChooser)),
+          child: _backBtn(c, () => _go(MobileStep.unlockChooser)),
         ),
       ]);
 
@@ -914,7 +1111,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
               }
               _onCodeEntered(code.text);
             }),
-      _backBtn(c, () => _go(_Step.scanQr)),
+      _backBtn(c, () => _go(MobileStep.scanQr)),
     ]);
   }
 
@@ -968,7 +1165,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         _backBtn(c, () {
           _pairing?.cancel();
           _pairing = null;
-          _go(_Step.unlockChooser);
+          _go(MobileStep.unlockChooser);
         }),
       ]);
 
@@ -997,7 +1194,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
               }
               _unlockKit(kit.text, phrase.text);
             }),
-      _backBtn(c, () => _go(_Step.unlockChooser)),
+      _backBtn(c, () => _go(MobileStep.unlockChooser)),
     ]);
   }
 
@@ -1068,7 +1265,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
                 ? null
                 : () {
                     _shScanned = false;
-                    _go(_Step.selfHostScan);
+                    _go(MobileStep.selfHostScan);
                   },
             style: TextButton.styleFrom(
                 foregroundColor: c.accentDeep,
@@ -1115,7 +1312,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         if (_error != null) _errorText(c, _error!),
         const SizedBox(height: Insets.lg),
         _primaryBtn(c, 'Connect', _busy ? null : _connectSelfHost),
-        _backBtn(c, () => _go(_Step.welcome)),
+        _backBtn(c, () => _go(MobileStep.welcome)),
       ]);
 
   // Scan a `relic://selfhost?url=…` QR shown by a device that's already
@@ -1151,7 +1348,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
                   _shSecret.text = parsed.secret!;
                   _shAdvanced = true;
                 }
-                _go(_Step.selfHost);
+                _go(MobileStep.selfHost);
               }),
             ),
           ),
@@ -1161,7 +1358,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
               Insets.xxl, Insets.md, Insets.xxl, Insets.xxl),
           child: _backBtn(c, () {
             _shScanned = false;
-            _go(_Step.selfHost);
+            _go(MobileStep.selfHost);
           }),
         ),
       ]);
