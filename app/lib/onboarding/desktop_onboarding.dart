@@ -54,6 +54,12 @@ class DesktopOnboarding extends StatefulWidget {
   /// account" action so the user lands straight on sign-in after disconnecting.
   final bool startAtSignIn;
 
+  /// Open straight on the sign-in screen for someone who already uses Relic
+  /// somewhere else, skipping the "is this your first device" question. Used by
+  /// the "you may have started a second vault" notice, which has already asked
+  /// it. [startAtSignIn] wins if both are set.
+  final bool startReturning;
+
   /// Desktop only: called around the browser OAuth handoff so the host can step
   /// the always-on-top, frameless popup out of the system browser's way
   /// ([away] true) and bring it back on top once the sign-in callback lands
@@ -77,6 +83,7 @@ class DesktopOnboarding extends StatefulWidget {
     required this.onCancel,
     required this.onTryDemo,
     this.startAtSignIn = false,
+    this.startReturning = false,
     this.onBrowserHandoff,
     this.onPinWindow,
   });
@@ -96,6 +103,43 @@ bool shouldShowAccessibilityIntro({
   required bool startAtSignIn,
 }) =>
     isMacOS && !trusted && !startAtSignIn;
+
+/// Which step the flow opens on. People who already use Relic somewhere else
+/// were creating a second account here and landing in an empty vault, so a
+/// fresh start now asks "is this your first device" before it asks how to sign
+/// in. The guided "switch account" entry still goes straight to the sign-in
+/// form, and [startReturning] opens on sign-in because its caller has already
+/// asked the question. A Mac still opens on the Accessibility ask; see
+/// [stepAfterAccessibility] for where it lands afterwards.
+@visibleForTesting
+DesktopStep firstDesktopStep({
+  required bool startAtSignIn,
+  required bool startReturning,
+  required bool isMacOS,
+}) {
+  if (startAtSignIn) return DesktopStep.signIn;
+  if (isMacOS) return DesktopStep.accessibility;
+  return startReturning ? DesktopStep.welcome : DesktopStep.doors;
+}
+
+/// Where the macOS Accessibility ask hands off once it is done or skipped.
+@visibleForTesting
+DesktopStep stepAfterAccessibility({required bool returning}) =>
+    returning ? DesktopStep.welcome : DesktopStep.doors;
+
+/// Where sign-in lands. An account with a vault always goes to the unlock
+/// chooser. An account with nothing in it normally goes on to set a vault
+/// passphrase, but someone who just said they already use Relic elsewhere has
+/// almost certainly signed in with the wrong account, so they get told that
+/// first instead of quietly getting a second empty vault.
+@visibleForTesting
+DesktopStep stepAfterAuth({
+  required bool existingVault,
+  required bool returning,
+}) {
+  if (existingVault) return DesktopStep.chooser;
+  return returning ? DesktopStep.noVaultHere : DesktopStep.oauthCreate;
+}
 
 /// Watches for the Accessibility grant landing while the user is away in System
 /// Settings, so Relic can pull itself back in front instead of sitting in the
@@ -156,12 +200,16 @@ class AccessibilityGrantWatcher {
   }
 }
 
-enum _Step {
+/// The steps of the desktop flow. Public only so the routing above can be
+/// tested without pumping the widget.
+enum DesktopStep {
   accessibility,
+  doors,
   welcome,
   create,
   confirmEmail,
   oauthCreate,
+  noVaultHere,
   signIn,
   chooser,
   passphrase,
@@ -171,7 +219,10 @@ enum _Step {
 }
 
 class _DesktopOnboardingState extends State<DesktopOnboarding> {
-  _Step _step = _Step.welcome;
+  DesktopStep _step = DesktopStep.welcome;
+  // The user said they already use Relic on another device. Changes what
+  // welcome asks for, and guards the empty-account case after sign-in.
+  bool _returning = false;
   bool _busy = false;
   String? _error;
   String? _notice; // non-error confirmation (e.g. "reset email sent")
@@ -207,16 +258,22 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
   @override
   void initState() {
     super.initState();
-    if (widget.startAtSignIn) _step = _Step.signIn;
-    // macOS opens on the Accessibility ask, then drops straight to welcome if
-    // the grant is already there (the check is a one-frame channel hop, so a
+    _returning = widget.startReturning && !widget.startAtSignIn;
+    _step = firstDesktopStep(
+      startAtSignIn: widget.startAtSignIn,
+      startReturning: widget.startReturning,
+      isMacOS: Platform.isMacOS,
+    );
+    // macOS opens on the Accessibility ask, then drops straight past it if the
+    // grant is already there (the check is a one-frame channel hop, so a
     // granted Mac never really sees this step). Every other platform never
     // enters the branch, so the flow is exactly as it was.
-    if (Platform.isMacOS && !widget.startAtSignIn) {
-      _step = _Step.accessibility;
-      _routeAccessibility();
-    }
+    if (_step == DesktopStep.accessibility) _routeAccessibility();
   }
+
+  /// Where the Accessibility ask hands off, honouring the returning-device
+  /// answer when the caller supplied one.
+  DesktopStep get _afterAccessibility => stepAfterAccessibility(returning: _returning);
 
   /// Read the Accessibility grant and skip the ask when it's already given.
   Future<void> _routeAccessibility() async {
@@ -227,7 +284,7 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
           isMacOS: Platform.isMacOS,
           trusted: trusted,
           startAtSignIn: widget.startAtSignIn)) {
-        _step = _Step.welcome;
+        _step = _afterAccessibility;
       }
     });
   }
@@ -257,7 +314,7 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
       _axAsked = true;
     });
     if (trusted) {
-      _go(_Step.welcome);
+      _go(_afterAccessibility);
     } else {
       _axWatcher.start();
     }
@@ -271,7 +328,7 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
     await widget.onPinWindow?.call(true);
     await activateApp();
     if (!mounted) return;
-    _go(_Step.welcome);
+    _go(_afterAccessibility);
   }
 
   @override
@@ -329,7 +386,7 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
       setState(() {
         _busy = false;
         _sas = sas;
-        _step = _Step.sas;
+        _step = DesktopStep.sas;
       });
     } catch (e) {
       // Tear down the half-open session so Connect is immediately retryable
@@ -363,7 +420,7 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
         if (!mounted) return;
         setState(() {
           _busy = false;
-          _step = _Step.chooser;
+          _step = DesktopStep.chooser;
           _error = e.message;
         });
         return;
@@ -383,7 +440,7 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _step = _Step.chooser;
+        _step = DesktopStep.chooser;
         _error = '${_humanPair(e)} Start again: choose Add a device on your '
             'other device, then enter the new code.';
       });
@@ -396,20 +453,38 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
     _pairing?.cancel();
     _pairing = null;
     setState(() {
-      _step = _Step.chooser;
+      _step = DesktopStep.chooser;
       _error =
           'Pairing canceled. If the codes keep differing, someone may be interfering with your connection. Try again on a network you trust.';
     });
   }
 
-  void _go(_Step s) => setState(() {
+  /// A door on the first screen: remember the answer, then ask how they want to
+  /// sign in.
+  void _pickDoor({required bool returning}) {
+    _returning = returning;
+    _go(DesktopStep.welcome);
+  }
+
+  /// "Use a different account" on [DesktopStep.noVaultHere]: drop the session we just
+  /// got and send them back to sign in as the account they actually use.
+  void _useAnotherAccount() {
+    _session = null;
+    _viaOAuth = false;
+    _returning = true;
+    _go(DesktopStep.welcome);
+  }
+
+  void _go(DesktopStep s) => setState(() {
         _error = null;
         _notice = null;
         _retry = null;
         _step = s;
       });
 
-  /// Post-sign-in routing: does this account already have a vault? A hard error
+  /// Post-sign-in routing: does this account already have a vault? Someone who
+  /// said they already use Relic elsewhere and lands on an empty account gets
+  /// told so, instead of setting up a second vault by accident. A hard error
   /// (GET /keyparams not 200/404) leaves the user on the current step with a
   /// "Try again" button ([_retry]) that re-runs just this check — the session is
   /// already valid, so we never make them re-authenticate.
@@ -427,7 +502,7 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
         _retry = null;
         _error = null;
         _notice = null;
-        _step = existing ? _Step.chooser : _Step.oauthCreate;
+        _step = stepAfterAuth(existingVault: existing, returning: _returning);
       });
     } catch (e) {
       if (!mounted) return;
@@ -508,7 +583,7 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
         _busy = false;
         _notice = null;
         _pendingEmail = e.email;
-        _step = _Step.confirmEmail;
+        _step = DesktopStep.confirmEmail;
       });
     } catch (e) {
       if (!mounted) return;
@@ -641,7 +716,7 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
 
   Widget _body(RelicColors c) {
     switch (_step) {
-      case _Step.accessibility:
+      case DesktopStep.accessibility:
         return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _header(c, 'Let Relic paste for you',
               'macOS asks permission before any app can press keys for you. Relic uses it to paste the item you pick straight into the app you were just in, and to grab your selection when you press the save and annotate hotkey.'),
@@ -683,22 +758,71 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
                       _axWatcher.cancel(); // the user got there first
                       // Idempotent when the trip out never happened (Skip).
                       unawaited(widget.onPinWindow?.call(true));
-                      _go(_Step.welcome);
+                      _go(_afterAccessibility);
                     }),
         ]);
-      case _Step.welcome:
+      case DesktopStep.doors:
+        // The first question. People installing Relic on a second computer were
+        // making a new account here, landing in an empty vault, and never
+        // finding the things they had saved. Ask which one they are before
+        // asking how they want to sign in.
+        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const SizedBox(height: Insets.xs),
+          Center(child: RelicWordmark(markSize: 34, color: c.text)),
+          const SizedBox(height: Insets.xxl),
+          Text('Is this your first device?',
+              textAlign: TextAlign.center,
+              style: RelicTheme.headline(
+                  size: 22, color: c.text, height: 1.25)),
+          const SizedBox(height: Insets.sm),
+          Text(
+              'It decides whether this computer starts fresh or joins the vault you already have.',
+              textAlign: TextAlign.center,
+              style: RelicTheme.sans(
+                  size: 13, color: c.textSecondary, height: 1.5)),
+          const SizedBox(height: Insets.xxl),
+          _door(
+              c,
+              LucideIcons.sparkles,
+              'Start a new vault',
+              'Starts empty. If you already saved things in Relic on another device, choose the other door.',
+              () => _pickDoor(returning: false)),
+          _door(
+              c,
+              LucideIcons.monitorSmartphone,
+              'I already use Relic on another device',
+              'Add this computer to the vault you have there. Your saved things stay where they are.',
+              () => _pickDoor(returning: true)),
+          const SizedBox(height: Insets.xs),
+          Center(
+            child: GhostButton(
+              label: 'Just exploring? Try the demo  →',
+              size: 34,
+              fontSize: 12.5,
+              onTap: _busy ? null : widget.onTryDemo,
+            ),
+          ),
+          _back(widget.onCancel, label: 'Not now'),
+        ]);
+      case DesktopStep.welcome:
         return Column(children: [
           const SizedBox(height: Insets.xs),
           // Wordmark follows the theme ink — the cream default is only
           // readable on dark.
           RelicWordmark(markSize: 34, color: c.text),
           const SizedBox(height: Insets.xxl),
-          Text('Everything you copy,\non every device.',
+          Text(
+              _returning
+                  ? 'Sign in with the account\nyou use there.'
+                  : 'Everything you copy,\non every device.',
               textAlign: TextAlign.center,
               style: RelicTheme.headline(
                   size: 22, color: c.text, height: 1.25)),
           const SizedBox(height: Insets.sm),
-          Text('Sign in to sync and back up your vault, end-to-end encrypted.',
+          Text(
+              _returning
+                  ? 'Use the same Google, GitHub, Apple or email account as your other device.'
+                  : 'Sign in to sync and back up your vault, end-to-end encrypted.',
               textAlign: TextAlign.center,
               style: RelicTheme.sans(
                   size: 13, color: c.textSecondary, height: 1.5)),
@@ -727,9 +851,14 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
             ),
           _retryButton(),
           const _OrDivider(),
-          _secondary('Create with email', _busy ? null : () => _go(_Step.create)),
-          const SizedBox(height: Insets.sm),
-          _secondary('Sign in with email', _busy ? null : () => _go(_Step.signIn)),
+          // Someone adding a second computer has an account already, so the
+          // only email door they get is the one that signs in.
+          if (!_returning) ...[
+            _secondary(
+                'Create with email', _busy ? null : () => _go(DesktopStep.create)),
+            const SizedBox(height: Insets.sm),
+          ],
+          _secondary('Sign in with email', _busy ? null : () => _go(DesktopStep.signIn)),
           const SizedBox(height: Insets.md),
           GhostButton(
             label: 'Just exploring? Try the demo  →',
@@ -737,9 +866,20 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
             fontSize: 12.5,
             onTap: _busy ? null : widget.onTryDemo,
           ),
-          _back(widget.onCancel, label: 'Not now'),
+          _back(() => _go(DesktopStep.doors)),
         ]);
-      case _Step.oauthCreate:
+      case DesktopStep.noVaultHere:
+        // The returning door plus an empty account means they almost certainly
+        // signed in with the wrong one. Say so before a second vault exists.
+        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _header(c, 'This account has nothing saved',
+              "You're signed in, but this account has nothing in it yet. If you use Relic on another device, go back and sign in with the account you use there."),
+          _primary('Use a different account', _busy ? null : _useAnotherAccount),
+          const SizedBox(height: Insets.sm),
+          _secondary('Start a new vault with this account',
+              _busy ? null : () => _go(DesktopStep.oauthCreate)),
+        ]);
+      case DesktopStep.oauthCreate:
         return _form(c, 'Set your vault passphrase',
             'Signed in. Your vault passphrase seals your data. We never see it and cannot reset it.',
             [
@@ -758,8 +898,8 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
             return;
           }
           _run(() => widget.onOAuthCreate(_session!, _phraseC.text));
-        }, back: () => _go(_Step.welcome));
-      case _Step.create:
+        }, back: () => _go(DesktopStep.welcome));
+      case DesktopStep.create:
         return _form(c, 'Create your account',
             'Start with just an email and a password. You will set your vault passphrase after you confirm your email.',
             [
@@ -780,8 +920,8 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
             return;
           }
           _signUpEmail();
-        }, back: () => _go(_Step.welcome));
-      case _Step.confirmEmail:
+        }, back: () => _go(DesktopStep.welcome));
+      case DesktopStep.confirmEmail:
         return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _header(c, 'Confirm your email',
               'We sent a link to $_pendingEmail. Confirm it, then sign in to finish setting up your vault. You will choose your vault passphrase then.'),
@@ -800,13 +940,13 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
               ? null
               : () {
                   _emailC.text = _pendingEmail;
-                  _go(_Step.signIn);
+                  _go(DesktopStep.signIn);
                 }),
           const SizedBox(height: Insets.sm),
           _secondary('Resend email', _busy ? null : _resendConfirmation),
-          _back(() => _go(_Step.welcome)),
+          _back(() => _go(DesktopStep.welcome)),
         ]);
-      case _Step.signIn:
+      case DesktopStep.signIn:
         return _form(c, 'Sign in', 'Sign in to your Relic account.', [
           _field(c, _emailC, 'Email'),
           _field(c, _passC, 'Account password', obscure: true),
@@ -834,26 +974,26 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
             return;
           }
           _signInEmail();
-        }, back: () => _go(_Step.welcome));
-      case _Step.chooser:
+        }, back: () => _go(DesktopStep.welcome));
+      case DesktopStep.chooser:
         return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _header(c, 'Unlock your vault', 'Choose how to unlock on this computer.'),
           _door(c, LucideIcons.rectangleEllipsis, 'Enter your vault passphrase',
-              'Works anywhere.', () => _go(_Step.passphrase)),
+              'Works anywhere.', () => _go(DesktopStep.passphrase)),
           _door(c, LucideIcons.keyboard, 'Use another device',
               'Type the pairing code shown on a device you already use.',
-              () => _go(_Step.pairCode)),
+              () => _go(DesktopStep.pairCode)),
           _door(c, LucideIcons.keyRound, 'I lost my vault passphrase',
-              'Use your recovery kit.', () => _go(_Step.recovery)),
+              'Use your recovery kit.', () => _go(DesktopStep.recovery)),
           const Padding(
             padding: EdgeInsets.only(bottom: Insets.md),
             child: LearnMore('fix.lostPassphrase',
                 label: 'What to do if you lost your passphrase'),
           ),
           const SizedBox(height: Insets.xs),
-          _back(() => _go(_viaOAuth ? _Step.welcome : _Step.signIn)),
+          _back(() => _go(_viaOAuth ? DesktopStep.welcome : DesktopStep.signIn)),
         ]);
-      case _Step.passphrase:
+      case DesktopStep.passphrase:
         return _form(c, 'Enter your passphrase',
             'The one you set when you created your vault.', [
           _field(c, _phraseC, 'Vault passphrase', obscure: true),
@@ -862,8 +1002,8 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
           _run(() => _viaOAuth
               ? widget.onOAuthUnlock(_session!, _phraseC.text)
               : widget.onSignInPassphrase(_email, _password, _phraseC.text));
-        }, back: () => _go(_Step.chooser));
-      case _Step.recovery:
+        }, back: () => _go(DesktopStep.chooser));
+      case DesktopStep.recovery:
         return _form(c, 'Use your recovery kit',
             'Paste the kit you saved, then set a new vault passphrase.', [
           // The kit is a machine fact: mono, in a recessed well.
@@ -882,8 +1022,8 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
           _run(() => _viaOAuth
               ? widget.onOAuthRecoveryKit(_session!, _kitC.text, _phraseC.text)
               : widget.onRecoveryKit(_email, _password, _kitC.text, _phraseC.text));
-        }, back: () => _go(_Step.chooser));
-      case _Step.pairCode:
+        }, back: () => _go(DesktopStep.chooser));
+      case DesktopStep.pairCode:
         return _form(c, 'Use another device',
             'Open Relic on a device you already use, choose Add a device, and type the code it shows.',
             [
@@ -891,9 +1031,9 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
             ], 'Connect', _connectPairCode, back: () {
           _pairing?.cancel();
           _pairing = null;
-          _go(_Step.chooser);
+          _go(DesktopStep.chooser);
         });
-      case _Step.sas:
+      case DesktopStep.sas:
         return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _header(c, 'Check the code',
               'Make sure this code matches the one shown on your other device, then approve there.'),
@@ -929,7 +1069,7 @@ class _DesktopOnboardingState extends State<DesktopOnboarding> {
           _back(() {
             _pairing?.cancel();
             _pairing = null;
-            _go(_Step.chooser);
+            _go(DesktopStep.chooser);
           }),
         ]);
     }
