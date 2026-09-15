@@ -110,6 +110,7 @@ void main() {
           connected: true,
           deviceCount: 1,
           anyFromOtherDevice: false,
+          itemCount: 3,
           dismissed: false,
         ),
         isTrue,
@@ -122,6 +123,7 @@ void main() {
           connected: false,
           deviceCount: 1,
           anyFromOtherDevice: false,
+          itemCount: 3,
           dismissed: false,
         ),
         isFalse,
@@ -134,6 +136,7 @@ void main() {
           connected: true,
           deviceCount: 2,
           anyFromOtherDevice: false,
+          itemCount: 3,
           dismissed: false,
         ),
         isFalse,
@@ -146,6 +149,7 @@ void main() {
           connected: true,
           deviceCount: null,
           anyFromOtherDevice: false,
+          itemCount: 3,
           dismissed: false,
         ),
         isFalse,
@@ -158,6 +162,20 @@ void main() {
           connected: true,
           deviceCount: 1,
           anyFromOtherDevice: true,
+          itemCount: 3,
+          dismissed: false,
+        ),
+        isFalse,
+      );
+    });
+
+    test('stays away once the list is long', () {
+      expect(
+        showSecondVaultNotice(
+          connected: true,
+          deviceCount: 1,
+          anyFromOtherDevice: false,
+          itemCount: secondVaultNoticeMaxItems,
           dismissed: false,
         ),
         isFalse,
@@ -170,6 +188,7 @@ void main() {
           connected: true,
           deviceCount: 1,
           anyFromOtherDevice: false,
+          itemCount: 3,
           dismissed: true,
         ),
         isFalse,

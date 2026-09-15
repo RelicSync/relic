@@ -859,7 +859,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   String get deviceName => _deviceName;
 
   /// What new captures are stamped with: the user's name, else the hostname.
-  String get _deviceLabel => _deviceName.trim().isNotEmpty
+  /// The popup compares list items against it to tell "saved here" from
+  /// "arrived from another device".
+  String get deviceLabel => _deviceName.trim().isNotEmpty
       ? _deviceName.trim()
       : (Platform.environment['COMPUTERNAME'] ??
           (Platform.localHostname.isNotEmpty
@@ -2592,7 +2594,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         utf8.encode(t).length,
       ),
       byteSize: textByteSize(t, keep),
-      device: _deviceLabel,
+      device: deviceLabel,
       tags: tags,
       content: t,
       preview: _preview(t),
@@ -2654,7 +2656,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       source: Source.upload,
       promoted: _promoteOnCapture(promote || _autoVault, byteSize),
       byteSize: byteSize,
-      device: _deviceLabel,
+      device: deviceLabel,
       blobKey: blobKey,
       title: (t != null && t.isNotEmpty) ? t : null,
       content: text.trim().isEmpty ? null : text,
@@ -2841,7 +2843,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       source: Source.clipboard,
       promoted: _promoteOnCapture(_autoVault, png.length),
       byteSize: png.length,
-      device: _deviceLabel,
+      device: deviceLabel,
       mime: 'image/png',
       blobKey: blobKey,
       preview: dims == null ? 'Image' : 'Screenshot · ${dims.$1} × ${dims.$2}',
@@ -2896,7 +2898,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       source: Source.clipboard,
       promoted: _promoteOnCapture(_autoVault, bytes.length),
       byteSize: bytes.length,
-      device: _deviceLabel,
+      device: deviceLabel,
       mime: mime,
       filename: name,
       blobKey: blobKey,
@@ -4547,7 +4549,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
         body: jsonEncode({
           if (_deviceId != null) 'device_id': _deviceId,
-          'label': _deviceLabel,
+          'label': deviceLabel,
           'platform': Platform.operatingSystem,
           if (_appVersion != null) 'app_version': _appVersion,
           if (enrollSecret != null && enrollSecret.isNotEmpty)

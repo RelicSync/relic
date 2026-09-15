@@ -190,6 +190,9 @@ class _RealAppState extends State<RealApp>
   bool _visible = false;
   bool _connecting = false;
   bool _onboardStartAtSignIn = false; // onboarding step: false = main welcome page
+  // Open onboarding on the "I already use Relic on another device" door.
+  // Set only by the second-vault notice; every other entry clears it.
+  bool _onboardStartReturning = false;
   bool _settingsOpen = false;
   /// Non-null when this copy of Relic is running from the disk image (or the
   /// shadow copy macOS makes of one) and should offer to install itself into
@@ -2096,6 +2099,7 @@ class _RealAppState extends State<RealApp>
       _settingsOpen = false;
       _connecting = true;
       _onboardStartAtSignIn = false;
+      _onboardStartReturning = false;
     });
     _sizeWindow(520, 560);
   }
@@ -2117,6 +2121,7 @@ class _RealAppState extends State<RealApp>
     if (_connecting) {
       return DesktopOnboarding(
         startAtSignIn: _onboardStartAtSignIn,
+        startReturning: _onboardStartReturning,
         onBrowserHandoff: _oauthBrowserHandoff,
         // The Accessibility step drops the pin while the user is in System
         // Settings (else we cover the switch), and restores it on the way back.
@@ -2127,6 +2132,7 @@ class _RealAppState extends State<RealApp>
           setState(() {
             _connecting = false;
             _onboardStartAtSignIn = false;
+            _onboardStartReturning = false;
           });
           _sizeWindow(_popupDims.width, _popupDims.height);
         },
@@ -2168,6 +2174,7 @@ class _RealAppState extends State<RealApp>
             _settingsOpen = false;
             _connecting = true;
             _onboardStartAtSignIn = false;
+            _onboardStartReturning = false;
           });
           _sizeWindow(520, 560);
         },
@@ -2248,11 +2255,12 @@ class _RealAppState extends State<RealApp>
         setState(() {
           _connecting = true;
           _onboardStartAtSignIn = false;
+          _onboardStartReturning = false;
         });
         _sizeWindow(520, 560);
       },
       deviceCount: _deviceCount,
-      thisDeviceLabel: Platform.localHostname,
+      thisDeviceLabel: widget.repo.deviceLabel,
       onAddDevice: () => unawaited(_openAddDevice()),
       // Back into onboarding at the sign-in step, so the person can use the
       // account they already have on their other device.
@@ -2260,7 +2268,8 @@ class _RealAppState extends State<RealApp>
         _toAppMode();
         setState(() {
           _connecting = true;
-          _onboardStartAtSignIn = true;
+          _onboardStartAtSignIn = false;
+          _onboardStartReturning = true;
         });
         _sizeWindow(520, 560);
       },
@@ -2347,6 +2356,7 @@ class _RealAppState extends State<RealApp>
                 setState(() {
                   _connecting = true;
                   _onboardStartAtSignIn = true;
+                  _onboardStartReturning = false;
                 });
                 _sizeWindow(520, 560);
               },
@@ -2441,6 +2451,7 @@ class _RealAppState extends State<RealApp>
                 setState(() {
                   _connecting = true;
                   _onboardStartAtSignIn = false;
+                  _onboardStartReturning = false;
                 });
                 _sizeWindow(520, 560);
               },

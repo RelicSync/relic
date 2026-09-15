@@ -41,21 +41,32 @@ const double kHistoryStripHeight = 40;
 /// One number, one place to change it.
 const int addPhoneNudgeThreshold = 20;
 
+/// The notice below is for a vault that is still new. Once this many items
+/// have been saved here, the person has settled in and it stays away.
+const int secondVaultNoticeMaxItems = 20;
+
 /// Whether to show the "you may have started a second vault" notice.
 ///
 /// It fires for the person who signed up again on this computer instead of
 /// linking it to the vault they already have: the account is connected, this
-/// desktop is the only device on it, and nothing in the list has ever come
-/// from anywhere else. [anyFromOtherDevice] is true when the caller cannot
-/// tell, so an unknown device label keeps the notice away.
+/// desktop is the only device on it, nothing in the list has ever come from
+/// anywhere else, and the list is still short. The last rule keeps it off the
+/// screen of someone who only ever uses one computer. [anyFromOtherDevice] is
+/// true when the caller cannot tell, so an unknown device label keeps the
+/// notice away.
 @visibleForTesting
 bool showSecondVaultNotice({
   required bool connected,
   required int? deviceCount,
   required bool anyFromOtherDevice,
+  required int itemCount,
   required bool dismissed,
 }) =>
-    connected && deviceCount == 1 && !anyFromOtherDevice && !dismissed;
+    connected &&
+    deviceCount == 1 &&
+    !anyFromOtherDevice &&
+    itemCount < secondVaultNoticeMaxItems &&
+    !dismissed;
 
 /// Whether to show the one-time "add your phone" nudge.
 ///
@@ -3281,6 +3292,7 @@ class _PopupViewState extends State<PopupView> {
                       connected: widget.repo.account != null,
                       deviceCount: count,
                       anyFromOtherDevice: !_allSavedHere,
+                      itemCount: widget.repo.all.length,
                       dismissed: widget.repo.secondVaultNoticeDismissed,
                     )
                         ? _secondVaultNotice(c)
