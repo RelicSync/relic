@@ -184,6 +184,15 @@ no `iat` and are grandfathered.
   only the KV `rev:` guard applies, which needs the client to send
   `X-Relic-Device`.
 
+### Download link — `/account/send-download-link`
+- `POST /account/send-download-link` (no body) — mails the desktop download
+  link to the signed-in identity's own address, for somebody who signed in on a
+  phone first. The caller cannot choose the recipient. → `204` on send, `400`
+  `no_email` when the sign-in carries no address (legacy device tokens), `429`
+  `already_sent` for a second press inside the hour, `502` `send_failed` when
+  the mail provider refuses (safe to retry), `503` `unconfigured` on a server
+  with no mail provider. Shares the `device` rate-limit policy.
+
 ### Pairing relay — `/pair/*` (device onboarding)
 Short-lived KV relay for the QR join flow. The server never sees plaintext
 secrets; slots (`np`, `tp`, `mk`) hold opaque sealed blobs for 120 s.

@@ -21,6 +21,7 @@ import { type Auth, authenticate, REV_TTL, revKey } from "./auth";
 import { clampLimit, CORS, err, json } from "./http";
 import { clientIp, rateLimit, withRateLimitHeaders } from "./ratelimit";
 import { deleteAccount, revokeSupabaseSessions } from "./account";
+import { sendDownloadLink } from "./download_link";
 import {
   createShare,
   fetchShareBlob,
@@ -773,6 +774,15 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
       // actually happened. Shipped clients ignore the body; this is for the next
       // one. See app/lib/data/device_directory.dart.
       return json({ ok: true, sessions_revoked: revoked === "ok" });
+    }
+
+    // Mail this account's own address the desktop download link. Shares the
+    // device limiter, because it is the same "one phone setting itself up"
+    // traffic and needs no namespace of its own.
+    if (path === "/account/send-download-link" && req.method === "POST") {
+      const limited = await rateLimit(req, env.RL_DEVICE, "RL_DEVICE", auth.account);
+      if (limited) return limited;
+      return await sendDownloadLink(env, auth);
     }
 
     // --- account ---

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Relic sync API",
-    "version": "1.2.1",
+    "version": "1.3.0",
     "summary": "The HTTP contract between Relic clients and a Relic sync server (Relic Cloud or a self-hosted server).",
     "description": "Relic is an open-source, end-to-end encrypted vault for everything you copy. This is the API its apps use to sync. It is written for people building a client or running their own server.\n\nWhat the server can and cannot do:\n\n- Every relic and blob arrives already encrypted on the device. The server stores ciphertext, enforces quotas and ordering, and never holds a key.\n- Every route except `/health`, `/stripe/plans`, `/stripe/webhook`, and the public share views needs a bearer token (see Security). There is no API key you can request; a token comes from signing in to an account or from pairing a device.\n- Because the payloads are ciphertext, this is not a data API a third party can read from. It is the sync contract, published so clients and self-hosters can be built against it.\n\nThe long-form contract with the reasoning behind each route is docs/api.md (https://relic.space/docs/api.md). The envelope and blob byte formats are docs/wire-format.md; the key derivation and sealing are docs/crypto.md. Relic's website has a separate, account-less one-time note API at relic.space/api/note that is not part of this document.\n\nSource: https://github.com/RelicSync/relic (worker/src). This file lives at docs/openapi.json in that repo and is served at https://relic.space/openapi.json.\n\nRate limits: every route except the webhook and the live-sync socket sits behind a fixed-window limiter, per account on signed-in routes and per IP on public ones. Replies from a limited route carry `RateLimit-Policy` and `RateLimit-Limit`; a 429 adds `RateLimit`, `RateLimit-Remaining`, `RateLimit-Reset` and `Retry-After`. The policies are listed under `x-rate-limits` below and in docs/api.md.\n\nVersioning and deprecation: the path carries no version; this document's `info.version` follows semver (patch for wording, minor for additive changes, major for a breaking one). Additive changes ship at any time and clients ignore fields they do not know. A breaking change ships as a new route, and the old one keeps working for at least 180 days, marked `deprecated: true` here and answering with `Deprecation`, `Sunset` and a `successor-version` link until its sunset date, after which it returns 410 `gone`. The full policy is `x-versioning-policy` below and in docs/api.md.",
     "termsOfService": "https://relic.space/legal/terms",
@@ -690,6 +690,35 @@
           },
           "401": { "$ref": "#/components/responses/Unauthorized" },
           "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/account/send-download-link": {
+      "post": {
+        "tags": ["account"],
+        "operationId": "sendDownloadLink",
+        "summary": "Email this account the desktop download link",
+        "description": "For somebody who signed in on a phone first. The mail goes to the signed-in identity's own address, which the caller cannot choose, and there is no request body. One send per account per hour.",
+        "parameters": [{ "$ref": "#/components/parameters/XRelicDevice" }],
+        "responses": {
+          "204": { "description": "Sent." },
+          "400": {
+            "description": "This sign-in carries no email address (`no_email`), so there is nowhere to send it.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": {
+            "description": "Already sent within the hour (`already_sent`), or too many requests (`rate_limited`).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "502": {
+            "description": "The mail provider refused the send (`send_failed`). Safe to retry.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "503": {
+            "description": "This server sends no email (`unconfigured`). Every self-hosted server answers this.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
         }
       }
     },
