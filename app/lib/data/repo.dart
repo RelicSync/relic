@@ -303,6 +303,17 @@ abstract class RelicRepo {
   bool get keepHintShown => true;
   Future<void> markKeepHintShown() async {}
 
+  /// The "you may have started a second vault" notice (desktop), once it has
+  /// been dismissed. Same shape as the keep hint: default true = never show;
+  /// LocalDeskRepo persists it.
+  bool get secondVaultNoticeDismissed => true;
+  Future<void> markSecondVaultNoticeDismissed() async {}
+
+  /// The one-time "add your phone" nudge (desktop). Default true = never show;
+  /// LocalDeskRepo persists it.
+  bool get addPhoneNudgeShown => true;
+  Future<void> markAddPhoneNudgeShown() async {}
+
   /// The keep-the-last-thing hotkey as a person would read it ("Ctrl + Shift
   /// + W"), for the screens that teach it. Null where there is no such hotkey.
   String? get keepHotkeyLabel => null;
@@ -745,6 +756,14 @@ class MemoryRepo implements RelicRepo {
   bool get keepHintShown => true;
   @override
   Future<void> markKeepHintShown() async {}
+  @override
+  bool get secondVaultNoticeDismissed => true;
+  @override
+  Future<void> markSecondVaultNoticeDismissed() async {}
+  @override
+  bool get addPhoneNudgeShown => true;
+  @override
+  Future<void> markAddPhoneNudgeShown() async {}
   @override
   String? get keepHotkeyLabel => null;
   @override
