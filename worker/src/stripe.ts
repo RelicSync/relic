@@ -679,63 +679,53 @@ async function sendPlanLapsedEmail(
   }
 }
 
-// ---- scheduled history-ring nudge (cron) -----------------------------------
-// One email, once, to a free account whose oldest copies have started dropping
-// out of view. This is the only surface that reaches somebody running an old
-// build, which is exactly who is over the ring today.
+// ---- scheduled free-limit nudges (cron) ------------------------------------
+// One email, once, to a free account that has reached a wall. The free plan has
+// two of them and each gets its own letter and its own stamp column:
 //
-// Best-effort like the other two mails: no key means no work at all, and a send
-// failure still stamps the row so a bad address cannot retry every day forever.
-const RING_EMAIL_BATCH = 50;
+//   ring_evicted > 0          -> the oldest copies have started dropping out of
+//                                view (TIERS.free.ring)   -> ring_email_at
+//   vault_count >= free cap   -> the kept-forever shelf is full
+//                                (TIERS.free.vault)       -> vault_email_at
+//
+// These are the only surfaces that reach somebody running an old build, which
+// is exactly who is over a limit today.
+//
+// A stamp means "never try this account again", so it is only written once we
+// know retrying is pointless: see stampable(). Before 2026-09-17 it went down
+// after every attempt, and a single bad Resend key on 2026-09-10 permanently
+// silenced every account it touched. A server problem must not cost us the
+// person.
+const NUDGE_EMAIL_BATCH = 50;
 
-export async function ringNudgeSweep(env: Env): Promise<void> {
-  // Checked BEFORE any query: a self-host instance has no Resend key and this
-  // must not cost it a database read on every janitor tick.
-  if (!env.RESEND_API_KEY) return;
+/// Should this account be stamped, and so never tried again?
+///
+/// Yes when the mail went out, and yes on a 422, which is Resend telling us the
+/// address itself is the problem. No amount of waiting fixes a dead mailbox.
+///
+/// Everything else is ours, not theirs: a rejected key (401/403), a rate limit
+/// (429), a 5xx, a network blip. Those leave the row NULL so the next tick tries
+/// again, which is what lets a fixed key heal the backlog by itself.
+const stampable = (ok: boolean, status: number): boolean => ok || status === 422;
 
-  const now = Math.floor(Date.now() / 1000);
-  const due = await env.DB.prepare(
-    `SELECT u.account_id, a.email
-       FROM account_usage u
-       JOIN accounts a ON a.account_id = u.account_id
-      WHERE u.ring_evicted > 0
-        AND u.ring_email_at IS NULL
-        AND a.email IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.account_id = u.account_id)
-      LIMIT ?1`,
-  ).bind(RING_EMAIL_BATCH).all<{ account_id: string; email: string }>();
-
-  for (const row of due.results ?? []) {
-    await sendRingNudgeEmail(env, row.account_id, row.email);
-    await env.DB.prepare(
-      "UPDATE account_usage SET ring_email_at = ?2 WHERE account_id = ?1",
-    ).bind(row.account_id, now).run();
-  }
+interface NudgeMail {
+  subject: string;
+  text: string;
+  html: string;
 }
 
-async function sendRingNudgeEmail(env: Env, accountId: string, to: string): Promise<void> {
+/// Posts one mail to Resend and reports whether the row may be stamped.
+/// Never throws: a nudge must not be able to fail the sweeps around it.
+async function sendNudgeMail(
+  env: Env,
+  evt: string,
+  accountId: string,
+  to: string,
+  mail: NudgeMail,
+): Promise<boolean> {
+  let ok = false;
+  let status = 0;
   try {
-    const cap = TIERS.free.ring; // the number in the copy is the live cap
-    const upgrade = "https://relic.space/upgrade?source=ring_email";
-    const text =
-      `You've copied more than ${cap} things into Relic. Nice.\n\n` +
-      `The free plan keeps your last ${cap} in view, so your oldest copies have ` +
-      `started to drop out of search. Relic still has them.\n\n` +
-      `Pro keeps every copy, forever, for $7 a month or $60 a year. Upgrade and ` +
-      `the ones that dropped off come straight back.\n\n` +
-      `${upgrade}\n\n` +
-      `Reply to this email if anything is off.\n\n` +
-      `The Relic team`;
-    const html =
-      `<p>You've copied more than ${cap} things into Relic. Nice.</p>` +
-      `<p>The free plan keeps your last ${cap} in view, so your oldest copies ` +
-      `have started to drop out of search. Relic still has them.</p>` +
-      `<p>Pro keeps every copy, forever, for $7 a month or $60 a year. Upgrade ` +
-      `and the ones that dropped off come straight back.</p>` +
-      `<p><a href="${upgrade}">Upgrade</a></p>` +
-      `<p>Reply to this email if anything is off.</p>` +
-      `<p>The Relic team</p>`;
-
     const r = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
@@ -745,15 +735,137 @@ async function sendRingNudgeEmail(env: Env, accountId: string, to: string): Prom
       body: JSON.stringify({
         from: "Relic <no-reply@relic.space>",
         to,
-        subject: "Your oldest copies are dropping off",
-        text,
-        html,
+        subject: mail.subject,
+        text: mail.text,
+        html: mail.html,
       }),
     });
-    console.log(JSON.stringify({ evt: "ring_email", account: accountId, ok: r.ok }));
+    ok = r.ok;
+    status = r.status;
   } catch (e) {
-    console.log(JSON.stringify({ evt: "ring_email", account: accountId, ok: false, err: String(e) }));
+    console.log(JSON.stringify({ evt, account: accountId, ok: false, err: String(e) }));
+    return false; // a thrown fetch is always ours to retry
   }
+  console.log(JSON.stringify({ evt, account: accountId, ok, status }));
+  return stampable(ok, status);
+}
+
+/// Free accounts with an address that have reached `predicate` and have not been
+/// told yet. `stampColumn` and the NULL check are the same column, so the two
+/// sweeps can never read each other's memory.
+async function dueForNudge(
+  env: Env,
+  stampColumn: "ring_email_at" | "vault_email_at",
+  predicate: string,
+  bind: unknown[],
+): Promise<{ account_id: string; email: string }[]> {
+  const r = await env.DB.prepare(
+    `SELECT u.account_id, a.email
+       FROM account_usage u
+       JOIN accounts a ON a.account_id = u.account_id
+      WHERE ${predicate}
+        AND u.${stampColumn} IS NULL
+        AND a.email IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.account_id = u.account_id)
+      LIMIT ?${bind.length + 1}`,
+  ).bind(...bind, NUDGE_EMAIL_BATCH).all<{ account_id: string; email: string }>();
+  return r.results ?? [];
+}
+
+async function stampNudge(
+  env: Env,
+  stampColumn: "ring_email_at" | "vault_email_at",
+  accountId: string,
+  now: number,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE account_usage SET ${stampColumn} = ?2 WHERE account_id = ?1`,
+  ).bind(accountId, now).run();
+}
+
+export async function ringNudgeSweep(env: Env): Promise<void> {
+  // Checked BEFORE any query: a self-host instance has no Resend key and this
+  // must not cost it a database read on every janitor tick.
+  if (!env.RESEND_API_KEY) return;
+
+  const now = Math.floor(Date.now() / 1000);
+  const due = await dueForNudge(env, "ring_email_at", "u.ring_evicted > 0", []);
+
+  for (const row of due) {
+    if (await sendNudgeMail(env, "ring_email", row.account_id, row.email, ringNudgeMail())) {
+      await stampNudge(env, "ring_email_at", row.account_id, now);
+    }
+  }
+}
+
+export async function vaultCapSweep(env: Env): Promise<void> {
+  if (!env.RESEND_API_KEY) return;
+  // Unlimited vault on this tier table means there is no wall to write about.
+  const cap = TIERS.free.vault;
+  if (cap === null) return;
+
+  const now = Math.floor(Date.now() / 1000);
+  const due = await dueForNudge(env, "vault_email_at", "u.vault_count >= ?1", [cap]);
+
+  for (const row of due) {
+    if (await sendNudgeMail(env, "vault_email", row.account_id, row.email, vaultCapMail())) {
+      await stampNudge(env, "vault_email_at", row.account_id, now);
+    }
+  }
+}
+
+function ringNudgeMail(): NudgeMail {
+  const cap = TIERS.free.ring; // the number in the copy is the live cap
+  const upgrade = "https://relic.space/upgrade?source=ring_email";
+  return {
+    subject: "Your oldest copies are dropping off",
+    text:
+      `You've copied more than ${cap} things into Relic. Nice.\n\n` +
+      `The free plan keeps your last ${cap} in view, so your oldest copies have ` +
+      `started to drop out of search. Relic still has them.\n\n` +
+      `Pro keeps every copy, forever, for $7 a month or $60 a year. Upgrade and ` +
+      `the ones that dropped off come straight back.\n\n` +
+      `${upgrade}\n\n` +
+      `Reply to this email if anything is off.\n\n` +
+      `The Relic team`,
+    html:
+      `<p>You've copied more than ${cap} things into Relic. Nice.</p>` +
+      `<p>The free plan keeps your last ${cap} in view, so your oldest copies ` +
+      `have started to drop out of search. Relic still has them.</p>` +
+      `<p>Pro keeps every copy, forever, for $7 a month or $60 a year. Upgrade ` +
+      `and the ones that dropped off come straight back.</p>` +
+      `<p><a href="${upgrade}">Upgrade</a></p>` +
+      `<p>Reply to this email if anything is off.</p>` +
+      `<p>The Relic team</p>`,
+  };
+}
+
+function vaultCapMail(): NudgeMail {
+  const cap = TIERS.free.vault; // the number in the copy is the live cap
+  const upgrade = "https://relic.space/upgrade?source=vault_email";
+  return {
+    subject: "Your Relic vault is full",
+    text:
+      `You've filled your Relic vault. The free plan keeps ${cap} things ` +
+      `forever, and you are at all ${cap}.\n\n` +
+      `Relic will stop keeping new ones until you make room, so anything you ` +
+      `copy from here lands in your history and ages out of it in time.\n\n` +
+      `Pro lifts the limit for $7 a month or $60 a year. Everything you have ` +
+      `already kept stays exactly where it is.\n\n` +
+      `${upgrade}\n\n` +
+      `Reply to this email if anything is off.\n\n` +
+      `The Relic team`,
+    html:
+      `<p>You've filled your Relic vault. The free plan keeps ${cap} things ` +
+      `forever, and you are at all ${cap}.</p>` +
+      `<p>Relic will stop keeping new ones until you make room, so anything ` +
+      `you copy from here lands in your history and ages out of it in time.</p>` +
+      `<p>Pro lifts the limit for $7 a month or $60 a year. Everything you ` +
+      `have already kept stays exactly where it is.</p>` +
+      `<p><a href="${upgrade}">Upgrade</a></p>` +
+      `<p>Reply to this email if anything is off.</p>` +
+      `<p>The Relic team</p>`,
+  };
 }
 
 // ---- scheduled reconcile (cron) --------------------------------------------

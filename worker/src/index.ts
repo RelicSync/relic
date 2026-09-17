@@ -39,6 +39,7 @@ import {
   reconcile,
   ringNudgeSweep,
   stripeWebhook,
+  vaultCapSweep,
 } from "./stripe";
 import { sweepAbandonedMpus, sweepOrphanBlobs, sweepTombstones } from "./sweep";
 import { claimAi, listAi, putAi, releaseAi } from "./ai";
@@ -250,7 +251,7 @@ export async function putRelic(req: Request, env: Env, auth: Auth, uid: string, 
     caps.vault !== null && envelope.promoted && !stored?.promoted &&
     usage.vault >= caps.vault
   ) {
-    return err(402, "vault_cap", "vault is full — upgrade to keep more");
+    return err(402, "vault_cap", "vault is full, upgrade to keep more");
   }
   // storage cap — all stored bytes, every tier.
   if (
@@ -841,12 +842,18 @@ export default {
   // is fenced so a sweep failure can't starve the billing sweeps.
   async scheduled(_event: ScheduledController, env: Env): Promise<void> {
     await graceSweep(env);
-    // Fenced on its own: one nudge email must never be able to fail the billing
-    // sweeps behind it.
+    // Fenced on their own: one nudge email must never be able to fail the
+    // billing sweeps behind it. Both free walls get a pass every tick; each
+    // keeps its own stamp column, so neither can swallow the other.
     try {
       await ringNudgeSweep(env);
     } catch (e) {
       console.error(JSON.stringify({ evt: "ring_email_error", err: String(e) }));
+    }
+    try {
+      await vaultCapSweep(env);
+    } catch (e) {
+      console.error(JSON.stringify({ evt: "vault_email_error", err: String(e) }));
     }
     await reconcile(env);
     await sweepShares(env);

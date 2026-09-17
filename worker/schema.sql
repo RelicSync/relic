@@ -105,7 +105,9 @@ CREATE TABLE IF NOT EXISTS account_usage (
     history_count INTEGER NOT NULL DEFAULT 0,
     evicted_count INTEGER NOT NULL DEFAULT 0,
     ring_evicted  INTEGER NOT NULL DEFAULT 0,
-    ring_email_at INTEGER
+    ring_email_at INTEGER,
+    -- When the one vault-full email went out (migrations/0013). NULL = never.
+    vault_email_at INTEGER
 );
 
 -- AI records + the work lease (migrations/0007_ai_meta.sql has the rationale).
