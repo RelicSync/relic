@@ -71,6 +71,12 @@ export const UPGRADES: ColumnUpgrade[] = [
     column: "ring_email_at",
     add: "ALTER TABLE account_usage ADD COLUMN ring_email_at INTEGER",
   },
+  // worker/migrations/0013_vault_cap_email.sql
+  {
+    table: "account_usage",
+    column: "vault_email_at",
+    add: "ALTER TABLE account_usage ADD COLUMN vault_email_at INTEGER",
+  },
 ];
 
 /// Apply every upgrade this database is missing. Returns the columns it added,
