@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src/index";
 import { dlKey } from "../src/download_link";
+import { MAIL_FROM } from "../src/mail";
 import { HS_SECRET, mintJwt, setupSchema, sha256Hex } from "./helpers";
 
 // deno-lint-ignore no-explicit-any
@@ -76,7 +77,7 @@ describe("send download link", () => {
     expect(String(url)).toBe("https://api.resend.com/emails");
     const sent = JSON.parse(String(init.body));
     expect(sent.to).toBe("someone@example.test");
-    expect(sent.from).toBe("Relic <no-reply@relic.space>");
+    expect(sent.from).toBe(MAIL_FROM);
     expect(sent.subject).toBe("Your Relic download link");
     expect(sent.text).toContain("relic.space/get");
     expect(sent.text).toContain("Here is the link you asked for.");

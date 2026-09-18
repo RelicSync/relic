@@ -14,6 +14,7 @@ import type { Env, StripeMessage } from "./env";
 import { isTier, type Tier, TIERS } from "./tiers";
 import type { Auth } from "./auth";
 import { CORS, err, json } from "./http";
+import { MAIL_FROM } from "./mail";
 
 const STRIPE_API = "https://api.stripe.com/v1";
 const GRACE_DAYS = 7; // keep access this long after a failed payment
@@ -477,7 +478,7 @@ async function maybeSendZeroDeviceEmail(env: Env, accountId: string, session: an
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: "Relic <no-reply@relic.space>",
+        from: MAIL_FROM,
         to,
         subject: "Your Relic plan is active. 2-minute setup",
         text,
@@ -666,7 +667,7 @@ async function sendPlanLapsedEmail(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: "Relic <no-reply@relic.space>",
+        from: MAIL_FROM,
         to,
         subject: "Your Relic plan has lapsed. Your data is safe",
         text,
@@ -733,7 +734,7 @@ async function sendNudgeMail(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: "Relic <no-reply@relic.space>",
+        from: MAIL_FROM,
         to,
         subject: mail.subject,
         text: mail.text,
