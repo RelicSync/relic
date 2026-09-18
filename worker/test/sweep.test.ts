@@ -11,6 +11,7 @@ import {
 } from "../src/sweep";
 import { blobR2Key } from "../src/blob";
 import worker from "../src/index";
+import { MAIL_FROM } from "../src/mail";
 import { ringNudgeSweep, vaultCapSweep } from "../src/stripe";
 import { TIERS } from "../src/tiers";
 import { setupSchema } from "./helpers";
@@ -232,6 +233,7 @@ describe("ring nudge sweep", () => {
     expect(url).toBe("https://api.resend.com/emails");
     const sent = JSON.parse(init.body);
     expect(sent.to).toBe("over@x.com");
+    expect(sent.from).toBe(MAIL_FROM);
     expect(sent.subject).toBe("Your oldest copies are dropping off");
     expect(sent.text).toContain(`your last ${TIERS.free.ring} in view`);
     expect(sent.text).toContain("https://relic.space/upgrade?source=ring_email");
@@ -319,6 +321,7 @@ describe("ring nudge sweep", () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
       const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(sent.from).toBe(MAIL_FROM);
       expect(sent.subject).toBe("Your Relic vault is full");
       expect(sent.text).toContain(`keeps ${CAP} things`);
       expect(sent.text).toContain("https://relic.space/upgrade?source=vault_email");

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src/index";
 import { applyStripeEvent, graceSweep } from "../src/stripe";
+import { MAIL_FROM } from "../src/mail";
 import { HS_SECRET, mintJwt, setupSchema, sha256Hex } from "./helpers";
 
 // deno-lint-ignore no-explicit-any
@@ -303,7 +304,7 @@ describe("checkout.session.completed setup email", () => {
     expect(url).toBe("https://api.resend.com/emails");
     expect(init.headers.Authorization).toBe("Bearer re_test");
     const sent = JSON.parse(init.body);
-    expect(sent.from).toBe("Relic <no-reply@relic.space>");
+    expect(sent.from).toBe(MAIL_FROM);
     expect(sent.to).toBe("buyer@x.com");
     expect(sent.subject).toBe("Your Relic plan is active. 2-minute setup");
     expect(sent.text).toContain("https://relic.space/download/windows");

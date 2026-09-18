@@ -26,6 +26,7 @@
 import type { Env } from "./env";
 import type { Auth } from "./auth";
 import { CORS, err } from "./http";
+import { MAIL_FROM } from "./mail";
 
 /// One send per account per hour.
 export const DL_TTL = 60 * 60;
@@ -75,7 +76,7 @@ export async function sendDownloadLink(env: Env, auth: Auth): Promise<Response> 
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: "Relic <no-reply@relic.space>",
+        from: MAIL_FROM,
         to,
         subject: SUBJECT,
         text: TEXT,
