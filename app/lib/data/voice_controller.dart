@@ -56,18 +56,47 @@ class VoiceController extends ChangeNotifier {
 
   bool get hasPending => _pending != null;
   bool get busy => recording || processing || _launching;
+
+  /// True once Voice was offered or explicitly set, so the one-time opt-in
+  /// card on first open never comes back.
+  bool offered = false;
+
+  /// The opt-in card is due: Windows, never offered, not on, and a Voice
+  /// worker is actually installed beside the app.
+  bool get offerPending =>
+      Platform.isWindows &&
+      !enabled &&
+      !offered &&
+      !_disposed &&
+      workerInstalled;
+
+  bool get workerInstalled {
+    if (launchProcess != null) return true;
+    final sep = Platform.pathSeparator;
+    final root = File(Platform.resolvedExecutable).parent.path;
+    return File('$root${sep}voice${sep}relic-voice.exe').existsSync();
+  }
+
+  Future<void> acceptOffer() => setEnabled(true);
+
+  Future<void> declineOffer() async {
+    offered = true;
+    await savePreferences();
+  }
   File get _prefs =>
       File('${appDataPath()}${Platform.pathSeparator}voice.json');
 
   Future<void> initialize() async {
     if (!Platform.isWindows) return;
-    // New installs and upgrades prepare Voice automatically. Never override an opt-out.
-    enabled = true;
+    // Voice stays off until the person turns it on, from the one-time offer
+    // on first open or from Settings. A saved choice always wins.
+    enabled = false;
     repo.addListener(_syncBlocklist);
     _syncBlocklist();
     try {
       final j = jsonDecode(await _prefs.readAsString()) as Map<String, dynamic>;
-      enabled = j['enabled'] != false;
+      enabled = j['enabled'] == true;
+      offered = j['offered'] == true || j.containsKey('enabled');
       punctuation = j['punctuation'] != false;
       shortcuts = j['shortcuts'] != false;
       device = j['device'] as int?;
@@ -105,6 +134,7 @@ class VoiceController extends ChangeNotifier {
     final payload = jsonEncode({
       'version': 1,
       'enabled': enabled,
+      'offered': offered,
       'punctuation': punctuation,
       'shortcuts': shortcuts,
       'device': device,
@@ -127,6 +157,7 @@ class VoiceController extends ChangeNotifier {
   }
 
   Future<void> setEnabled(bool on) async {
+    offered = true;
     if (enabled == on && (ready || _launching)) return;
     enabled = on;
     if (on) {

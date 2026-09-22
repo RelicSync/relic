@@ -51,6 +51,7 @@ import 'onboarding/desktop_onboarding.dart';
 import 'ui/actionable_notification.dart';
 import 'ui/popup.dart';
 import 'ui/settings.dart';
+import 'ui/voice_offer.dart';
 import 'platform/popup_placement.dart';
 import 'platform/rich_formats.dart';
 import 'widgets/controls.dart';
@@ -492,12 +493,18 @@ class _RealAppState extends State<RealApp>
   }
 
   String _voiceMenuState = '';
+  bool _voiceOfferShown = false;
   void _voiceChanged() {
     final key =
         '${_voice.ready}/${_voice.busy}/${_voice.recording}/${_voice.hasPending}';
     if (mounted && key != _voiceMenuState) {
       _voiceMenuState = key;
       unawaited(_rebuildMenu());
+    }
+    // The opt-in card flips on when initialize() finishes and off when it is
+    // answered; neither changes the tray menu, so rebuild the window for it.
+    if (mounted && _voice.offerPending != _voiceOfferShown) {
+      setState(() => _voiceOfferShown = _voice.offerPending);
     }
   }
 
@@ -2385,8 +2392,23 @@ class _RealAppState extends State<RealApp>
         if (widget.repo.isDemo && !widget.repo.demoNudgeDismissed) {
           banners.add(_demoNudgeBanner());
         }
-        if (banners.isEmpty) return popup;
-        return Column(children: [...banners, Expanded(child: popup)]);
+        final body = banners.isEmpty
+            ? popup
+            : Column(children: [...banners, Expanded(child: popup)]);
+        if (!_voice.offerPending) return body;
+        // The one-time Voice opt-in, a modal over the popup on first open.
+        // Both answers are remembered, so it never comes back.
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            body,
+            VoiceOffer(
+              dark: _useDark,
+              onAccept: () => unawaited(_voice.acceptOffer()),
+              onDecline: () => unawaited(_voice.declineOffer()),
+            ),
+          ],
+        );
       },
     );
   }

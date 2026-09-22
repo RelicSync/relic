@@ -13,10 +13,12 @@ still work, but do not yet include Voice.
   use `voice-note`. Normal promotion, search and retention apply.
 - Local CPU English recognition, automatic R2 model delivery, device-local word
   corrections, a volume-reactive mark and shadow-only recording/decoding feedback.
-- Voice defaults on for new Windows installs and upgrades with no explicit Voice
-  choice. `voice.json` containing `"enabled": false` stays off. First launch
-  downloads about 716 MB and loads the models before Voice becomes ready.
-  This prepares Voice; it does not start a microphone recording.
+- Voice is off until the person turns it on. The first popup open on a build
+  that ships the worker shows a one-time card: Turn on voice, or Not now.
+  Either answer is remembered in `voice.json` (`offered`), and the Settings
+  switch works at any time. Turning it on downloads about 716 MB and loads the
+  models before Voice becomes ready. That prepares Voice; it does not start a
+  microphone recording.
 
 Source map: [controller](../app/lib/data/voice_controller.dart),
 [Windows bridge](../app/windows/runner/native_voice.cpp), [worker](worker.py),
@@ -35,7 +37,7 @@ Source map: [controller](../app/lib/data/voice_controller.dart),
    if `voice/relic-voice.exe` is missing from the Flutter output, and signs
    `voice/relic-voice.exe` plus our own `_internal/native/*.dll` with the other
    first-party executables before Inno Setup. `-SkipVoice` exists only for a
-   deliberately voice-less build; never use it for the default-on release.
+   deliberately voice-less build; never use it for a release that offers Voice.
 3. **Choose a new version** in `app/pubspec.yaml`, include Voice in release notes,
    and run the checks below. Windows support for this bundle is x64 with
    AVX2/FMA/F16C; do not label it Windows ARM64 or legacy-CPU compatible.
@@ -148,7 +150,7 @@ Test microphone capture/device changes on the audio stacks actually supported.
   explicit Copy usable and explain the missing capability. Do not claim
   dictate-anywhere support on an unvalidated compositor.
 
-Enable Voice by default on each port only once its shipped worker, first-run
+Offer Voice on each port only once its shipped worker, first-run
 setup and native capabilities pass the same clean-install, upgrade, cancellation,
 real-audio, focus, clipboard and UI checks as Windows. Recording must remain an
 explicit user action. Suggested order: Windows release, macOS, Linux X11,

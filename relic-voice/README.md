@@ -1,8 +1,10 @@
 # Windows Voice
 
-Relic Voice is local English dictation, enabled by default on Windows for new
-installs and upgrades without a saved Voice preference. An explicit off setting
-is preserved. First setup automatically downloads 715,727,326 bytes of pinned models from `https://models.relic.space/relic-voice/v1/`.
+Relic Voice is local English dictation on Windows. It is off until the person
+turns it on: the first time the popup opens on a build that ships the worker,
+a one-time card offers "Turn on voice" or "Not now", and either answer is
+remembered (`offered` in `voice.json`). Voice settings keeps the switch. First
+setup downloads 715,727,326 bytes of pinned models from `https://models.relic.space/relic-voice/v1/`.
 Downloads resume and every completed file is checked against its embedded SHA-256.
 The three files are hosted on Relic's R2 bucket. There is no cloud speech service.
 
@@ -35,8 +37,8 @@ New background enrichment work yields while a voice session is active.
 
 Double-click `relic-voice/Try Windows Voice.cmd`. It opens Voice
 settings with a separate profile at `%LOCALAPPDATA%\RelicVoicePreview`.
-Voice prepares automatically unless it was previously turned off in this
-preview profile. The installed Relic profile is not changed. The preview stays in the tray until you quit it.
+The first popup open offers Voice; accept it to prepare the models. A saved
+answer in this preview profile is kept. The installed Relic profile is not changed. The preview stays in the tray until you quit it.
 
 ## Build
 

@@ -190,7 +190,7 @@ class _VoiceSettingsState extends State<VoiceSettings> {
           SettingsToggleRow(
             title: 'Enable Voice',
             sub:
-                'On by default. Downloads 716 MB of models automatically during first setup.',
+                'Off until you turn it on. Downloads 716 MB of models once during first setup.',
             value: v.enabled,
             onChanged: v.hasPending ? null : (on) => v.setEnabled(on),
           ),
