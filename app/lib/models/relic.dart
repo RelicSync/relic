@@ -713,13 +713,80 @@ String? aiTextForWire(String? text, {int budget = kAiTextBytes}) {
   return t;
 }
 
+/// The name the phone gives a photo it has no name for.
+const String kSharedImageTitle = 'Shared image';
+
+/// The longest headline [titleFromExtractedText] will build.
+const int kExtractedTitleChars = 60;
+
+/// A headline read out of an item's own text: its first line that has words
+/// in it, whitespace collapsed, cut at a word boundary.
+///
+/// This is what names a photo when nothing better is available. OCR on a
+/// screenshot of a receipt gives "Blue Bottle Coffee" on its first line, and
+/// that is a far better name than IMG_4821.jpg. Lines with no letters (a page
+/// number, a price, a divider) are skipped: they are not names.
+///
+/// Deterministic on purpose. [isPlaceholderTitle] recognises a title this
+/// function produced by producing it again, so there is no flag to store and
+/// nothing to migrate.
+String? titleFromExtractedText(String? text) {
+  if (text == null) return null;
+  final letters = RegExp(r'\p{L}', unicode: true);
+  for (final raw in text.split('\n')) {
+    final line = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (line.isEmpty) continue;
+    if (letters.allMatches(line).length < 2) continue;
+    if (line.length <= kExtractedTitleChars) return line;
+    var cut = line.substring(0, kExtractedTitleChars);
+    final space = cut.lastIndexOf(' ');
+    if (space > kExtractedTitleChars ~/ 2) cut = cut.substring(0, space);
+    return '${cut.trimRight()}…';
+  }
+  return null;
+}
+
+/// Whether a photo's [title] is one the app wrote, rather than the user.
+///
+/// The phone names a shared photo after its file at capture time, or
+/// [kSharedImageTitle] when the file had no name, so that the item has a
+/// headline before any desktop has looked at it. A desktop that later reads the
+/// text out of the image names it from that text ([titleFromExtractedText]).
+/// Neither is a name the user chose, so neither should stop a better one from
+/// landing: a real description from the labeler, or the first OCR title on a
+/// photo still wearing its filename.
+///
+/// A name the user typed matches none of these and is never touched. The one
+/// blind spot, a user who deliberately names a photo exactly after its file or
+/// its first line of text, loses nothing: the replacement reads the same.
+bool isPlaceholderTitle({
+  required Kind kind,
+  required String? title,
+  required String? filename,
+  required String? content,
+}) {
+  if (kind != Kind.photo) return false;
+  final t = title?.trim();
+  if (t == null || t.isEmpty) return true;
+  if (t == kSharedImageTitle) return true;
+  final f = filename?.trim();
+  if (f != null && f.isNotEmpty && t == f) return true;
+  return t == titleFromExtractedText(content);
+}
+
 /// The headline to store after a labeling pass: the generated title, for a
 /// photo or a text item the user hasn't titled themselves.
 ///
 /// A photo then shows "a rocky beach…" rather than its first OCR line, and a
 /// vault note shows what it is rather than its first 60 characters. A title the
-/// user (or an earlier pass) already set always wins — labeling never overwrites
-/// one. Files keep their filename as the headline.
+/// user set always wins — labeling never overwrites one. Files keep their
+/// filename as the headline.
+///
+/// A photo's placeholder name (see [isPlaceholderTitle]) does not count as set:
+/// a phone-shared photo called IMG_4821.jpg is still waiting for a real name,
+/// and one named from its own OCR text still takes a description from the
+/// labeler. [filename] and [content] are what that check needs; callers that
+/// have the relic pass both.
 ///
 /// Text only reaches a labeling pass once promoted; that gate lives at the call
 /// site, not here.
@@ -727,8 +794,18 @@ String? titleAfterLabel({
   required Kind kind,
   required String? current,
   required String? caption,
+  String? filename,
+  String? content,
 }) {
-  if (current != null && current.trim().isNotEmpty) return current;
+  final placeholder = isPlaceholderTitle(
+    kind: kind,
+    title: current,
+    filename: filename,
+    content: content,
+  );
+  if (!placeholder && current != null && current.trim().isNotEmpty) {
+    return current;
+  }
   if (kind != Kind.photo && kind != Kind.string) return current;
   final cap = caption?.trim();
   return (cap != null && cap.isNotEmpty) ? cap : current;
@@ -759,9 +836,16 @@ String? titleAfterLabel({
           !curLower.contains(t.toLowerCase()) &&
           !suppressed.contains(t.toLowerCase())),
     ],
-    // titleAfterLabel returns `current` whenever it is non-empty, so a
-    // generated title only ever fills a gap.
-    title: titleAfterLabel(kind: cur.kind, current: cur.title, caption: rec.title),
+    // titleAfterLabel keeps `current` whenever the user set it, so a generated
+    // title only ever fills a gap or replaces a placeholder (a phone-shared
+    // photo still named after its file).
+    title: titleAfterLabel(
+      kind: cur.kind,
+      current: cur.title,
+      caption: rec.title,
+      filename: cur.filename,
+      content: cur.content,
+    ),
     content: contentAfterExtract(
       kind: cur.kind,
       current: cur.content,
