@@ -530,11 +530,28 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   /// socket, so a local fake server can watch the push and pull paths and
   /// nothing but the code under test can move the queue.
   @visibleForTesting
-  void debugBindSync(String url, Uint8List mk, {String token = 'test'}) {
+  /// [deviceId] defaults to null, which is what an install looks like before
+  /// DeviceId.get() has run. The AI claim refuses to hold a lease without one,
+  /// so a test that wants to watch that path has to supply it.
+  void debugBindSync(
+    String url,
+    Uint8List mk, {
+    String token = 'test',
+    String? deviceId,
+  }) {
     _syncUrl = url.replaceAll(RegExp(r'/+$'), '');
     _syncToken = token;
     _mk = mk;
+    if (deviceId != null) _deviceId = deviceId;
   }
+
+  /// Test seam for the AI work claim. The thing worth pinning is whether it
+  /// goes to the network at all: an empty batch must make no request, and the
+  /// return value cannot show that (an empty batch yields an empty set either
+  /// way), so only a server watching for the POST can tell.
+  @visibleForTesting
+  Future<Set<String>> debugClaimAiWork(List<Relic> batch, int level) =>
+      _claimAiWork(batch, level);
 
   /// For the QR-pairing + device-registry screens (shared with mobile): the
   /// unlocked master key to deliver, and the current Worker bearer token.
@@ -6103,6 +6120,17 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   /// so the whole batch is granted: a single-device vault must keep working
   /// exactly as it does today, and duplicate work is impossible with one device.
   Future<Set<String>> _claimAiWork(List<Relic> batch, int level) async {
+    // Nothing to divide up, so there is nobody to ask. This runs on the 6-second
+    // enrich timer, which never stops, and an idle vault has an empty batch
+    // every single time — so without this the app posts {"items":[]} forever.
+    //
+    // It was not free. Measured against production on 2026-09-22: 64% of EVERY
+    // request the Worker served was one of these empty polls (300 of 300 sampled
+    // bodies were 12 bytes), five idle desktops at exactly ten a minute each.
+    // The server answers an empty claim without touching D1, but authentication
+    // runs first and charged the database before the handler ever saw the body,
+    // so an empty poll was pure cost start to finish.
+    if (batch.isEmpty) return const <String>{};
     final db = _db;
     if (db == null) return batch.map((r) => r.uid).toSet();
     if (!syncEnabled || _mk == null || (_deviceId?.isEmpty ?? true)) {
