@@ -68,7 +68,7 @@ app/scripts/build_release_macos.sh --identity "Developer ID Application: …" --
 
 `build_macos.sh` builds the CPU-only transcribe.cpp library for arm64 and
 freezes the same worker into `relic-voice/dist/relic-voice`. The release script
-runs it first, copies the bundle to `Relic.app/Contents/Helpers/voice`, signs
+runs it first, copies the bundle to `Relic.app/Contents/Resources/voice`, signs
 every binary inside it with `Runner/Voice.entitlements` (microphone plus the
 loader relaxations a frozen Python needs under the hardened runtime), then
 notarizes the DMG. `--skip-voice` builds without it. The macOS bridge is

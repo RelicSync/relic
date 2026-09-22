@@ -4,7 +4,7 @@
 # Produces relic-voice/dist/relic-voice: a PyInstaller one-dir bundle with its
 # own Python runtime, the pinned transcribe.cpp CPU library, ONNX Runtime and
 # PortAudio. app/scripts/build_release_macos.sh copies it into
-# Relic.app/Contents/Helpers/voice and signs every binary inside it.
+# Relic.app/Contents/Resources/voice and signs every binary inside it.
 #
 # Usage, from anywhere:
 #   relic-voice/build_macos.sh                 # bundle in relic-voice/dist
@@ -89,6 +89,20 @@ rm -rf "$VOICE_ROOT/dist/relic-voice"
   --add-binary "$NATIVE/*.dylib:native" \
   "$VOICE_ROOT/worker.py"
 BUNDLE="$VOICE_ROOT/dist/relic-voice"
+# Wheels ship helper scripts with the execute bit set (onnxruntime/tools,
+# numpy's f2py …). Nothing in the bundle is ever run as a script (the
+# interpreter imports these modules), and codesign has no business reading
+# them as code, so drop the bit from everything that is not a Mach-O binary.
+# Only the worker itself stays executable.
+find "$BUNDLE" -type f -perm -u+x ! -path "$BUNDLE/relic-voice" -print0 \
+  | while IFS= read -r -d '' f; do
+      file "$f" | grep -q "Mach-O" || chmod a-x "$f"
+    done
+# A shebang line is enough for codesign to call a file a script, even with
+# no execute bit. Nothing in the bundle is ever run as a script (the
+# interpreter imports these modules), so the line goes.
+grep -rlI --exclude="*.so" --exclude="*.dylib" '^#!' "$BUNDLE/_internal" 2>/dev/null \
+  | while IFS= read -r f; do sed -i '' '1{/^#!/d;}' "$f"; done
 cp "$VOICE_ROOT/THIRD_PARTY.md" "$BUNDLE/"
 cp -R "$VOICE_ROOT/licenses" "$BUNDLE/"
 "$VENV/bin/python" "$VOICE_ROOT/collect_notices.py" "$BUNDLE"

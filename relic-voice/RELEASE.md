@@ -130,7 +130,7 @@ from `VoiceController.keyLabel` and `modifierLabel`.
   button. The worker records as a child of the app, so the grant is the
   app's.
 - **Signing.** `build_release_macos.sh` runs `build_macos.sh` first, copies
-  the bundle to `Contents/Helpers/voice`, signs every Mach-O inside it, then
+  the bundle to `Contents/Resources/voice`, signs every Mach-O inside it, then
   the worker with `Runner/Voice.entitlements` (microphone,
   disable-library-validation, allow-unsigned-executable-memory,
   allow-dyld-environment-variables), then the app, then notarizes the DMG.

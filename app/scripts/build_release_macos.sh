@@ -84,9 +84,13 @@ else
 fi
 
 # --- builds
+APP_BUNDLE="$APP_DIR/build/macos/Build/Products/Release/relic_app.app"
+# Xcode builds into the bundle that is already there and re-signs it, so a
+# Voice folder left by the previous run would be sealed (or refused) before
+# this script gets to it. Same reason build_release.ps1 clears Release\voice.
+rm -rf "$APP_BUNDLE/Contents/Resources/voice"
 echo "==> flutter build macos --release"
 (cd "$APP_DIR" && flutter build macos --release)
-APP_BUNDLE="$APP_DIR/build/macos/Build/Products/Release/relic_app.app"
 [[ -d "$APP_BUNDLE" ]] || { echo "flutter build did not produce $APP_BUNDLE" >&2; exit 1; }
 
 echo "==> cargo build sift + relic-cli (release)"
@@ -104,11 +108,15 @@ cp "$ROOT/target/release/sift" "$MACOS_DIR/sift"
 cp "$ORT_DYLIB" "$MACOS_DIR/libonnxruntime.dylib"
 cp "$ROOT/target/release/relic" "$HELPERS_DIR/relic"
 # The Voice worker: VoiceController.workerPath looks for
-# Contents/Helpers/voice/relic-voice; without it Voice settings explains the
-# build has no Voice and the opt-in card never shows.
+# Contents/Resources/voice/relic-voice; without it Voice settings explains the
+# build has no Voice and the opt-in card never shows. Resources, not Helpers:
+# codesign treats a plain folder under Helpers as nested code and refuses the
+# Python sources inside it, while under Resources they are sealed as data and
+# only the Mach-O files (signed below) count as code.
+VOICE_DIR="$APP_BUNDLE/Contents/Resources/voice"
 if [[ "$SKIP_VOICE" == 0 ]]; then
-  rm -rf "$HELPERS_DIR/voice"
-  cp -R "$VOICE_BUNDLE" "$HELPERS_DIR/voice"
+  rm -rf "$VOICE_DIR"
+  cp -R "$VOICE_BUNDLE" "$VOICE_DIR"
 fi
 
 # --- codesign, inside-out (Developer ID + hardened runtime; ad-hoc for dev —
@@ -178,7 +186,6 @@ codesign "${SIGN_ARGS[@]}" "$HELPERS_DIR/relic"
 # microphone, and the loader relaxations a frozen Python needs under the
 # hardened runtime). Notarization checks each one of these.
 if [[ "$SKIP_VOICE" == 0 ]]; then
-  VOICE_DIR="$HELPERS_DIR/voice"
   VOICE_ENTITLEMENTS="$APP_DIR/macos/Runner/Voice.entitlements"
   echo "==> codesign the Voice worker ($(find "$VOICE_DIR" -type f | wc -l | tr -d ' ') files)"
   find "$VOICE_DIR/_internal" -type f \( -name "*.dylib" -o -name "*.so" -o -name "Python" \) -print0 \
@@ -193,6 +200,12 @@ if [[ "$SKIP_VOICE" == 0 ]]; then
         file "$bin" | grep -q "Mach-O" || continue
         codesign "${SIGN_ARGS[@]}" "$bin"
       done
+  # The Python framework is a bundle: seal it as one (its binary was signed
+  # above) so the outer signature sees valid nested code, not loose files.
+  for fw in "$VOICE_DIR/_internal/Python.framework/Versions"/*/; do
+    [[ -d "$fw" && ! -L "${fw%/}" ]] || continue
+    codesign "${SIGN_ARGS[@]}" "${fw%/}"
+  done
   codesign "${SIGN_ARGS[@]}" --entitlements "$VOICE_ENTITLEMENTS" "$VOICE_DIR/relic-voice"
 fi
 codesign "${APP_SIGN_ARGS[@]}" "$APP_BUNDLE"

@@ -73,15 +73,17 @@ class VoiceController extends ChangeNotifier {
   static String get appRuleExample => Platform.isMacOS ? 'chrome' : 'code.exe';
 
   /// Where the bundled worker lives, relative to the app executable: beside
-  /// it on Windows (voice\relic-voice.exe), in Contents/Helpers/voice on a
-  /// Mac. RELIC_VOICE_WORKER points a dev tree at a bundle built elsewhere.
+  /// it on Windows (voice\relic-voice.exe), in Contents/Resources/voice on a
+  /// Mac (codesign treats a plain folder under Helpers as nested code and
+  /// refuses the Python files inside it; Resources seals them as data).
+  /// RELIC_VOICE_WORKER points a dev tree at a bundle built elsewhere.
   static String get workerPath {
     final override = Platform.environment['RELIC_VOICE_WORKER'];
     if (override != null && override.isNotEmpty) return override;
     final sep = Platform.pathSeparator;
     final root = File(Platform.resolvedExecutable).parent.path;
     if (Platform.isMacOS) {
-      return '$root$sep..${sep}Helpers${sep}voice${sep}relic-voice';
+      return '$root$sep..${sep}Resources${sep}voice${sep}relic-voice';
     }
     return '$root${sep}voice${sep}relic-voice.exe';
   }
