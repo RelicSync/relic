@@ -310,18 +310,36 @@ export async function putRelic(req: Request, env: Env, auth: Auth, uid: string, 
   // row earned its data on a paid plan, so we skip the prune entirely (the
   // 250MB storage cap still blocks *new* writes via the 402 above).
   const ring = caps.ring;
-  if (ring !== null) {
+  // How many live unpromoted copies this write leaves the account holding, and
+  // so how many are past the ring. Both halves are already in hand: `usage` is
+  // the cached total this request read for the caps above, and the two
+  // history flags are the move this row just made.
+  //
+  // Asking that before touching relic_meta is the whole point. The ring prune
+  // used to ask the table on EVERY push, as `ORDER BY created_at DESC LIMIT -1
+  // OFFSET ring`, and OFFSET makes SQLite walk all 500 index entries and throw
+  // them away before it can report that nothing is past them. An account
+  // sitting at the cap paid 501 rows read to be told "nothing to do", on every
+  // single write, and that one query was ~97% of all the rows D1 read for us
+  // (measured 2026-09-22: 24M rows/day against a 9,607-row table).
+  const overflow = ring === null ? 0 : usage.history + (nowHistory - wasHistory) - ring;
+  if (ring !== null && overflow > 0) {
     const everBilled = await env.DB.prepare(
       "SELECT 1 FROM subscriptions WHERE account_id = ?1",
     ).bind(auth.account).first();
     if (!everBilled) {
+      // The oldest `overflow` copies ARE the ones past the ring, so ask for
+      // them directly. Same rows the OFFSET form returned, read straight off
+      // idx_meta_ring in its own order, and it reads exactly as many as it
+      // evicts.
+      //
       // `AND evicted = 0` so a row already pushed out never counts against the
       // ring a second time.
       const over = await env.DB.prepare(
         `SELECT uid, blob_key, byte_size, promoted, evicted FROM relic_meta
          WHERE account_id = ?1 AND promoted = 0 AND evicted = 0
-         ORDER BY created_at DESC LIMIT -1 OFFSET ?2`,
-      ).bind(auth.account, ring).all<{ uid: string } & DeletedMeta>();
+         ORDER BY created_at ASC LIMIT ?2`,
+      ).bind(auth.account, overflow).all<{ uid: string } & DeletedMeta>();
       const rows = over.results;
       if (rows.length) {
         const now = Math.floor(Date.now() / 1000);

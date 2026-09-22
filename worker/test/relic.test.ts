@@ -468,6 +468,77 @@ describe("putRelic — history ring GC (free, never-billed)", () => {
     expect(await hasMeta("u1")).toBe(true);
     expect(await metaCount()).toBe(TIERS.free.ring + 6);
   });
+
+  // Cost, not behaviour. The prune used to ask relic_meta on EVERY push, as
+  // `ORDER BY created_at DESC LIMIT -1 OFFSET 500`, and OFFSET makes SQLite walk
+  // all 500 index entries and discard them before it can say nothing is past
+  // them. An account sitting at the cap paid 501 rows read to be told "nothing
+  // to do" on every single write, and that one query was ~97% of every row D1
+  // read for us. These two pin the shape that fixed it, because the old form
+  // passes every behavioural test above.
+  function recordPruneSql(): { sql: string[]; restore: () => void } {
+    const sql: string[] = [];
+    const real = E.DB.prepare.bind(E.DB);
+    E.DB.prepare = (q: string) => {
+      // The prune query and nothing else: computeUsage also reads relic_meta
+      // with `promoted = 0`, and it is not what this is measuring.
+      if (q.includes("blob_key") && q.includes("FROM relic_meta")) sql.push(q);
+      return real(q);
+    };
+    return { sql, restore: () => { E.DB.prepare = real; } };
+  }
+
+  it("under the ring, never asks relic_meta at all", async () => {
+    // One short of the cap, so this push lands exactly ON it and nothing is over.
+    const stmts = [];
+    for (let i = 1; i <= TIERS.free.ring - 1; i++) {
+      stmts.push(
+        E.DB.prepare(
+          `INSERT INTO relic_meta (account_id, uid, created_at, updated_at, byte_size, promoted)
+           VALUES ('A', ?1, ?2, ?2, 1, 0)`,
+        ).bind(`u${i}`, i),
+      );
+    }
+    await E.DB.batch(stmts);
+
+    const spy = recordPruneSql();
+    try {
+      await put(FREE, "unew", { created_at: 10_000, updated_at: 10_000 });
+    } finally {
+      spy.restore();
+    }
+    expect(spy.sql).toEqual([]);
+    expect(await evictedOf("u1")).toBe(0);
+  }, 30_000);
+
+  it("over the ring, reads only the rows it evicts (no OFFSET walk)", async () => {
+    const stmts = [];
+    for (let i = 1; i <= TIERS.free.ring + 1; i++) {
+      stmts.push(
+        E.DB.prepare(
+          `INSERT INTO relic_meta (account_id, uid, created_at, updated_at, byte_size, promoted)
+           VALUES ('A', ?1, ?2, ?2, 1, 0)`,
+        ).bind(`u${i}`, i),
+      );
+    }
+    await E.DB.batch(stmts);
+
+    const spy = recordPruneSql();
+    try {
+      // ring + 2 unpromoted now, so exactly 2 are over.
+      await put(FREE, "unew", { created_at: 10_000, updated_at: 10_000 });
+    } finally {
+      spy.restore();
+    }
+    expect(spy.sql).toHaveLength(1);
+    const q = spy.sql[0].replace(/\s+/g, " ");
+    expect(q).not.toMatch(/OFFSET/i);
+    expect(q).toMatch(/ORDER BY created_at ASC LIMIT/i);
+    // Still the right two rows.
+    expect(await evictedOf("u1")).toBe(1);
+    expect(await evictedOf("u2")).toBe(1);
+    expect(await evictedOf("u3")).toBe(0);
+  }, 30_000);
 });
 
 describe("listRelics — cursor pagination", () => {
