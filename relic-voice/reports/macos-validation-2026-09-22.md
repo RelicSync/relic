@@ -50,7 +50,27 @@ this branch.
 Filled in below from the signed build launched in a sandbox data dir
 (`RELIC_DATA_DIR`) with Voice already on and the models pre-cached.
 
-LIVE_RESULTS
+- The signed app (Developer ID, hardened runtime, the worker under
+  `Contents/Resources/voice` with `Voice.entitlements`) launched from a
+  fresh `RELIC_DATA_DIR` with `voice.json` already on. The worker started
+  as a child of the app, loaded the cached models and reported Ready; no
+  microphone prompt was needed on this Mac because the bundle id already
+  held the grant.
+- Right Option held for nine seconds (a CGEvent press with the right-side
+  device flag, exactly what the keyboard sends) while the spoken clip played
+  through the speakers, then released, with a fresh TextEdit document
+  frontmost. The pulsing mark showed at the bottom centre of the screen
+  while recording. On release the transcript was saved to history first
+  (tags `dictation` and `textedit`, the source-app key from the bridge's
+  `appKey`) and then typed into TextEdit as Unicode key events with the
+  trailing space: `The quick brown fox jumps over the lazy dog 1st. `. The
+  clipboard was untouched.
+- The same run with the speakers muted saved a nine-second recording of
+  room silence as `Thank you.` and inserted it: the whole path works on
+  silence too, and the model's silence habit is the same as on Windows.
+- Words the built-in microphone missed from the speaker playback are a
+  fact about playing audio at a laptop, not about the worker: the same clip
+  fed to the worker directly transcribes in full (see Worker above).
 
 ## Boundaries
 
