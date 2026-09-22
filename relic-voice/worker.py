@@ -65,7 +65,7 @@ def serve(folder):
                         recorder.start(command.get('device'))
                         live = LiveDecode(engine, pool, recorder.rate, command.get('settings'), command.get('app', ''))
                     except Exception:
-                        emit('error', id=sid, message='Could not open microphone. Check Voice settings and Windows microphone access.')
+                        emit('error', id=sid, message='Could not open microphone. Check Voice settings and microphone access.')
                         active = None
                 elif op == 'cancel' and active and active['id'] == sid:
                     recorder.stop()

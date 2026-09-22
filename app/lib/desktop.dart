@@ -165,9 +165,11 @@ Future<void> runRealApp(List<String> args) async {
 
 class RealApp extends StatefulWidget {
   final LocalDeskRepo repo;
+
   /// True when the process was started by a `relic://` deep link, so the popup
   /// should surface on launch rather than starting hidden in the tray.
   final bool showOnLaunch;
+
   /// True when launched by the run-at-login entry (--autostart): stay hidden in
   /// the tray, skipping even the first-run onboarding, so login never surfaces
   /// a window that grabs focus.
@@ -192,6 +194,7 @@ class _RealAppState extends State<RealApp>
         ClipboardListener {
   late final VoiceController _voice = VoiceController(widget.repo);
   bool _paused = false;
+
   /// Timed pause: auto-resume timer + the moment capture comes back (null =
   /// paused until resumed / not paused). The notifier drives the popup's
   /// "Capture paused" pill live.
@@ -200,7 +203,8 @@ class _RealAppState extends State<RealApp>
   final ValueNotifier<bool> _pausedSignal = ValueNotifier(false);
   bool _visible = false;
   bool _connecting = false;
-  bool _onboardStartAtSignIn = false; // onboarding step: false = main welcome page
+  bool _onboardStartAtSignIn =
+      false; // onboarding step: false = main welcome page
   // Open onboarding on the "I already use Relic on another device" door.
   // Set only by the second-vault notice; every other entry clears it.
   bool _onboardStartReturning = false;
@@ -211,7 +215,8 @@ class _RealAppState extends State<RealApp>
   /// shadow copy macOS makes of one) and should offer to install itself into
   /// /Applications before anything else. Read once at startup: the answer
   /// cannot change while the process lives.
-  final BundleLocation? _installOffer = applicationsInstallOfferForThisProcess();
+  final BundleLocation? _installOffer =
+      applicationsInstallOfferForThisProcess();
   final _navKey = GlobalKey<NavigatorState>(); // Esc pops drill-down routes
 
   /// How many devices this account has, null while unknown. Read from the
@@ -275,7 +280,7 @@ class _RealAppState extends State<RealApp>
   @override
   void initState() {
     super.initState();
-    if (Platform.isWindows) {
+    if (VoiceController.supported) {
       _voice.addListener(_voiceChanged);
       unawaited(_voice.initialize());
     }
@@ -393,7 +398,7 @@ class _RealAppState extends State<RealApp>
         await _dismiss();
         return;
       }
-      if (widget.voiceSettingsOnLaunch && Platform.isWindows) {
+      if (widget.voiceSettingsOnLaunch && VoiceController.supported) {
         setState(() {
           _settingsOpen = true;
           _voiceSettingsRequested = true;
@@ -426,12 +431,14 @@ class _RealAppState extends State<RealApp>
     // repo has a fresh bearer by now; unbound repos no-op on the null URL.
     // Registration first, then the count, so this device is in the number the
     // popup reads.
-    unawaited(ensureDeviceRegistered(
-      baseUrl: widget.repo.syncUrl,
-      bearer: () async => widget.repo.syncBearer,
-      label: Platform.localHostname,
-      onlyIfMissing: true,
-    ).whenComplete(_refreshDeviceCount));
+    unawaited(
+      ensureDeviceRegistered(
+        baseUrl: widget.repo.syncUrl,
+        bearer: () async => widget.repo.syncBearer,
+        label: Platform.localHostname,
+        onlyIfMissing: true,
+      ).whenComplete(_refreshDeviceCount),
+    );
   }
 
   /// Ask the registry how many devices are on this account. Never throws, and
@@ -450,7 +457,9 @@ class _RealAppState extends State<RealApp>
         deviceId: await DeviceId.get(),
       ).listOrNull();
       if (list != null) _deviceCount.value = list.length;
-    } catch (_) {/* offline or a server hiccup: leave the count as it was */}
+    } catch (_) {
+      /* offline or a server hiccup: leave the count as it was */
+    }
   }
 
   /// Open the pairing screen so a phone (or another computer) can join this
@@ -465,14 +474,16 @@ class _RealAppState extends State<RealApp>
     await _sizeWindow(520, 620);
     await _present(foreground: true);
     _visible = true;
-    await nav.push(MaterialPageRoute(
-      builder: (_) => AddDeviceScreen(
-        masterKey: mk,
-        bearer: () async => widget.repo.syncBearer,
-        accountId: widget.repo.supabaseUserId,
-        accountEmail: widget.repo.accountEmail,
+    await nav.push(
+      MaterialPageRoute(
+        builder: (_) => AddDeviceScreen(
+          masterKey: mk,
+          bearer: () async => widget.repo.syncBearer,
+          accountId: widget.repo.supabaseUserId,
+          accountEmail: widget.repo.accountEmail,
+        ),
       ),
-    ));
+    );
     if (!mounted) return;
     setState(() => _showingKit = false);
     await _sizeWindow(_popupDims.width, _popupDims.height);
@@ -551,8 +562,8 @@ class _RealAppState extends State<RealApp>
         Platform.isWindows
             ? 'assets/tray_icon.ico'
             : Platform.isLinux
-                ? 'assets/tray_icon.png'
-                : 'assets/tray_icon_template.png',
+            ? 'assets/tray_icon.png'
+            : 'assets/tray_icon_template.png',
         isTemplate: true, // ignored off-macOS
       );
     } catch (_) {}
@@ -590,7 +601,9 @@ class _RealAppState extends State<RealApp>
               '${repo.mergeOfferCount} items from your last account are hidden '
               'on this device, not uploaded here. Choose what to do in Settings.',
         ).show();
-      } catch (_) {/* a failed toast must not block the steps below */}
+      } catch (_) {
+        /* a failed toast must not block the steps below */
+      }
     }
     // repo.syncUrl, not the cloud default: a self-host connect registers on
     // the self-host server. The cap dialog needs a context that is INSIDE the
@@ -602,12 +615,14 @@ class _RealAppState extends State<RealApp>
       onDeviceCap: (dir, e) async {
         final ctx = _navKey.currentContext;
         if (!mounted || ctx == null) return;
-        await showDeviceCapDialog(ctx,
-            directory: dir,
-            devices: e.devices,
-            label: Platform.localHostname,
-            platform: DeviceId.platform(),
-            onUpgrade: _upgradeToPro);
+        await showDeviceCapDialog(
+          ctx,
+          directory: dir,
+          devices: e.devices,
+          label: Platform.localHostname,
+          platform: DeviceId.platform(),
+          onUpgrade: _upgradeToPro,
+        );
       },
     );
     unawaited(_refreshDeviceCount());
@@ -655,7 +670,7 @@ class _RealAppState extends State<RealApp>
       Menu(
         items: [
           MenuItem(key: 'show', label: 'Open history'),
-          if (Platform.isWindows) ...[
+          if (VoiceController.supported) ...[
             MenuItem(key: 'voice_settings', label: 'Voice settings'),
             if (_voice.ready && !_voice.busy && !_voice.hasPending) ...[
               MenuItem(key: 'voice_dictate', label: 'Start dictation'),
@@ -674,13 +689,15 @@ class _RealAppState extends State<RealApp>
           else
             MenuItem.submenu(
               label: 'Pause capture',
-              submenu: Menu(items: [
-                MenuItem(key: 'pause_10', label: 'For 10 minutes'),
-                MenuItem(key: 'pause_60', label: 'For 1 hour'),
-                MenuItem(key: 'pause_inf', label: 'Until I resume it'),
-                MenuItem.separator(),
-                MenuItem(key: 'pause_help', label: 'About pausing…'),
-              ]),
+              submenu: Menu(
+                items: [
+                  MenuItem(key: 'pause_10', label: 'For 10 minutes'),
+                  MenuItem(key: 'pause_60', label: 'For 1 hour'),
+                  MenuItem(key: 'pause_inf', label: 'Until I resume it'),
+                  MenuItem.separator(),
+                  MenuItem(key: 'pause_help', label: 'About pausing…'),
+                ],
+              ),
             ),
           // The queue changes what a global chord does while being invisible
           // everywhere except the picker, so it gets a line here too — the one
@@ -704,11 +721,18 @@ class _RealAppState extends State<RealApp>
           // result lives here too — a missed toast used to mean an available
           // update was simply never mentioned again.
           if (_pendingUpdate case final u?)
-            MenuItem(key: 'install_update', label: 'Install update ${u.version}')
+            MenuItem(
+              key: 'install_update',
+              label: 'Install update ${u.version}',
+            )
           else
             MenuItem(key: 'check_update', label: 'Check for updates…'),
           if (_lastUpdateNote.isNotEmpty)
-            MenuItem(key: 'update_note', label: _lastUpdateNote, disabled: true),
+            MenuItem(
+              key: 'update_note',
+              label: _lastUpdateNote,
+              disabled: true,
+            ),
           MenuItem.separator(),
           MenuItem(key: 'help', label: 'Help…'),
           MenuItem(key: 'quit', label: 'Quit Relic'),
@@ -754,11 +778,12 @@ class _RealAppState extends State<RealApp>
     Future<void> reg(String key, HotkeyBinding b, void Function() h) async {
       if (linux) {
         final accel = linuxAccelerator(
-            ctrl: b.ctrl,
-            alt: b.alt,
-            shift: b.shift,
-            meta: b.win,
-            usbUsage: b.usbUsage);
+          ctrl: b.ctrl,
+          alt: b.alt,
+          shift: b.shift,
+          meta: b.win,
+          usbUsage: b.usbUsage,
+        );
         if (accel == null) {
           failed.add(key);
           return;
@@ -785,7 +810,11 @@ class _RealAppState extends State<RealApp>
     // hotkey as well, which meant that with it on (the default) both hotkeys
     // opened mini and the full popup was unreachable from the keyboard. See
     // miniForSummon.
-    await reg('history', widget.repo.historyHotkey, () => _toggle(Summon.historyHotkey));
+    await reg(
+      'history',
+      widget.repo.historyHotkey,
+      () => _toggle(Summon.historyHotkey),
+    );
     await reg('mini', widget.repo.miniHotkey, () => _toggle(Summon.miniHotkey));
     await reg('capture', widget.repo.captureHotkey, () => _saveAndAnnotate());
     await reg('promote', widget.repo.promoteHotkey, () {
@@ -883,10 +912,10 @@ class _RealAppState extends State<RealApp>
   /// frontmost app. Works straight from the tray — no popup shown. putOnClipboard
   /// arms the echo-suppression guard, so this never re-captures as new history.
   Future<void> _quickPaste(int n) async {
-    await _pasteRelic(widget.repo.nthMostRecent(n),
-        emptyBody: n == 1
-            ? 'No items in Relic yet.'
-            : "There's no item #$n yet.");
+    await _pasteRelic(
+      widget.repo.nthMostRecent(n),
+      emptyBody: n == 1 ? 'No items in Relic yet.' : "There's no item #$n yet.",
+    );
   }
 
   /// Paste-stack push: grab what the user has selected (or, where we cannot
@@ -910,9 +939,7 @@ class _RealAppState extends State<RealApp>
           _visible || srcApp == 'terminal' || !await inputInjectionAvailable();
       if (!skipCopy) {
         await sendCopyChordSafe();
-        for (var i = 0;
-            i < 15 && await clipboardSequence() == seqBefore;
-            i++) {
+        for (var i = 0; i < 15 && await clipboardSequence() == seqBefore; i++) {
           await Future<void>.delayed(const Duration(milliseconds: 40));
         }
       }
@@ -983,8 +1010,10 @@ class _RealAppState extends State<RealApp>
   /// the Accessibility grant nothing can be injected, but the item is on the
   /// clipboard and the user presses their own paste chord — so the paste stack
   /// must still consume it, or the next pop re-serves it and they paste twice.
-  Future<bool> _pasteRelic(Relic? r,
-      {String emptyBody = 'No items in Relic yet.'}) async {
+  Future<bool> _pasteRelic(
+    Relic? r, {
+    String emptyBody = 'No items in Relic yet.',
+  }) async {
     if (_pasteInFlight) return false;
     _pasteInFlight = true;
     try {
@@ -1130,9 +1159,9 @@ class _RealAppState extends State<RealApp>
 
   /// Every display's work area, in the same logical screen space as the cursor.
   Future<List<(Offset, Size)>> _workAreas() async => [
-        for (final d in await screenRetriever.getAllDisplays())
-          (d.visiblePosition ?? Offset.zero, d.visibleSize ?? d.size)
-      ];
+    for (final d in await screenRetriever.getAllDisplays())
+      (d.visiblePosition ?? Offset.zero, d.visibleSize ?? d.size),
+  ];
 
   /// Work area of whichever monitor contains screen-space point [p], falling
   /// back to the cursor monitor. Same coordinate space as [_cursorWorkArea].
@@ -1278,8 +1307,9 @@ class _RealAppState extends State<RealApp>
     x = x.clamp(origin.dx, maxX < origin.dx ? origin.dx : maxX);
     y = y.clamp(origin.dy, maxY < origin.dy ? origin.dy : maxY);
     try {
-      await windowManager
-          .setBounds(Rect.fromLTWH(x, y, size.width, size.height));
+      await windowManager.setBounds(
+        Rect.fromLTWH(x, y, size.width, size.height),
+      );
     } catch (_) {}
   }
 
@@ -1465,8 +1495,10 @@ class _RealAppState extends State<RealApp>
   /// A help page in the system browser, by the wiki's stable key.
   Future<void> _openHelpPage(String key) async {
     try {
-      await launchUrl(Uri.parse(helpUrl(key)),
-          mode: LaunchMode.externalApplication);
+      await launchUrl(
+        Uri.parse(helpUrl(key)),
+        mode: LaunchMode.externalApplication,
+      );
     } catch (_) {}
   }
 
@@ -1501,9 +1533,7 @@ class _RealAppState extends State<RealApp>
       if (!skipCopy) {
         await sendCopyChordSafe();
         // Slow apps (Word/Excel) can take a few hundred ms to render formats.
-        for (var i = 0;
-            i < 15 && await clipboardSequence() == seqBefore;
-            i++) {
+        for (var i = 0; i < 15 && await clipboardSequence() == seqBefore; i++) {
           await Future<void>.delayed(const Duration(milliseconds: 40));
         }
       }
@@ -1610,14 +1640,22 @@ class _RealAppState extends State<RealApp>
   /// including the rich flavors, which both ladders read through
   /// [_readRichFlavors]. `files` is a file-manager copy, one path per file.
   Future<
-      ({
-        List<String> files,
-        String? text,
-        Uint8List? png,
-        String? html,
-        Uint8List? rtf,
-      })> _readClipboardContent() async {
-    const nothing = (files: <String>[], text: null, png: null, html: null, rtf: null);
+    ({
+      List<String> files,
+      String? text,
+      Uint8List? png,
+      String? html,
+      Uint8List? rtf,
+    })
+  >
+  _readClipboardContent() async {
+    const nothing = (
+      files: <String>[],
+      text: null,
+      png: null,
+      html: null,
+      rtf: null,
+    );
     try {
       // A file copy takes priority over text/image reps, as in the watcher.
       var files = await clipboardFilePaths();
@@ -1822,8 +1860,12 @@ class _RealAppState extends State<RealApp>
           final text = await reader.readValue(Formats.plainText);
           if (text != null && !_isRecentlyHintedSecret(text)) {
             final rich = await _readRichFlavors(reader, text);
-            repo.captureText(text,
-                sourceApp: srcApp, html: rich.html, rtf: rich.rtf);
+            repo.captureText(
+              text,
+              sourceApp: srcApp,
+              html: rich.html,
+              rtf: rich.rtf,
+            );
           }
         }
         return;
@@ -1888,7 +1930,11 @@ class _RealAppState extends State<RealApp>
     // (edit/annotate/compose): alt-tabbing to check something mid-note must
     // not destroy a half-typed edit.
     // (and the pushpin keeps the popup up across focus loss by request)
-    if (_connecting || _settingsOpen || _showingKit || _popupModalOpen || _pinned) {
+    if (_connecting ||
+        _settingsOpen ||
+        _showingKit ||
+        _popupModalOpen ||
+        _pinned) {
       return;
     }
     // Ignore the brief focus churn right after we summon the popup.
@@ -1957,7 +2003,7 @@ class _RealAppState extends State<RealApp>
       case 'pause_help':
         await _openHelpPage('tray.pause');
       case 'quit':
-        if (Platform.isWindows && _voice.hasPending) {
+        if (VoiceController.supported && _voice.hasPending) {
           _voiceSettingsRequested = true;
           setState(() => _settingsOpen = true);
           await _sizeWindow(820, 650);
@@ -1965,7 +2011,7 @@ class _RealAppState extends State<RealApp>
           _visible = true;
           return;
         }
-        if (Platform.isWindows) await _voice.shutdown();
+        if (VoiceController.supported) await _voice.shutdown();
         await trayManager.destroy();
         await windowManager.destroy();
     }
@@ -2020,7 +2066,8 @@ class _RealAppState extends State<RealApp>
   Future<void> _recordUpdateResult(UpdateResult res) async {
     if (!mounted) return;
     final now = DateTime.now();
-    final at = '${now.hour.toString().padLeft(2, '0')}:'
+    final at =
+        '${now.hour.toString().padLeft(2, '0')}:'
         '${now.minute.toString().padLeft(2, '0')}';
     final next = switch (res.outcome) {
       UpdateOutcome.available => 'Checked $at',
@@ -2064,8 +2111,10 @@ class _RealAppState extends State<RealApp>
     }
 
     Future.delayed(const Duration(minutes: 2), tick);
-    _updateCheckTimer =
-        Timer.periodic(const Duration(hours: 24), (_) => tick());
+    _updateCheckTimer = Timer.periodic(
+      const Duration(hours: 24),
+      (_) => tick(),
+    );
   }
 
   /// The one-click update path: download the signed installer, verify its
@@ -2082,30 +2131,42 @@ class _RealAppState extends State<RealApp>
       // start. Only Windows has the silent in-place installer; everywhere else
       // installUpdate throws before it touches the network, and promising a
       // restart we are not going to do reads as a broken update.
-      await installUpdate(info, onStatus: (_) {
-        if (announced) return;
-        announced = true;
-        _notify('Updating Relic to ${info.version}',
-            'Downloading now. Relic will restart by itself.');
-      }); // no return on success: the app exits
+      await installUpdate(
+        info,
+        onStatus: (_) {
+          if (announced) return;
+          announced = true;
+          _notify(
+            'Updating Relic to ${info.version}',
+            'Downloading now. Relic will restart by itself.',
+          );
+        },
+      ); // no return on success: the app exits
     } on SelfUpdateUnsupported {
       // macOS ships a DMG you drag to Applications, so the browser is the
       // install path here, not a failure.
       _selfUpdating = false;
-      _notify('Relic ${info.version} is ready',
-          'Opening the download page in your browser.');
+      _notify(
+        'Relic ${info.version} is ready',
+        'Opening the download page in your browser.',
+      );
       await _openDownloadPage(info);
     } catch (_) {
       _selfUpdating = false;
-      _notify('Update could not install itself',
-          'Opening the download page instead.');
+      _notify(
+        'Update could not install itself',
+        'Opening the download page instead.',
+      );
       await _openDownloadPage(info);
     }
   }
 
   Future<void> _openDownloadPage(UpdateInfo info) async {
     try {
-      await launchUrl(Uri.parse(info.url), mode: LaunchMode.externalApplication);
+      await launchUrl(
+        Uri.parse(info.url),
+        mode: LaunchMode.externalApplication,
+      );
     } catch (_) {}
   }
 
@@ -2236,28 +2297,56 @@ class _RealAppState extends State<RealApp>
           _sizeWindow(_popupDims.width, _popupDims.height);
         },
         onSignInPassphrase: (email, password, passphrase) => _doDesktopConnect(
-            () => widget.repo.connectSupabase(_workerUrl, email, password,
-                passphrase,
-                signUp: false)),
-        onRecoveryKit: (email, password, kit, newPass) => _doDesktopConnect(() =>
-            widget.repo.connectSupabaseWithKit(
-                _workerUrl, email, password, kit, newPass)),
-        onOAuthCreate: (session, passphrase) => _doDesktopConnect(() => widget.repo
-            .connectSupabaseSession(_workerUrl, session, passphrase,
-                allowCreate: true)),
-        onOAuthUnlock: (session, passphrase) => _doDesktopConnect(() => widget.repo
-            .connectSupabaseSession(_workerUrl, session, passphrase,
-                allowCreate: false)),
-        onOAuthRecoveryKit: (session, kit, newPass) => _doDesktopConnect(() =>
-            widget.repo.connectSupabaseSessionWithKit(
-                _workerUrl, session, kit, newPass)),
-        onPairedMk: (session, mk) => _doDesktopConnect(() =>
-            widget.repo.connectSupabaseSessionWithMk(_workerUrl, session, mk)),
+          () => widget.repo.connectSupabase(
+            _workerUrl,
+            email,
+            password,
+            passphrase,
+            signUp: false,
+          ),
+        ),
+        onRecoveryKit: (email, password, kit, newPass) => _doDesktopConnect(
+          () => widget.repo.connectSupabaseWithKit(
+            _workerUrl,
+            email,
+            password,
+            kit,
+            newPass,
+          ),
+        ),
+        onOAuthCreate: (session, passphrase) => _doDesktopConnect(
+          () => widget.repo.connectSupabaseSession(
+            _workerUrl,
+            session,
+            passphrase,
+            allowCreate: true,
+          ),
+        ),
+        onOAuthUnlock: (session, passphrase) => _doDesktopConnect(
+          () => widget.repo.connectSupabaseSession(
+            _workerUrl,
+            session,
+            passphrase,
+            allowCreate: false,
+          ),
+        ),
+        onOAuthRecoveryKit: (session, kit, newPass) => _doDesktopConnect(
+          () => widget.repo.connectSupabaseSessionWithKit(
+            _workerUrl,
+            session,
+            kit,
+            newPass,
+          ),
+        ),
+        onPairedMk: (session, mk) => _doDesktopConnect(
+          () =>
+              widget.repo.connectSupabaseSessionWithMk(_workerUrl, session, mk),
+        ),
       );
     }
     if (_settingsOpen) {
       return SettingsView(
-        voice: Platform.isWindows ? _voice : null,
+        voice: VoiceController.supported ? _voice : null,
         startOnVoice: _voiceSettingsRequested,
         repo: widget.repo,
         startOnSync: !widget.repo.syncEnabled,
@@ -2320,7 +2409,7 @@ class _RealAppState extends State<RealApp>
         (widget.repo.promoteHotkey.display, 'promote the last capture'),
         (
           '${widget.repo.quickPasteHotkeys.first.display} … ${widget.repo.quickPasteHotkeys.last.label}',
-          'paste your 5 most-recent items by position'
+          'paste your 5 most-recent items by position',
         ),
       ],
       onPick: () async {
@@ -2339,8 +2428,7 @@ class _RealAppState extends State<RealApp>
           await Future.delayed(const Duration(milliseconds: 120));
           if (await _canSynthesizePaste()) {
             // Linux terminals paste on Ctrl+Shift+V, not Ctrl+V.
-            await sendPaste(
-                intoTerminal: widget.repo.summonApp == 'terminal');
+            await sendPaste(intoTerminal: widget.repo.summonApp == 'terminal');
           }
         }
       },
@@ -2378,8 +2466,10 @@ class _RealAppState extends State<RealApp>
     // (sample data seeded). The last two are dismissible; the signed-out one is
     // not, because sync stays broken until it is acted on.
     return ListenableBuilder(
-      listenable: Listenable.merge(
-          [widget.repo.emailUnverified, widget.repo.sessionRevoked]),
+      listenable: Listenable.merge([
+        widget.repo.emailUnverified,
+        widget.repo.sessionRevoked,
+      ]),
       builder: (context, _) {
         final unverified = widget.repo.emailUnverified.value;
         final banners = <Widget>[];
@@ -2394,7 +2484,12 @@ class _RealAppState extends State<RealApp>
         }
         final body = banners.isEmpty
             ? popup
-            : Column(children: [...banners, Expanded(child: popup)]);
+            : Column(
+                children: [
+                  ...banners,
+                  Expanded(child: popup),
+                ],
+              );
         if (!_voice.offerPending) return body;
         // The one-time Voice opt-in, a modal over the popup on first open.
         // Both answers are remembered, so it never comes back.
@@ -2418,16 +2513,16 @@ class _RealAppState extends State<RealApp>
   /// sans label) so a resend confirmation doesn't land as a grey slab in the
   /// middle of a parchment popup.
   SnackBar _snack(RelicColors c, String text) => SnackBar(
-        content: Text(text, style: RelicTheme.sans(size: 13, color: c.text)),
-        backgroundColor: c.surfaceRaised,
-        behavior: SnackBarBehavior.floating,
-        elevation: 0,
-        margin: const EdgeInsets.all(Insets.md),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(Radii.card),
-          side: BorderSide(color: c.border, width: 1),
-        ),
-      );
+    content: Text(text, style: RelicTheme.sans(size: 13, color: c.text)),
+    backgroundColor: c.surfaceRaised,
+    behavior: SnackBarBehavior.floating,
+    elevation: 0,
+    margin: const EdgeInsets.all(Insets.md),
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(Radii.card),
+      side: BorderSide(color: c.border, width: 1),
+    ),
+  );
 
   /// Verify-to-sync banner (worker VERIFY_GATE 403 email_unverified). Local use
   /// is unaffected; offer a resend and a session-only dismiss.
@@ -2451,31 +2546,41 @@ class _RealAppState extends State<RealApp>
         ),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(
-              Insets.lg, Insets.md, Insets.sm, Insets.md),
-          child: Row(children: [
-            Icon(LucideIcons.logOut, color: c.accent, size: 17),
-            const SizedBox(width: Insets.md),
-            Expanded(
-              child: Text(
+            Insets.lg,
+            Insets.md,
+            Insets.sm,
+            Insets.md,
+          ),
+          child: Row(
+            children: [
+              Icon(LucideIcons.logOut, color: c.accent, size: 17),
+              const SizedBox(width: Insets.md),
+              Expanded(
+                child: Text(
                   'You were signed out. Sign in again to resume syncing. '
                   'Your vault is safe on this device.',
-                  style:
-                      RelicTheme.sans(size: 12.5, color: c.text, height: 1.35)),
-            ),
-            const SizedBox(width: Insets.sm),
-            GhostButton(
-              label: 'Sign in',
-              onTap: () {
-                _toAppMode();
-                setState(() {
-                  _connecting = true;
-                  _onboardStartAtSignIn = true;
-                  _onboardStartReturning = false;
-                });
-                _sizeWindow(520, 560);
-              },
-            ),
-          ]),
+                  style: RelicTheme.sans(
+                    size: 12.5,
+                    color: c.text,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+              const SizedBox(width: Insets.sm),
+              GhostButton(
+                label: 'Sign in',
+                onTap: () {
+                  _toAppMode();
+                  setState(() {
+                    _connecting = true;
+                    _onboardStartAtSignIn = true;
+                    _onboardStartReturning = false;
+                  });
+                  _sizeWindow(520, 560);
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2491,44 +2596,56 @@ class _RealAppState extends State<RealApp>
         ),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(
-              Insets.lg, Insets.md, Insets.sm, Insets.md),
-          child: Row(children: [
-            Icon(LucideIcons.mailWarning, color: c.accent, size: 17),
-            const SizedBox(width: Insets.md),
-            Expanded(
-              child: Text(
+            Insets.lg,
+            Insets.md,
+            Insets.sm,
+            Insets.md,
+          ),
+          child: Row(
+            children: [
+              Icon(LucideIcons.mailWarning, color: c.accent, size: 17),
+              const SizedBox(width: Insets.md),
+              Expanded(
+                child: Text(
                   'Confirm your email to start syncing. Local use is unaffected.',
-                  style:
-                      RelicTheme.sans(size: 12.5, color: c.text, height: 1.35)),
-            ),
-            const SizedBox(width: Insets.sm),
-            GhostButton(
-              label: 'Resend email',
-              onTap: () async {
-                final email = widget.repo.accountEmail;
-                if (email == null || email.isEmpty) return;
-                try {
-                  await SupabaseAuth.resendSignupConfirmation(email);
-                  if (mounted) {
-                    ScaffoldMessenger.of(context)
-                        .showSnackBar(_snack(c, 'Confirmation email sent'));
+                  style: RelicTheme.sans(
+                    size: 12.5,
+                    color: c.text,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+              const SizedBox(width: Insets.sm),
+              GhostButton(
+                label: 'Resend email',
+                onTap: () async {
+                  final email = widget.repo.accountEmail;
+                  if (email == null || email.isEmpty) return;
+                  try {
+                    await SupabaseAuth.resendSignupConfirmation(email);
+                    if (mounted) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(_snack(c, 'Confirmation email sent'));
+                    }
+                  } catch (_) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(_snack(c, 'Could not resend the email.'));
+                    }
                   }
-                } catch (_) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context)
-                        .showSnackBar(_snack(c, 'Could not resend the email.'));
-                  }
-                }
-              },
-            ),
-            const SizedBox(width: Insets.xs),
-            GhostIconButton(
-              icon: LucideIcons.x,
-              iconSize: 15,
-              tooltip: 'Dismiss',
-              onTap: () => setState(() => _emailBannerDismissed = true),
-            ),
-          ]),
+                },
+              ),
+              const SizedBox(width: Insets.xs),
+              GhostIconButton(
+                icon: LucideIcons.x,
+                iconSize: 15,
+                tooltip: 'Dismiss',
+                onTap: () => setState(() => _emailBannerDismissed = true),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2546,41 +2663,51 @@ class _RealAppState extends State<RealApp>
         ),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(
-              Insets.lg, Insets.md, Insets.sm, Insets.md),
-          child: Row(children: [
-            Icon(LucideIcons.sparkles, color: c.accent, size: 17),
-            const SizedBox(width: Insets.md),
-            Expanded(
-              child: Text(
+            Insets.lg,
+            Insets.md,
+            Insets.sm,
+            Insets.md,
+          ),
+          child: Row(
+            children: [
+              Icon(LucideIcons.sparkles, color: c.accent, size: 17),
+              const SizedBox(width: Insets.md),
+              Expanded(
+                child: Text(
                   'This is sample data. Create your vault to keep things for real.',
-                  style:
-                      RelicTheme.sans(size: 12.5, color: c.text, height: 1.35)),
-            ),
-            const SizedBox(width: Insets.sm),
-            GhostButton(
-              label: 'Create vault',
-              onTap: () {
-                widget.repo.dismissDemoNudge();
-                _toAppMode();
-                setState(() {
-                  _connecting = true;
-                  _onboardStartAtSignIn = false;
-                  _onboardStartReturning = false;
-                });
-                _sizeWindow(520, 560);
-              },
-            ),
-            const SizedBox(width: Insets.xs),
-            GhostIconButton(
-              icon: LucideIcons.x,
-              iconSize: 15,
-              tooltip: 'Dismiss',
-              onTap: () {
-                widget.repo.dismissDemoNudge();
-                setState(() {});
-              },
-            ),
-          ]),
+                  style: RelicTheme.sans(
+                    size: 12.5,
+                    color: c.text,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+              const SizedBox(width: Insets.sm),
+              GhostButton(
+                label: 'Create vault',
+                onTap: () {
+                  widget.repo.dismissDemoNudge();
+                  _toAppMode();
+                  setState(() {
+                    _connecting = true;
+                    _onboardStartAtSignIn = false;
+                    _onboardStartReturning = false;
+                  });
+                  _sizeWindow(520, 560);
+                },
+              ),
+              const SizedBox(width: Insets.xs),
+              GhostIconButton(
+                icon: LucideIcons.x,
+                iconSize: 15,
+                tooltip: 'Dismiss',
+                onTap: () {
+                  widget.repo.dismissDemoNudge();
+                  setState(() {});
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2601,10 +2728,8 @@ class _RealAppState extends State<RealApp>
       theme: materialThemeFor(colors),
       // Theme above the Navigator too, so pushed routes (Devices, Security,
       // AddDevice) and dialogs can read RelicTheme.of without a re-wrap.
-      builder: (context, child) => RelicTheme(
-        colors: colors,
-        child: child ?? const SizedBox.shrink(),
-      ),
+      builder: (context, child) =>
+          RelicTheme(colors: colors, child: child ?? const SizedBox.shrink()),
       home: RelicTheme(
         colors: colors,
         // Opaque Material (not transparency): the whole window is repainted

@@ -7,3 +7,4 @@ pycparser==3.0
 onnxruntime==1.22.1
 sentencepiece==0.2.1
 pyinstaller==6.16.0
+certifi==2026.07.22

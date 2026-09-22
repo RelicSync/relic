@@ -1,14 +1,16 @@
 # Relic Voice: release and platform guide
 
-Updated 2026-09-21. Windows is implemented and locally tested on
-`feat/windows-voice`. This guide does not mean an installer has been published.
-macOS and Linux Voice are planned; the existing Relic apps on those platforms
-still work, but do not yet include Voice.
+Updated 2026-09-22. Windows shipped as 1.0.49 and 1.0.50. macOS is
+implemented on `feat/macos-voice` (Apple Silicon only) and validated on a Mac;
+see the macOS section for what was checked. Linux Voice is planned; the
+existing Relic app there still works, but does not yet include Voice.
 
 ## What this release does
 
-- Dictate into the current input with Right Alt; hold/release or double-tap/tap.
-- Left Ctrl + Right Alt saves a voice note directly to the vault.
+- Dictate into the current input with the Voice key (Right Alt on Windows,
+  Right Option on a Mac); hold/release or double-tap/tap.
+- Left Ctrl + Right Alt (Control + Right Option on a Mac) saves a voice note
+  directly to the vault.
 - Every dictation is saved before insertion, tagged `dictation`; direct notes
   use `voice-note`. Normal promotion, search and retention apply.
 - Local CPU English recognition, automatic R2 model delivery, device-local word
@@ -21,8 +23,11 @@ still work, but do not yet include Voice.
   microphone recording.
 
 Source map: [controller](../app/lib/data/voice_controller.dart),
-[Windows bridge](../app/windows/runner/native_voice.cpp), [worker](worker.py),
-[model manifest](models.json), [validation report](reports/windows-validation-2026-09-21.md).
+[Windows bridge](../app/windows/runner/native_voice.cpp),
+[macOS bridge](../app/macos/Runner/Bridge/VoiceBridge.swift), [worker](worker.py),
+[model manifest](models.json), validation reports for
+[Windows](reports/windows-validation-2026-09-21.md) and
+[macOS](reports/macos-validation-2026-09-22.md).
 
 ## Windows: ship in this order
 
@@ -94,37 +99,45 @@ patch version with the fix or default disabled. Preserve users' vaults and Voice
 preferences. Users can turn Voice off immediately in Settings. Never change the
 bytes at an existing installer or model URL to implement rollback.
 
-## macOS: implement and validate on a Mac
+## macOS: what shipped and how to release it
 
-Reuse the controller, persistence, corrections, model manifest and worker protocol.
-Replace platform checks with tested capabilities, including platform-specific
-shortcut labels. Do not simply remove `Platform.isWindows` guards.
+The controller, persistence, corrections, model manifest and worker protocol
+are shared. The platform checks became one capability,
+`VoiceController.supported` (Windows and macOS), with the key names coming
+from `VoiceController.keyLabel` and `modifierLabel`.
 
-- Build a native Apple Silicon CPU worker first; replace `transcribe.dll` loading
-  in `engine.py` with a platform-specific library path and bundle Python,
-  PortAudio, ONNX Runtime and the native decoder inside the app. Intel support
-  needs its own build and validation. Reuse the model bytes after validating
-  output compatibility and hashes on each supported architecture.
-- Add a macOS `relic/voice` bridge near `Runner/Bridge/InputBridge.swift` and
-  `MainFlutterWindow.swift`: gesture detection, focused-target snapshot,
-  microphone levels, nonactivating popup, cancellation and guarded insertion.
-  Preserve clipboard contents and save-before-insert. Test terminal spacing and
-  changed-focus cases. Decide and test the physical shortcut on Mac keyboards;
-  right Option must not silently break normal Option-character entry.
-- Request microphone permission at the first recording action and explain denied
-  or revoked access in Settings. Add `NSMicrophoneUsageDescription` and the audio
-  input entitlement where required by the chosen sandbox/hardened-runtime setup.
-  Validate attribution to the signed app with the bundled helper. Apple's
-  [capture authorization guide](https://developer.apple.com/documentation/bundleresources/requesting-authorization-for-media-capture-on-macos)
-  is the reference for microphone permission and usage descriptions.
-- Reuse Relic's existing Accessibility permission path for input injection;
-  validate the selected event-monitoring API and any additional permission it
-  requires on a clean Mac. Secure fields and permission loss must leave the
-  transcript saved for manual copy.
-- Extend `app/scripts/build_release_macos.sh` to bundle and sign nested worker
-  binaries/libraries before the outer app, then notarize and staple the final
-  artifact. Follow Apple's [notarization guide](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
-  Verify first launch, permissions, real audio and updates on a clean signed build.
+- **Worker.** `build_macos.sh` builds transcribe.cpp for arm64, CPU only
+  (Metal off, `GGML_NATIVE` off) and freezes the same `worker.py` with the
+  python.org Python 3.13, ONNX Runtime, sounddevice/PortAudio and
+  sentencepiece. `engine.py` loads `libtranscribe.dylib` from `native/`. The
+  model bytes are the Windows ones; the arm64 build's output on the same clip
+  matches (see the report). Intel Macs are not supported and get no worker.
+- **Bridge.** `VoiceBridge.swift` owns a CGEvent tap on the Right Option key
+  (`kVK_RightOption`), the 20 ms gesture timer, the focused-target snapshot
+  (frontmost app plus the AX focused element, secure fields refused), the
+  clipboard and modifier checks, Unicode key-event insertion with the
+  trailing space, the overlay and sleep/lock cancellation. Only Right Option's
+  own flagsChanged events are swallowed, and only while a gesture owns them;
+  a key pressed with Option held reaches the app with the Option flag, so
+  Option-character entry works as before and the gesture forwards. The tap
+  needs Accessibility, which Relic already asks for; without it `enable`
+  answers false and Voice settings says the shortcut is unavailable.
+- **Microphone.** Asked for when Voice is turned on (`microphone` /
+  `requestMicrophone` on the channel), so the system prompt arrives then and
+  not mid-sentence. `NSMicrophoneUsageDescription` is in Info.plist and
+  `com.apple.security.device.audio-input` in the app entitlements. A denied
+  or restricted answer keeps Voice off with an "Open Microphone settings"
+  button. The worker records as a child of the app, so the grant is the
+  app's.
+- **Signing.** `build_release_macos.sh` runs `build_macos.sh` first, copies
+  the bundle to `Contents/Helpers/voice`, signs every Mach-O inside it, then
+  the worker with `Runner/Voice.entitlements` (microphone,
+  disable-library-validation, allow-unsigned-executable-memory,
+  allow-dyld-environment-variables), then the app, then notarizes the DMG.
+  `--skip-voice` is only for a deliberately voice-less build.
+- **Release.** Same choreography as any macOS release: build from the tag,
+  R2 at a new versioned key, `latest.json` `platforms.macos`, cask, parity
+  doc. The 716 MB model download is unchanged and shared with Windows.
 
 ## Linux: separate X11 and Wayland acceptance
 

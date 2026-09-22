@@ -19,7 +19,7 @@ class Punctuator:
         model = folder / "punct_cap_seg_en.onnx"
         tokenizer = folder / "spe_32k_lc_en.model"
         if not model.is_file() or not tokenizer.is_file():
-            raise FileNotFoundError("Punctuation model missing. Run setup.ps1 first.")
+            raise FileNotFoundError("Punctuation model missing. Retry Voice setup.")
         options = ort.SessionOptions()
         options.intra_op_num_threads = min(4, max(1, threads))
         options.inter_op_num_threads = 1

@@ -5,7 +5,7 @@ MAX_SECONDS = 60
 
 
 def input_devices():
-    result = [(None, "Windows default microphone")]
+    result = [(None, "System default microphone")]
     hosts = sd.query_hostapis()
     for index, device in enumerate(sd.query_devices()):
         if device["max_input_channels"]:

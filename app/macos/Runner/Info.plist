@@ -47,6 +47,8 @@
 	<string>Relic saves a copy of files you copy from your Downloads folder so you can paste them again later.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>$(PRODUCT_COPYRIGHT)</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Relic listens while you hold Right Option so it can type what you say. Speech is recognized on this Mac and audio is never saved or sent anywhere.</string>
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>

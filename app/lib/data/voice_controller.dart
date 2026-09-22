@@ -57,6 +57,39 @@ class VoiceController extends ChangeNotifier {
   bool get hasPending => _pending != null;
   bool get busy => recording || processing || _launching;
 
+  /// The desktops that ship a Voice worker and a native gesture bridge:
+  /// Windows (native_voice.cpp) and macOS (VoiceBridge.swift). Linux is a
+  /// separate port (relic-voice/RELEASE.md).
+  static bool get supported => Platform.isWindows || Platform.isMacOS;
+
+  /// The Voice key as this platform names it, for every label that mentions it.
+  static String get keyLabel => Platform.isMacOS ? 'Right Option' : 'Right Alt';
+
+  /// The modifier that turns a dictation into a voice note.
+  static String get modifierLabel => Platform.isMacOS ? 'Control' : 'Left Ctrl';
+
+  /// How a corrections rule names an app on this platform: the exe on
+  /// Windows, the app key (the same one tags use) on a Mac.
+  static String get appRuleExample => Platform.isMacOS ? 'chrome' : 'code.exe';
+
+  /// Where the bundled worker lives, relative to the app executable: beside
+  /// it on Windows (voice\relic-voice.exe), in Contents/Helpers/voice on a
+  /// Mac. RELIC_VOICE_WORKER points a dev tree at a bundle built elsewhere.
+  static String get workerPath {
+    final override = Platform.environment['RELIC_VOICE_WORKER'];
+    if (override != null && override.isNotEmpty) return override;
+    final sep = Platform.pathSeparator;
+    final root = File(Platform.resolvedExecutable).parent.path;
+    if (Platform.isMacOS) {
+      return '$root$sep..${sep}Helpers${sep}voice${sep}relic-voice';
+    }
+    return '$root${sep}voice${sep}relic-voice.exe';
+  }
+
+  /// macOS refused (or the person refused) microphone access; Voice settings
+  /// shows the way to System Settings.
+  bool microphoneDenied = false;
+
   /// True once Voice was offered or explicitly set, so the one-time opt-in
   /// card on first open never comes back.
   bool offered = false;
@@ -64,17 +97,36 @@ class VoiceController extends ChangeNotifier {
   /// The opt-in card is due: Windows, never offered, not on, and a Voice
   /// worker is actually installed beside the app.
   bool get offerPending =>
-      Platform.isWindows &&
-      !enabled &&
-      !offered &&
-      !_disposed &&
-      workerInstalled;
+      supported && !enabled && !offered && !_disposed && workerInstalled;
 
   bool get workerInstalled {
     if (launchProcess != null) return true;
-    final sep = Platform.pathSeparator;
-    final root = File(Platform.resolvedExecutable).parent.path;
-    return File('$root${sep}voice${sep}relic-voice.exe').existsSync();
+    return File(workerPath).existsSync();
+  }
+
+  /// macOS gates the microphone per app: ask once, up front, so the system
+  /// prompt lands when Voice is turned on rather than mid-sentence. Windows
+  /// answers from the worker at record time instead.
+  Future<bool> _microphoneAllowed() async {
+    if (!Platform.isMacOS) return true;
+    try {
+      var state = await _native.invokeMethod<String>('microphone');
+      if (state == 'undetermined') {
+        final granted = await _native.invokeMethod<bool>('requestMicrophone');
+        state = granted == true ? 'authorized' : 'denied';
+      }
+      microphoneDenied = state == 'denied' || state == 'restricted';
+    } catch (_) {
+      microphoneDenied = false;
+    }
+    return !microphoneDenied;
+  }
+
+  /// System Settings, Privacy & Security, Microphone.
+  Future<void> openMicrophoneSettings() async {
+    try {
+      await _native.invokeMethod<void>('openMicrophoneSettings');
+    } catch (_) {}
   }
 
   Future<void> acceptOffer() => setEnabled(true);
@@ -83,11 +135,12 @@ class VoiceController extends ChangeNotifier {
     offered = true;
     await savePreferences();
   }
+
   File get _prefs =>
       File('${appDataPath()}${Platform.pathSeparator}voice.json');
 
   Future<void> initialize() async {
-    if (!Platform.isWindows) return;
+    if (!supported) return;
     // Voice stays off until the person turns it on, from the one-time offer
     // on first open or from Settings. A saved choice always wins.
     enabled = false;
@@ -185,12 +238,19 @@ class VoiceController extends ChangeNotifier {
     _changed();
     try {
       final sep = Platform.pathSeparator;
-      final root = File(Platform.resolvedExecutable).parent.path;
-      final exe = '$root${sep}voice${sep}relic-voice.exe';
+      final exe = workerPath;
       if (launchProcess == null && !File(exe).existsSync()) {
         throw StateError(
           'Voice worker is missing. Install a build that includes Voice.',
         );
+      }
+      if (!await _microphoneAllowed()) {
+        _launching = false;
+        if (generation != _generation) return;
+        status =
+            'Microphone access is off for Relic. Allow it in System Settings, then retry.';
+        _changed();
+        return;
       }
       final modelDir = '${appDataPath()}${sep}voice-models';
       final process = await (launchProcess ?? Process.start)(exe, [
@@ -477,7 +537,7 @@ class VoiceController extends ChangeNotifier {
 
   Future<void> _recordingOverlay() async {
     status =
-        '${_note ? 'Voice note: ' : ''}${_latched ? 'Tap Right Alt to finish' : 'Release Right Alt to finish'}';
+        '${_note ? 'Voice note: ' : ''}${_latched ? 'Tap $keyLabel to finish' : 'Release $keyLabel to finish'}';
     if (seconds >= 50) status += ' (${(60 - seconds).ceil()}s)';
     await _overlay('recording');
   }
@@ -529,11 +589,11 @@ class VoiceController extends ChangeNotifier {
 
   @override
   void dispose() {
-    if (Platform.isWindows) unawaited(_stopWorker());
+    if (supported) unawaited(_stopWorker());
     repo.removeListener(_syncBlocklist);
     _disposed = true;
     repo.voiceBusy = false;
-    if (Platform.isWindows) _native.setMethodCallHandler(null);
+    if (supported) _native.setMethodCallHandler(null);
     super.dispose();
   }
 }

@@ -12,6 +12,7 @@ enum RelicBridges {
     ForegroundAppBridge.register(with: messenger)
     LoginItemBridge.register(with: messenger)
     SoundBridge.register(with: messenger)
+    VoiceBridge.register(with: messenger)
     // relic/native_toast (the gem flourish overlay) is deliberately absent:
     // the Dart side falls back to a normal notification until
     // GemToastPanel.swift lands (docs/macos-port.md Phase 7).

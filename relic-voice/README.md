@@ -1,6 +1,6 @@
-# Windows Voice
+# Relic Voice
 
-Relic Voice is local English dictation on Windows. It is off until the person
+Relic Voice is local English dictation on Windows and macOS. It is off until the person
 turns it on: the first time the popup opens on a build that ships the worker,
 a one-time card offers "Turn on voice" or "Not now", and either answer is
 remembered (`offered` in `voice.json`). Voice settings keeps the switch. First
@@ -8,10 +8,13 @@ setup downloads 715,727,326 bytes of pinned models from `https://models.relic.sp
 Downloads resume and every completed file is checked against its embedded SHA-256.
 The three files are hosted on Relic's R2 bucket. There is no cloud speech service.
 
-- Hold physical Right Alt, speak when the shadow pulses, release to finish.
-- Double-tap Right Alt to keep recording, then tap once to finish.
-- Hold Left Ctrl first for a voice note saved directly to the vault.
-- Escape cancels. The tray also has start, stop, cancel and Voice settings.
+- Hold the Voice key (physical Right Alt on Windows, Right Option on a Mac),
+  speak when the shadow pulses, release to finish.
+- Double-tap the Voice key to keep recording, then tap once to finish.
+- Hold Left Ctrl (Control on a Mac) first for a voice note saved directly to
+  the vault.
+- Escape cancels. The tray (menu bar on a Mac) also has start, stop, cancel
+  and Voice settings.
 - Dictation saves to history before attempting insertion. Existing auto-vault
   and promotion flows still apply. Full vaults fall back to history, with the destination shown in Voice settings.
 - The Relic mark grows smoothly with normalized microphone volume and settles
@@ -25,7 +28,7 @@ The three files are hosted on Relic's R2 bucket. There is no cloud speech servic
 The worker contains its own Python runtime and uses native transcribe.cpp and
 ONNX Runtime on CPU. Microphone audio is resampled to 16 kHz by a small
 numpy polyphase filter in `resample.py`; the worker does not ship scipy. End users need no Python, package manager or GPU. Windows
-x64 with AVX2/FMA/F16C is required. Model weights stay resident while enabled.
+x64 with AVX2/FMA/F16C, or an Apple Silicon Mac, is required. Model weights stay resident while enabled.
 After at least five seconds of speech capture, a quiet pause lets the worker
 decode that completed segment while recording continues. The final result is
 still saved and inserted only after release. There are no forced cuts through
@@ -42,7 +45,7 @@ answer in this preview profile is kept. The installed Relic profile is not chang
 
 ## Build
 
-From the repository root, with Python 3.11 and Visual Studio C++ build tools:
+Windows, from the repository root, with Python 3.11 and Visual Studio C++ build tools:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File relic-voice/build.ps1
@@ -54,7 +57,30 @@ flutter build windows --release
 The Windows CMake install step copies the built worker to `voice/` beside the
 app. Windows release CI builds this bundle before Flutter. A plain source app
 build remains usable without the optional worker and explains its absence in
-Voice settings. Models are downloaded during first setup, not during the build. Automatic
+Voice settings.
+
+macOS (Apple Silicon), with python3, cmake and the Xcode command line tools:
+
+```sh
+relic-voice/build_macos.sh
+app/scripts/build_release_macos.sh --identity "Developer ID Application: …" --notary-profile relic-notary
+```
+
+`build_macos.sh` builds the CPU-only transcribe.cpp library for arm64 and
+freezes the same worker into `relic-voice/dist/relic-voice`. The release script
+runs it first, copies the bundle to `Relic.app/Contents/Helpers/voice`, signs
+every binary inside it with `Runner/Voice.entitlements` (microphone plus the
+loader relaxations a frozen Python needs under the hardened runtime), then
+notarizes the DMG. `--skip-voice` builds without it. The macOS bridge is
+`app/macos/Runner/Bridge/VoiceBridge.swift` (a CGEvent tap on Right Option,
+which needs the Accessibility grant the paste injection already has), with the
+overlay in `VoiceOverlayPanel.swift` and the gesture state machine in
+`VoiceGesture.swift`, a line-for-line port of `voice_gesture.h`. For a dev
+tree, `RELIC_VOICE_WORKER=/path/to/relic-voice/dist/relic-voice/relic-voice`
+points `flutter run -d macos` at a bundle built here.
+
+The model download verifies TLS through certifi when the Python build ships
+no root store (the python.org build on macOS), see `model_store.tls_context`. Models are downloaded during first setup, not during the build. Automatic
 setup loads the models; it does not start recording. The microphone opens only
 for a recording gesture or an explicit start action.
 
@@ -69,6 +95,10 @@ cd app
 flutter analyze
 flutter test
 ```
+
+On a Mac the same, with `relic-voice/.venv/bin/python`. The gesture port is
+checked against the Windows fixture's assertions (see
+`reports/macos-validation-2026-09-22.md`).
 
 `voice_capture_test.dart` and `voice_controller_audio_test.dart` require a fresh
 `RELIC_DATA_DIR` to exercise real persistence. The latter also requires
@@ -91,8 +121,9 @@ events to exercise Windows key delivery. Test binaries are never installed.
 
 ## Insertion and data
 
-This implementation sends Unicode text directly with Windows SendInput. It
-does not change the clipboard or synthesize a paste chord. The original window
+This implementation sends Unicode text directly with Windows SendInput, or
+CGEvent Unicode key events on a Mac. It does not change the clipboard or
+synthesize a paste chord. The original window
 and focused native control must still match. Typing after stop, clicks, changed
 clipboard contents, held modifiers, detected password edits, and failed or
 partial injection leave the saved item available in Relic. No automatic retry

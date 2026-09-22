@@ -3,10 +3,35 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import ssl
 import urllib.request
 
 ROOT = Path(__file__).resolve().parent
 MANIFEST = json.loads((ROOT / 'models.json').read_text(encoding='utf-8'))
+
+
+def tls_context():
+    """Verified TLS wherever the frozen worker runs. Windows Python reads the
+    system store; the python.org build on macOS ships no roots at all, so an
+    empty default store falls back to certifi, then the OS bundle."""
+    context = ssl.create_default_context()
+    if context.cert_store_stats().get('x509', 0):
+        return context
+    candidates = []
+    try:
+        import certifi
+        candidates.append(certifi.where())
+    except Exception:
+        pass
+    candidates += ['/etc/ssl/cert.pem', '/etc/ssl/certs/ca-certificates.crt']
+    for bundle in candidates:
+        try:
+            if os.path.isfile(bundle):
+                context.load_verify_locations(bundle)
+                return context
+        except Exception:
+            continue
+    return context
 
 
 def digest(path):
@@ -39,7 +64,7 @@ def ensure_models(folder, progress=lambda **kw: None, canceled=lambda: False):
         if offset:
             headers['Range'] = f'bytes={offset}-'
         request = urllib.request.Request(MANIFEST['base_url'] + '/' + spec['name'], headers=headers)
-        with urllib.request.urlopen(request, timeout=45) as response:
+        with urllib.request.urlopen(request, timeout=45, context=tls_context()) as response:
             if response.status != 206:
                 offset = 0
             elif not response.headers.get('Content-Range', '').startswith(f'bytes {offset}-'):

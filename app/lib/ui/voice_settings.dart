@@ -60,8 +60,8 @@ class _VoiceSettingsState extends State<VoiceSettings> {
           target.first.trim().isEmpty ||
           (target.length == 2 && target.last.trim().isEmpty)) {
         setState(
-          () =>
-              _message = 'Use a replacement, optionally followed by | app.exe.',
+          () => _message =
+              'Use a replacement, optionally followed by | ${VoiceController.appRuleExample}.',
         );
         return;
       }
@@ -185,7 +185,7 @@ class _VoiceSettingsState extends State<VoiceSettings> {
           ),
           _description(
             c,
-            'Speak into a text field and keep a copy in Relic. Voice notes go straight to your vault. English, processed on this PC. Audio is never saved.',
+            'Speak into a text field and keep a copy in Relic. Voice notes go straight to your vault. English, processed on this computer. Audio is never saved.',
           ),
           SettingsToggleRow(
             title: 'Enable Voice',
@@ -206,17 +206,29 @@ class _VoiceSettingsState extends State<VoiceSettings> {
                   _progress(c, v.progress, 'Voice setup download'),
                 if (v.enabled && !v.ready && !v.busy) ...[
                   const SizedBox(height: Insets.sm),
-                  GhostButton(
-                    icon: LucideIcons.refreshCw,
-                    label: 'Retry setup',
-                    onTap: v.retry,
+                  Wrap(
+                    spacing: Insets.sm,
+                    runSpacing: Insets.sm,
+                    children: [
+                      GhostButton(
+                        icon: LucideIcons.refreshCw,
+                        label: 'Retry setup',
+                        onTap: v.retry,
+                      ),
+                      if (v.microphoneDenied)
+                        GhostButton(
+                          icon: LucideIcons.mic,
+                          label: 'Open Microphone settings',
+                          onTap: v.openMicrophoneSettings,
+                        ),
+                    ],
                   ),
                 ],
               ],
             ),
           ),
           SettingsToggleRow(
-            title: 'Right Alt shortcuts',
+            title: '${VoiceController.keyLabel} shortcuts',
             sub: 'You can also start and stop Voice from the tray menu.',
             value: v.shortcuts,
             onChanged: v.busy
@@ -232,12 +244,12 @@ class _VoiceSettingsState extends State<VoiceSettings> {
               children: [
                 _description(
                   c,
-                  'Hold Right Alt to dictate. Release to finish. Double-tap to keep recording, then tap once to finish. Hold Left Ctrl first to save a voice note instead. Escape cancels.',
+                  'Hold ${VoiceController.keyLabel} to dictate. Release to finish. Double-tap to keep recording, then tap once to finish. Hold ${VoiceController.modifierLabel} first to save a voice note instead. Escape cancels.',
                 ),
                 const SizedBox(height: Insets.sm),
                 _description(
                   c,
-                  'Pressing Right Alt briefly opens the microphone while checking the gesture. Wait for the pulsing shadow before speaking. The icon follows your voice. Recording ends after 60 seconds.',
+                  'Pressing ${VoiceController.keyLabel} briefly opens the microphone while checking the gesture. Wait for the pulsing shadow before speaking. The icon follows your voice. Recording ends after 60 seconds.',
                 ),
               ],
             ),
@@ -393,7 +405,7 @@ class _VoiceSettingsState extends State<VoiceSettings> {
           _heading(c, 'Word corrections'),
           _description(
             c,
-            'Explicit replacements, one per line: cloud code => Claude Code. Whole phrases only. Rules never cascade. To limit a rule to an app, add | code.exe. Voice notes use global rules.',
+            'Explicit replacements, one per line: cloud code => Claude Code. Whole phrases only. Rules never cascade. To limit a rule to an app, add | ${VoiceController.appRuleExample}. Voice notes use global rules.',
           ),
           const SizedBox(height: Insets.sm),
           _wordsField(c, _corrections, 'cloud code => Claude Code'),

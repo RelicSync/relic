@@ -18,4 +18,6 @@ Audio is processed locally. The model files are not executable updates.
 
 Runtime revision: ed3468f3881abb9e7b6c7d404f75049aecccb04f.
 Windows x64 builds target AVX2, FMA and F16C. AVX-512 and machine-native tuning are disabled.
+macOS builds are arm64 (Apple Silicon), CPU only, with machine-native tuning disabled.
+The macOS bundle also carries certifi (MPL-2.0, https://github.com/certifi/python-certifi) for the model download's root store.
 The bundled worker includes its Python runtime; end users do not install Python or packages.

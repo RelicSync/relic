@@ -15,8 +15,14 @@ class Engine:
         root = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
         native = root / 'native'
         if not native.exists():
-            native = root / '.build' / 'bin' / 'Release'
-        os.environ['TRANSCRIBE_LIBRARY'] = str(native / 'transcribe.dll')
+            # Dev tree: build.ps1 leaves the Windows DLLs in the CMake output,
+            # build_macos.sh gathers the dylibs into .build/native.
+            for candidate in (root / '.build' / 'native', root / '.build' / 'bin' / 'Release'):
+                if candidate.exists():
+                    native = candidate
+                    break
+        library = {'win32': 'transcribe.dll', 'darwin': 'libtranscribe.dylib'}.get(sys.platform, 'libtranscribe.so')
+        os.environ['TRANSCRIBE_LIBRARY'] = str(native / library)
         if not getattr(sys, 'frozen', False):
             sys.path.insert(0, str(root / '_vendor' / 'transcribe.cpp' / 'bindings' / 'python' / 'src'))
         import transcribe_cpp
