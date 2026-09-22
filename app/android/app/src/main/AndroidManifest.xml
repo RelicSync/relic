@@ -66,6 +66,21 @@
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="relic"/>
             </intent-filter>
+            <!-- App Link: the pairing QR on a computer is
+                 https://relic.space/pair#<payload>. With autoVerify Android
+                 checks relic.space/.well-known/assetlinks.json (it must list
+                 the cert that signed THIS build: Play's app signing key for
+                 store installs, the upload key for local ones) and then opens
+                 the link straight in Relic instead of the browser. The payload
+                 stays in the fragment, which is never sent to the server. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https"
+                      android:host="relic.space"
+                      android:path="/pair"/>
+            </intent-filter>
         </activity>
 
         <!-- Quick Settings tile: pull down the shade and tap to capture the

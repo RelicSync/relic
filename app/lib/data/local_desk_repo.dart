@@ -731,6 +731,30 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     _savePrefs();
   }
 
+  /// The "you may have started a second vault" notice, once it has been
+  /// dismissed. One dismissal per install, so the notice never nags.
+  bool _secondVaultNoticeDismissed = false;
+  @override
+  bool get secondVaultNoticeDismissed => _secondVaultNoticeDismissed;
+  @override
+  Future<void> markSecondVaultNoticeDismissed() async {
+    if (_secondVaultNoticeDismissed) return;
+    _secondVaultNoticeDismissed = true;
+    _savePrefs();
+  }
+
+  /// One-time "add your phone" nudge, shown once this desktop is the only
+  /// device on the account and there is a real vault to carry around.
+  bool _addPhoneNudgeShown = false;
+  @override
+  bool get addPhoneNudgeShown => _addPhoneNudgeShown;
+  @override
+  Future<void> markAddPhoneNudgeShown() async {
+    if (_addPhoneNudgeShown) return;
+    _addPhoneNudgeShown = true;
+    _savePrefs();
+  }
+
   @override
   String? get keepHotkeyLabel => _hkPromote.display;
 
@@ -836,7 +860,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   String get deviceName => _deviceName;
 
   /// What new captures are stamped with: the user's name, else the hostname.
-  String get _deviceLabel => _deviceName.trim().isNotEmpty
+  /// The popup compares list items against it to tell "saved here" from
+  /// "arrived from another device".
+  String get deviceLabel => _deviceName.trim().isNotEmpty
       ? _deviceName.trim()
       : (Platform.environment['COMPUTERNAME'] ??
           (Platform.localHostname.isNotEmpty
@@ -1639,6 +1665,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _coachSeen = j['coach_seen'] as bool? ?? false;
         _trayHintShown = j['tray_hint_shown'] as bool? ?? false;
         _keepHintShown = j['keep_hint_shown'] as bool? ?? false;
+        _secondVaultNoticeDismissed =
+            j['second_vault_notice_dismissed'] as bool? ?? false;
+        _addPhoneNudgeShown = j['add_phone_nudge_shown'] as bool? ?? false;
         _demoNudgeShown = j['demo_nudge_dismissed'] as bool? ?? false;
         _captureText = j['capture_text'] as bool? ?? true;
         _captureImages = j['capture_images'] as bool? ?? true;
@@ -1743,6 +1772,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           'coach_seen': _coachSeen,
           'tray_hint_shown': _trayHintShown,
           'keep_hint_shown': _keepHintShown,
+          'second_vault_notice_dismissed': _secondVaultNoticeDismissed,
+          'add_phone_nudge_shown': _addPhoneNudgeShown,
           'demo_nudge_dismissed': _demoNudgeShown,
           'capture_text': _captureText,
           'capture_images': _captureImages,
@@ -2627,7 +2658,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         utf8.encode(t).length,
       ),
       byteSize: textByteSize(t, keep),
-      device: _deviceLabel,
+      device: deviceLabel,
       tags: tags,
       content: t,
       preview: _preview(t),
@@ -2689,7 +2720,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       source: Source.upload,
       promoted: _promoteOnCapture(promote || _autoVault, byteSize),
       byteSize: byteSize,
-      device: _deviceLabel,
+      device: deviceLabel,
       blobKey: blobKey,
       title: (t != null && t.isNotEmpty) ? t : null,
       content: text.trim().isEmpty ? null : text,
@@ -2876,7 +2907,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       source: Source.clipboard,
       promoted: _promoteOnCapture(_autoVault, png.length),
       byteSize: png.length,
-      device: _deviceLabel,
+      device: deviceLabel,
       mime: 'image/png',
       blobKey: blobKey,
       preview: dims == null ? 'Image' : 'Screenshot · ${dims.$1} × ${dims.$2}',
@@ -2931,7 +2962,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       source: Source.clipboard,
       promoted: _promoteOnCapture(_autoVault, bytes.length),
       byteSize: bytes.length,
-      device: _deviceLabel,
+      device: deviceLabel,
       mime: mime,
       filename: name,
       blobKey: blobKey,
@@ -4585,7 +4616,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
         body: jsonEncode({
           if (_deviceId != null) 'device_id': _deviceId,
-          'label': _deviceLabel,
+          'label': deviceLabel,
           'platform': Platform.operatingSystem,
           if (_appVersion != null) 'app_version': _appVersion,
           if (enrollSecret != null && enrollSecret.isNotEmpty)

@@ -39,27 +39,32 @@ class OAuthFlow {
     if (c != null && !c.isCompleted) c.complete(uri);
   }
 
+  /// [loginHint] preselects an account at the provider (see
+  /// [SupabaseAuth.authorizeUrl]); a pairing link supplies it.
   static Future<SupabaseSession> signInWithProvider(
     SupabaseProvider provider, {
     required bool desktop,
+    String? loginHint,
   }) {
     final verifier = SupabaseAuth.newCodeVerifier();
     final challenge = SupabaseAuth.codeChallenge(verifier);
     return desktop
-        ? _desktop(provider, verifier, challenge)
-        : _mobile(provider, verifier, challenge);
+        ? _desktop(provider, verifier, challenge, loginHint: loginHint)
+        : _mobile(provider, verifier, challenge, loginHint: loginHint);
   }
 
   // --- Desktop: ephemeral loopback listener ---------------------------------
   static Future<SupabaseSession> _desktop(
     SupabaseProvider provider,
     String verifier,
-    String challenge,
-  ) async {
+    String challenge, {
+    String? loginHint,
+  }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     try {
       final redirect = 'http://127.0.0.1:${server.port}/callback';
-      final authorize = SupabaseAuth.authorizeUrl(provider, redirect, challenge);
+      final authorize = SupabaseAuth.authorizeUrl(provider, redirect, challenge,
+          loginHint: loginHint);
       appendSyncLog('desktop oauth start, loopback port ${server.port}',
           tag: 'auth');
       if (!await launchUrl(authorize, mode: LaunchMode.externalApplication)) {
@@ -109,10 +114,12 @@ class OAuthFlow {
   static Future<SupabaseSession> _mobile(
     SupabaseProvider provider,
     String verifier,
-    String challenge,
-  ) {
-    final authorize =
-        SupabaseAuth.authorizeUrl(provider, _mobileRedirect, challenge);
+    String challenge, {
+    String? loginHint,
+  }) {
+    final authorize = SupabaseAuth.authorizeUrl(
+        provider, _mobileRedirect, challenge,
+        loginHint: loginHint);
     return Platform.isIOS
         ? _iosAuthSession(authorize, verifier)
         : _androidDeepLink(authorize, verifier);

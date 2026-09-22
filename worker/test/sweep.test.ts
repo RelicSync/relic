@@ -11,7 +11,8 @@ import {
 } from "../src/sweep";
 import { blobR2Key } from "../src/blob";
 import worker from "../src/index";
-import { ringNudgeSweep } from "../src/stripe";
+import { MAIL_FROM } from "../src/mail";
+import { ringNudgeSweep, vaultCapSweep } from "../src/stripe";
 import { TIERS } from "../src/tiers";
 import { setupSchema } from "./helpers";
 
@@ -159,10 +160,11 @@ describe("GET /health", () => {
   });
 });
 
-// --- history-ring nudge email -------------------------------------------------
-// One email per account, ever. The stamp is what guarantees that, and it goes on
-// whether or not Resend accepted the address, so a dead mailbox cannot make this
-// retry every single day.
+// --- free-limit nudge emails --------------------------------------------------
+// One email per account per wall, ever. The stamp is what guarantees that, and
+// it only goes on once retrying is pointless: the mail went out, or Resend
+// refused the address itself. A server-side failure leaves the row NULL so the
+// next tick tries again, which is what lets a fixed key heal the backlog.
 describe("ring nudge sweep", () => {
   // deno-lint-ignore no-explicit-any
   let fetchMock: any;
@@ -182,15 +184,27 @@ describe("ring nudge sweep", () => {
   async function seedAccount(
     account: string,
     email: string | null,
-    o: { ringEvicted?: number; emailedAt?: number | null; subscribed?: boolean } = {},
+    o: {
+      ringEvicted?: number;
+      emailedAt?: number | null;
+      subscribed?: boolean;
+      vaultCount?: number;
+      vaultEmailedAt?: number | null;
+    } = {},
   ) {
     await E.DB.prepare("INSERT INTO accounts (account_id, email) VALUES (?1, ?2)")
       .bind(account, email).run();
     await E.DB.prepare(
       `INSERT INTO account_usage
-         (account_id, bytes_used, vault_count, ring_evicted, ring_email_at)
-       VALUES (?1, 0, 0, ?2, ?3)`,
-    ).bind(account, o.ringEvicted ?? 0, o.emailedAt ?? null).run();
+         (account_id, bytes_used, vault_count, ring_evicted, ring_email_at, vault_email_at)
+       VALUES (?1, 0, ?2, ?3, ?4, ?5)`,
+    ).bind(
+      account,
+      o.vaultCount ?? 0,
+      o.ringEvicted ?? 0,
+      o.emailedAt ?? null,
+      o.vaultEmailedAt ?? null,
+    ).run();
     if (o.subscribed) {
       await E.DB.prepare(
         "INSERT INTO subscriptions (account_id, tier, status) VALUES (?1,'pro','active')",
@@ -219,6 +233,7 @@ describe("ring nudge sweep", () => {
     expect(url).toBe("https://api.resend.com/emails");
     const sent = JSON.parse(init.body);
     expect(sent.to).toBe("over@x.com");
+    expect(sent.from).toBe(MAIL_FROM);
     expect(sent.subject).toBe("Your oldest copies are dropping off");
     expect(sent.text).toContain(`your last ${TIERS.free.ring} in view`);
     expect(sent.text).toContain("https://relic.space/upgrade?source=ring_email");
@@ -237,11 +252,35 @@ describe("ring nudge sweep", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("stamps the row even when Resend refuses the address", async () => {
+  it("stamps the row when Resend refuses the address itself", async () => {
     fetchMock.mockImplementation(async () => new Response("bad address", { status: 422 }));
     await seedAccount("ringG", "bounce@x.com", { ringEvicted: 3 });
     await ringNudgeSweep(withKey());
     expect(await stampOf("ringG")).toBeGreaterThan(0);
+  });
+
+  // The 2026-09-10 silence: a rejected key stamped every row it touched, so the
+  // accounts were dropped from the pool for good. A server-side refusal must
+  // cost us nothing but the tick.
+  it("leaves the row alone when the key is rejected, and retries later", async () => {
+    fetchMock.mockImplementation(async () => new Response("unauthorized", { status: 401 }));
+    await seedAccount("ringJ", "keybad@x.com", { ringEvicted: 3 });
+    await ringNudgeSweep(withKey());
+    expect(await stampOf("ringJ")).toBeNull();
+
+    fetchMock.mockImplementation(async () => new Response("{}", { status: 200 }));
+    await ringNudgeSweep(withKey());
+    expect(await stampOf("ringJ")).toBeGreaterThan(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves the row alone when the send throws", async () => {
+    fetchMock.mockImplementation(async () => {
+      throw new Error("socket hang up");
+    });
+    await seedAccount("ringK", "flaky@x.com", { ringEvicted: 3 });
+    await ringNudgeSweep(withKey());
+    expect(await stampOf("ringK")).toBeNull();
   });
 
   it("touches nothing at all without a Resend key (the self-host case)", async () => {
@@ -255,5 +294,85 @@ describe("ring nudge sweep", () => {
     await seedAccount("ringI", "cron@x.com", { ringEvicted: 3 });
     await worker.scheduled({} as ScheduledController, withKey());
     expect(await stampOf("ringI")).toBeGreaterThan(0);
+  });
+
+  // --- the other wall --------------------------------------------------------
+  // The vault is the limit people reach first, and until 2026-09 it was the one
+  // that said nothing at all.
+  describe("vault cap sweep", () => {
+    const vaultStampOf = async (account: string): Promise<number | null> => {
+      const r = await E.DB.prepare(
+        "SELECT vault_email_at FROM account_usage WHERE account_id = ?1",
+      ).bind(account).first();
+      return r?.vault_email_at ?? null;
+    };
+
+    const CAP = TIERS.free.vault as number;
+
+    it("mails the full vault and skips everyone else", async () => {
+      await seedAccount("vaultA", "full@x.com", { vaultCount: CAP });
+      await seedAccount("vaultB", "over@x.com", { vaultCount: CAP + 5 });
+      await seedAccount("vaultC", "told@x.com", { vaultCount: CAP, vaultEmailedAt: 99 });
+      await seedAccount("vaultD", "payer@x.com", { vaultCount: CAP, subscribed: true });
+      await seedAccount("vaultE", null, { vaultCount: CAP });
+      await seedAccount("vaultF", "room@x.com", { vaultCount: CAP - 1 });
+
+      await vaultCapSweep(withKey());
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(sent.from).toBe(MAIL_FROM);
+      expect(sent.subject).toBe("Your Relic vault is full");
+      expect(sent.text).toContain(`keeps ${CAP} things`);
+      expect(sent.text).toContain("https://relic.space/upgrade?source=vault_email");
+      expect(sent.text).not.toContain("\u2014"); // no em dash
+
+      expect(await vaultStampOf("vaultA")).toBeGreaterThan(0);
+      expect(await vaultStampOf("vaultB")).toBeGreaterThan(0);
+      expect(await vaultStampOf("vaultC")).toBe(99); // untouched
+      expect(await vaultStampOf("vaultD")).toBeNull();
+      expect(await vaultStampOf("vaultE")).toBeNull();
+      expect(await vaultStampOf("vaultF")).toBeNull();
+    });
+
+    it("never sends twice", async () => {
+      await seedAccount("vaultG", "once@x.com", { vaultCount: CAP });
+      await vaultCapSweep(withKey());
+      await vaultCapSweep(withKey());
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the row alone when the key is rejected", async () => {
+      fetchMock.mockImplementation(async () => new Response("unauthorized", { status: 401 }));
+      await seedAccount("vaultH", "keybad@x.com", { vaultCount: CAP });
+      await vaultCapSweep(withKey());
+      expect(await vaultStampOf("vaultH")).toBeNull();
+    });
+
+    it("touches nothing at all without a Resend key (the self-host case)", async () => {
+      await seedAccount("vaultI", "full@x.com", { vaultCount: CAP });
+      await vaultCapSweep(E);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(await vaultStampOf("vaultI")).toBeNull();
+    });
+
+    // The two walls keep separate memory, so being told about one must never
+    // spend the other's single letter.
+    it("is independent of the ring stamp", async () => {
+      await seedAccount("vaultJ", "both@x.com", { vaultCount: CAP, ringEvicted: 7 });
+      await ringNudgeSweep(withKey());
+      expect(await stampOf("vaultJ")).toBeGreaterThan(0);
+      expect(await vaultStampOf("vaultJ")).toBeNull();
+
+      await vaultCapSweep(withKey());
+      expect(await vaultStampOf("vaultJ")).toBeGreaterThan(0);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("the cron runs it", async () => {
+      await seedAccount("vaultK", "cron@x.com", { vaultCount: CAP });
+      await worker.scheduled({} as ScheduledController, withKey());
+      expect(await vaultStampOf("vaultK")).toBeGreaterThan(0);
+    });
   });
 });

@@ -21,6 +21,7 @@ import { type Auth, authenticate, REV_TTL, revKey } from "./auth";
 import { clampLimit, CORS, err, json } from "./http";
 import { clientIp, rateLimit, withRateLimitHeaders } from "./ratelimit";
 import { deleteAccount, revokeSupabaseSessions } from "./account";
+import { sendDownloadLink } from "./download_link";
 import {
   createShare,
   fetchShareBlob,
@@ -38,6 +39,7 @@ import {
   reconcile,
   ringNudgeSweep,
   stripeWebhook,
+  vaultCapSweep,
 } from "./stripe";
 import { sweepAbandonedMpus, sweepOrphanBlobs, sweepTombstones } from "./sweep";
 import { claimAi, listAi, putAi, releaseAi } from "./ai";
@@ -249,7 +251,7 @@ export async function putRelic(req: Request, env: Env, auth: Auth, uid: string, 
     caps.vault !== null && envelope.promoted && !stored?.promoted &&
     usage.vault >= caps.vault
   ) {
-    return err(402, "vault_cap", "vault is full — upgrade to keep more");
+    return err(402, "vault_cap", "vault is full, upgrade to keep more");
   }
   // storage cap — all stored bytes, every tier.
   if (
@@ -775,6 +777,15 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
       return json({ ok: true, sessions_revoked: revoked === "ok" });
     }
 
+    // Mail this account's own address the desktop download link. Shares the
+    // device limiter, because it is the same "one phone setting itself up"
+    // traffic and needs no namespace of its own.
+    if (path === "/account/send-download-link" && req.method === "POST") {
+      const limited = await rateLimit(req, env.RL_DEVICE, "RL_DEVICE", auth.account);
+      if (limited) return limited;
+      return await sendDownloadLink(env, auth);
+    }
+
     // --- account ---
     if (path === "/account" && req.method === "GET") {
       const caps = TIERS[auth.tier];
@@ -831,12 +842,18 @@ export default {
   // is fenced so a sweep failure can't starve the billing sweeps.
   async scheduled(_event: ScheduledController, env: Env): Promise<void> {
     await graceSweep(env);
-    // Fenced on its own: one nudge email must never be able to fail the billing
-    // sweeps behind it.
+    // Fenced on their own: one nudge email must never be able to fail the
+    // billing sweeps behind it. Both free walls get a pass every tick; each
+    // keeps its own stamp column, so neither can swallow the other.
     try {
       await ringNudgeSweep(env);
     } catch (e) {
       console.error(JSON.stringify({ evt: "ring_email_error", err: String(e) }));
+    }
+    try {
+      await vaultCapSweep(env);
+    } catch (e) {
+      console.error(JSON.stringify({ evt: "vault_email_error", err: String(e) }));
     }
     await reconcile(env);
     await sweepShares(env);
