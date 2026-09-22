@@ -444,3 +444,51 @@ class GhostIconButton extends StatelessWidget {
         swallowTap: swallowTap,
       );
 }
+
+/// The compact gold switch shared by all Settings panes.
+class SettingsToggle extends StatelessWidget {
+  final bool on;
+  final VoidCallback? onTap;
+  const SettingsToggle({super.key, required this.on, required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    final c = RelicTheme.of(context);
+    return Semantics(
+      toggled: on,
+      enabled: onTap != null,
+      child: _FocusableTap(
+        enabled: onTap != null,
+        onTap: onTap,
+        builder: (focused) => Hoverable(
+          onTap: onTap,
+          builder: (context, hovered) => Opacity(
+            opacity: onTap == null ? 0.45 : 1,
+            child: AnimatedContainer(
+          duration: Motion.selection,
+          width: 40,
+          height: 23,
+          padding: const EdgeInsets.all(2),
+          decoration: BoxDecoration(
+            border: focused ? Border.all(color: c.borderStrong) : null,
+            // Gold is a fill colour: the on-track is the system's gradient,
+            // not a flat accent. No glow — that belongs to the one CTA.
+            color: on ? null : c.track,
+            gradient: on ? Gradients.gold : null,
+            borderRadius: BorderRadius.circular(Radii.pill),
+          ),
+          alignment: on ? Alignment.centerRight : Alignment.centerLeft,
+          child: Container(
+            width: 19,
+            height: 19,
+            decoration: BoxDecoration(
+              color: on ? c.toggleKnob : c.textFaintest,
+              shape: BoxShape.circle,
+            ),
+          ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

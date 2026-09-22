@@ -110,3 +110,10 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+# Optional speech feature: build relic-voice/build.ps1 before the app to bundle
+# the supervised worker. Source-only app builds remain usable without it.
+set(RELIC_VOICE_BUNDLE "${CMAKE_CURRENT_SOURCE_DIR}/../../relic-voice/dist/relic-voice")
+if(EXISTS "${RELIC_VOICE_BUNDLE}/relic-voice.exe")
+  install(DIRECTORY "${RELIC_VOICE_BUNDLE}/" DESTINATION "${CMAKE_INSTALL_PREFIX}/voice" COMPONENT Runtime)
+endif()

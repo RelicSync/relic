@@ -1,0 +1,9 @@
+{
+  "version": "granite-5-470m-q8-pcs-v1",
+  "base_url": "https://models.relic.space/relic-voice/v1",
+  "files": [
+    {"name": "granite-speech-5.0-470m-turboctc-Q8_0.gguf", "bytes": 505606496, "sha256": "0408fe0b33be19af5be423d8ba6b43768608b6f065e1ac97b78c84b55c140738"},
+    {"name": "punct_cap_seg_en.onnx", "bytes": 209532928, "sha256": "dd922d459da618cd324280889740608b76fb3e9e61d3f402291be1251f91421b"},
+    {"name": "spe_32k_lc_en.model", "bytes": 587902, "sha256": "9e86d0263de80b3b68327a21f5350c8cdf846e4c4400253c9baf05e3d44871c3"}
+  ]
+}

@@ -5,6 +5,7 @@
 
 #include "flutter/generated_plugin_registrant.h"
 #include "native_gem_toast.h"
+#include "native_voice.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -27,6 +28,7 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  InitializeNativeVoice(GetHandle(), flutter_controller_->engine()->messenger());
   native_toast_channel_ =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
           flutter_controller_->engine()->messenger(), "relic/native_toast",
@@ -57,6 +59,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  DisposeNativeVoice();
   if (native_toast_channel_) {
     native_toast_channel_->SetMethodCallHandler(nullptr);
     native_toast_channel_.reset();
@@ -72,6 +75,7 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (auto voice = HandleNativeVoiceMessage(message, wparam, lparam)) return *voice;
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =

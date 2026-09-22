@@ -23,6 +23,8 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../data/backup_file.dart';
+import '../data/voice_controller.dart';
+import 'voice_settings.dart';
 import '../data/crash_log.dart';
 import '../data/hotkeys.dart';
 import '../platform/input_injector.dart';
@@ -42,6 +44,7 @@ import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
 import 'connect_dialog.dart';
 import '../widgets/controls.dart';
+import '../widgets/settings_controls.dart';
 import '../widgets/learn_more.dart';
 import '../widgets/fields.dart';
 import '../widgets/passphrase_field.dart';
@@ -53,6 +56,7 @@ import '../widgets/relic_mark.dart';
 class SettingsView extends StatefulWidget {
   final VoidCallback onClose;
   final LocalDeskRepo repo;
+  final VoiceController? voice;
 
   /// Open the connect flow (passphrase entry). Settings closes; the connect
   /// surface takes over. Null-safe: if absent the Connect button is hidden.
@@ -84,11 +88,13 @@ class SettingsView extends StatefulWidget {
 
   /// Land directly on the Sync & account section (e.g. opened to link a device).
   final bool startOnSync;
+  final bool startOnVoice;
 
   const SettingsView({
     super.key,
     required this.onClose,
     required this.repo,
+    this.voice,
     this.onConnect,
     this.onDisconnect,
     this.onSwitchAccount,
@@ -97,6 +103,7 @@ class SettingsView extends StatefulWidget {
     this.onRenameThisDevice,
     this.onBillingOpened,
     this.startOnSync = false,
+    this.startOnVoice = false,
   });
   @override
   State<SettingsView> createState() => _SettingsViewState();
@@ -104,14 +111,19 @@ class SettingsView extends StatefulWidget {
 
 class _SettingsViewState extends State<SettingsView>
     with WidgetsBindingObserver {
-  late int _section = widget.startOnSync ? 4 : 0;
-  static const _sections = [
+  late int _section = widget.startOnVoice && widget.voice != null
+      ? 6
+      : widget.startOnSync
+      ? 4
+      : 0;
+  List<(String, IconData)> get _sections => [
     ('General', LucideIcons.slidersHorizontal),
     ('Capture', LucideIcons.clipboard),
     ('Search and AI', LucideIcons.sparkles),
     ('Vault and storage', LucideIcons.vault),
     ('Sync and account', LucideIcons.userRound),
     ('About', LucideIcons.info),
+    if (widget.voice != null) ('Voice', LucideIcons.mic),
   ];
 
   // transient status line for the storage actions
@@ -464,6 +476,8 @@ class _SettingsViewState extends State<SettingsView>
   Widget _pane(RelicColors c) {
     final repo = widget.repo;
     switch (_section) {
+      case 6:
+        return VoiceSettings(voice: widget.voice!);
       case 0:
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1332,7 +1346,7 @@ class _SettingsViewState extends State<SettingsView>
                   const SizedBox(height: 10),
                   Row(
                     children: [
-                      _Toggle(
+                      SettingsToggle(
                         on: _exportIncludeSecrets,
                         onTap: () => setState(() =>
                             _exportIncludeSecrets = !_exportIncludeSecrets),
@@ -1744,7 +1758,7 @@ class _SettingsViewState extends State<SettingsView>
                 ),
               ),
               const SizedBox(width: 16),
-              _Toggle(
+              SettingsToggle(
                 on: on,
                 onTap: () {
                   if (!on && !repo.backupConfigured) {
@@ -3142,13 +3156,8 @@ class _SettingsViewState extends State<SettingsView>
     ),
   );
 
-  Widget _row(RelicColors c, Widget child, {bool last = false}) => Container(
-    padding: const EdgeInsets.symmetric(vertical: Insets.lg),
-    decoration: BoxDecoration(
-      border: last ? null : Border(bottom: BorderSide(color: c.border)),
-    ),
-    child: child,
-  );
+  Widget _row(RelicColors c, Widget child, {bool last = false}) =>
+      SettingsRow(last: last, child: child);
 
   Widget _toggleRow(
     RelicColors c,
@@ -3160,72 +3169,10 @@ class _SettingsViewState extends State<SettingsView>
     bool recommended = false,
     IconData? leading,
     bool leadingTx = false,
-  }) {
-    return _row(
-      c,
-      Row(
-        children: [
-          if (leadingTx) ...[
-            Text(
-              'Aa',
-              style: RelicTheme.mono(
-                size: 14,
-                weight: FontWeight.w700,
-                color: c.textSecondary,
-                letterSpacing: -0.5,
-              ),
-            ),
-            const SizedBox(width: 10),
-          ] else if (leading != null) ...[
-            Icon(leading, size: 17, color: c.textSecondary),
-            const SizedBox(width: 10),
-          ],
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      title,
-                      style: RelicTheme.sans(size: 13, color: c.text),
-                    ),
-                    if (recommended) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: Insets.sm,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: c.tagBg,
-                          borderRadius: BorderRadius.circular(Radii.tag),
-                        ),
-                        child: Text(
-                          'recommended',
-                          style: RelicTheme.mono(size: 9.5, color: c.tagText),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-                if (sub != null) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    sub,
-                    style: RelicTheme.sans(size: 11.5, color: c.textMuted),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(width: 16),
-          _Toggle(on: value, onTap: () => onChanged(!value)),
-        ],
-      ),
-      last: last,
-    );
-  }
+  }) => SettingsToggleRow(
+    title: title, value: value, onChanged: onChanged, sub: sub,
+    last: last, recommended: recommended, leading: leading, leadingTx: leadingTx,
+  );
 
   /// macOS only: the Accessibility (TCC) grant. Windows synthesizes keystrokes
   /// with no permission at all, so this whole block is a Mac concern, gated the
@@ -3468,7 +3415,7 @@ class _SettingsViewState extends State<SettingsView>
                 ),
               ),
               const SizedBox(width: 16),
-              _Toggle(
+              SettingsToggle(
                 on: repo.mlEnrich,
                 onTap: available
                     ? () => repo.setMlEnrich(!repo.mlEnrich)
@@ -3885,44 +3832,6 @@ class _SettingsViewState extends State<SettingsView>
     return mb >= 1024
         ? '${(mb / 1024).toStringAsFixed(2)} GB'
         : '${mb.toStringAsFixed(1)} MB';
-  }
-}
-
-class _Toggle extends StatelessWidget {
-  final bool on;
-  final VoidCallback onTap;
-  const _Toggle({required this.on, required this.onTap});
-  @override
-  Widget build(BuildContext context) {
-    final c = RelicTheme.of(context);
-    return GestureDetector(
-      onTap: onTap,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: AnimatedContainer(
-          duration: Motion.selection,
-          width: 40,
-          height: 23,
-          padding: const EdgeInsets.all(2),
-          decoration: BoxDecoration(
-            // Gold is a fill colour: the on-track is the system's gradient,
-            // not a flat accent. No glow — that belongs to the one CTA.
-            color: on ? null : c.track,
-            gradient: on ? Gradients.gold : null,
-            borderRadius: BorderRadius.circular(Radii.pill),
-          ),
-          alignment: on ? Alignment.centerRight : Alignment.centerLeft,
-          child: Container(
-            width: 19,
-            height: 19,
-            decoration: BoxDecoration(
-              color: on ? c.toggleKnob : c.textFaintest,
-              shape: BoxShape.circle,
-            ),
-          ),
-        ),
-      ),
-    );
   }
 }
 

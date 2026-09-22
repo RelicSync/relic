@@ -85,19 +85,48 @@ class Attachment {
       a.map((e) => e.toJson()).toList();
 }
 
-enum Source { clipboard, upload, hotkey, share, api }
+enum Source { clipboard, upload, hotkey, share, api, voice }
 
 /// Tags that describe a clip's PROVENANCE (kind seeds, the app it was copied
 /// from) rather than its content — displayed after content tags. Covers the
 /// capture seeds plus the mapped source-app vocabulary (foreground_app.dart);
 /// unmapped exe stems still show, just in their stored position.
 const Set<String> _provenanceTags = {
-  'photo', 'screenshot',
-  'chrome', 'edge', 'firefox', 'brave', 'opera', 'vivaldi', 'arc', 'safari',
-  'vscode', 'visualstudio', 'intellij', 'pycharm', 'webstorm', 'rider',
-  'clion', 'goland', 'androidstudio', 'terminal', 'slack', 'discord', 'teams',
-  'telegram', 'whatsapp', 'word', 'excel', 'powerpoint', 'outlook', 'notion',
-  'obsidian', 'acrobat', 'notepad',
+  'photo',
+  'screenshot',
+  'dictation',
+  'voice-note',
+  'chrome',
+  'edge',
+  'firefox',
+  'brave',
+  'opera',
+  'vivaldi',
+  'arc',
+  'safari',
+  'vscode',
+  'visualstudio',
+  'intellij',
+  'pycharm',
+  'webstorm',
+  'rider',
+  'clion',
+  'goland',
+  'androidstudio',
+  'terminal',
+  'slack',
+  'discord',
+  'teams',
+  'telegram',
+  'whatsapp',
+  'word',
+  'excel',
+  'powerpoint',
+  'outlook',
+  'notion',
+  'obsidian',
+  'acrobat',
+  'notepad',
 };
 
 Kind kindFromStr(String s) => switch (s) {
@@ -110,12 +139,13 @@ Kind kindFromStr(String s) => switch (s) {
 String kindToStr(Kind k) => k.name;
 
 Source sourceFromStr(String s) => switch (s) {
-      'clipboard' => Source.clipboard,
-      'upload' => Source.upload,
-      'hotkey' => Source.hotkey,
-      'share' => Source.share,
-      _ => Source.api,
-    };
+  'clipboard' => Source.clipboard,
+  'upload' => Source.upload,
+  'hotkey' => Source.hotkey,
+  'share' => Source.share,
+  'voice' => Source.voice,
+  _ => Source.api,
+};
 
 /// The declared size of a blob-less text relic: the plain body plus whatever
 /// formatting travels with it.
@@ -128,8 +158,10 @@ Source sourceFromStr(String s) => switch (s) {
 /// storage. A four-byte sentence copied off a web page carries 47 KB of HTML,
 /// so counting the plain text alone made every such capture look like exactly
 /// that and it came back `400 invalid_envelope`. See worker/src/index.ts.
-int textByteSize(String plain, RichBody? rich) =>
-    utf8.encode(plain).length + (rich?.encodedLength ?? 0);
+int textByteSize(String plain, RichBody? rich,
+        {Map<String, dynamic>? voice}) =>
+    utf8.encode(plain).length + (rich?.encodedLength ?? 0) +
+    (voice == null ? 0 : utf8.encode(jsonEncode(voice)).length);
 
 /// A pending clip reminder (local-only, never synced). `remindAt` is epoch
 /// milliseconds (DateTime.millisecondsSinceEpoch), independent of the
@@ -168,6 +200,19 @@ class Relic {
   /// matches must be ignored rather than pasted. See models/rich_body.dart.
   final RichBody? rich;
 
+  /// Additive encrypted capture metadata. Raw text is never separately indexed.
+  final Map<String, dynamic>? voice;
+  static Map<String, dynamic>? voiceFrom(Object? value) {
+    if (value is String) {
+      try {
+        value = jsonDecode(value);
+      } catch (_) {
+        return null;
+      }
+    }
+    return value is Map ? Map<String, dynamic>.from(value) : null;
+  }
+
   const Relic({
     required this.uid,
     required this.createdAt,
@@ -188,6 +233,7 @@ class Relic {
     this.preview,
     this.attachments = const [],
     this.rich,
+    this.voice,
   });
 
   bool get isSecret => tags.contains('secret');
@@ -195,27 +241,28 @@ class Relic {
   /// Snake-case wire shape, key-compatible with LocalDeskRepo._fromJson (the
   /// vault-export format is the same shape the sync payloads use).
   Map<String, dynamic> toJson() => {
-        'uid': uid,
-        'created_at': createdAt,
-        'updated_at': updatedAt,
-        'kind': kindToStr(kind),
-        'source': source.name,
-        'promoted': promoted,
-        'byte_size': byteSize,
-        if (device != null) 'device': device,
-        if (mime != null) 'mime': mime,
-        if (filename != null) 'filename': filename,
-        if (blobKey != null) 'blob_key': blobKey,
-        'tags': tags,
-        'user_tags': userTags,
-        if (title != null) 'title': title,
-        if (note != null) 'note': note,
-        if (content != null) 'content': content,
-        if (preview != null) 'preview': preview,
-        if (attachments.isNotEmpty)
-          'attachments': Attachment.listToJson(attachments),
-        if (rich != null) 'rich': rich!.toJson(),
-      };
+    'uid': uid,
+    'created_at': createdAt,
+    'updated_at': updatedAt,
+    'kind': kindToStr(kind),
+    'source': source.name,
+    'promoted': promoted,
+    'byte_size': byteSize,
+    if (device != null) 'device': device,
+    if (mime != null) 'mime': mime,
+    if (filename != null) 'filename': filename,
+    if (blobKey != null) 'blob_key': blobKey,
+    'tags': tags,
+    'user_tags': userTags,
+    if (title != null) 'title': title,
+    if (note != null) 'note': note,
+    if (content != null) 'content': content,
+    if (preview != null) 'preview': preview,
+    if (attachments.isNotEmpty)
+      'attachments': Attachment.listToJson(attachments),
+    if (rich != null) 'rich': rich!.toJson(),
+    if (voice != null) 'voice': voice,
+  };
 
   bool get hasAttachments => attachments.isNotEmpty;
 
@@ -253,6 +300,9 @@ class Relic {
 
     final machine = tags.where((t) => t != 'secret');
     take(userTags);
+    if (source == Source.voice || voice != null) {
+      take([voice?['mode'] == 'voice_note' ? 'voice-note' : 'dictation']);
+    }
     take(machine.where((t) => !_provenanceTags.contains(t)));
     take(machine.where(_provenanceTags.contains));
     return out;
@@ -331,28 +381,28 @@ class Relic {
     bool clearBlobKey = false,
     RichBody? rich,
     bool clearRich = false,
-  }) =>
-      Relic(
-        uid: uid,
-        createdAt: createdAt ?? this.createdAt,
-        updatedAt: updatedAt ?? this.updatedAt,
-        kind: kind,
-        source: source,
-        promoted: promoted ?? this.promoted,
-        byteSize: byteSize ?? this.byteSize,
-        device: device,
-        mime: mime,
-        filename: filename,
-        blobKey: clearBlobKey ? null : (blobKey ?? this.blobKey),
-        tags: tags ?? this.tags,
-        userTags: userTags ?? this.userTags,
-        title: title ?? this.title,
-        note: note ?? this.note,
-        content: content ?? this.content,
-        preview: preview ?? this.preview,
-        attachments: attachments ?? this.attachments,
-        rich: clearRich ? null : (rich ?? this.rich),
-      );
+  }) => Relic(
+    uid: uid,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+    kind: kind,
+    source: source,
+    promoted: promoted ?? this.promoted,
+    byteSize: byteSize ?? this.byteSize,
+    device: device,
+    mime: mime,
+    filename: filename,
+    blobKey: clearBlobKey ? null : (blobKey ?? this.blobKey),
+    tags: tags ?? this.tags,
+    userTags: userTags ?? this.userTags,
+    title: title ?? this.title,
+    note: note ?? this.note,
+    content: content ?? this.content,
+    preview: preview ?? this.preview,
+    attachments: attachments ?? this.attachments,
+    rich: clearRich ? null : (rich ?? this.rich),
+    voice: voice,
+  );
 }
 
 /// Display-only cleanup for a derived title line (preview/content). Strips

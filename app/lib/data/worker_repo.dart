@@ -1908,6 +1908,7 @@ class WorkerRepo implements RelicRepo {
       // within a version"). Capped at 256 KB so the envelope stays well inside
       // the Worker's caps.item * 1.5 body gate.
       if (r.rich != null) 'rich': r.rich!.toJson(),
+      if (r.voice != null) 'voice': r.voice,
     };
     final sealed = await RelicCrypto.sealRelicPayload(_mk!, r.uid, payload);
     final env = _seal(r, sealed);
@@ -2036,7 +2037,7 @@ class WorkerRepo implements RelicRepo {
         bumped = bumped.copyWith(
           rich: rich,
           byteSize: bumped.blobKey == null && bumped.content != null
-              ? textByteSize(bumped.content!, rich)
+              ? textByteSize(bumped.content!, rich, voice: bumped.voice)
               : null,
         );
       }
@@ -2331,7 +2332,7 @@ class WorkerRepo implements RelicRepo {
       content: newContent,
       preview: newContent == null ? null : _previewLine(newContent),
       byteSize: newContent != null && r.blobKey == null
-          ? utf8.encode(newContent).length
+          ? textByteSize(newContent, r.rich, voice: r.voice)
           : null,
       updatedAt: _now,
     );

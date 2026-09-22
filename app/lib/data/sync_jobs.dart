@@ -68,6 +68,7 @@ Relic relicFromEnvelope(Map<String, dynamic> env, Map<String, dynamic> p) =>
       preview: p['preview'] as String?,
       attachments: Attachment.listFrom(p['attachments']),
       rich: RichBody.fromJson(p['rich']),
+      voice: Relic.voiceFrom(p['voice']),
     );
 
 /// Open every relic envelope under [mk], off the UI isolate.

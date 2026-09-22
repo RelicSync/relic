@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <vector>
+#include <string>
 
 namespace {
 
@@ -20,6 +21,16 @@ struct ToastState {
   int width = 112;
   int height = 112;
   double scale = 1.0;
+  bool voice = false;
+  bool recording = false;
+  double level_target = 0.0;
+  double level_smoothed = 0.0;
+  double level_reference_db = -36.0;
+  ULONGLONG level_at = 0;
+  ULONGLONG frame_at = 0;
+  std::vector<uint32_t> voice_mark;
+  std::vector<double> shadow_near;
+  std::vector<double> shadow_far;
 };
 
 ToastState* g_active_toast = nullptr;
@@ -227,18 +238,18 @@ void DrawMark(uint32_t* pixels,
               int width,
               int height,
               double t,
-              double dpi_scale) {
+              double dpi_scale, bool stationary = false) {
   // Timing is copied from the Dart GemToast in lib/widgets/gem_toast.dart so
   // the two read as one animation.
   const double pop = EaseOutBack(t / 0.28);
-  const double scale = 0.60 + 0.40 * pop;
+  const double scale = stationary ? 1.0 : 0.60 + 0.40 * pop;
   const double up = EaseOutCubic(t / 0.42);
   const double down = EaseInCubic((t - 0.50) / 0.50);
-  const double jump = std::max(0.0, up - down) * 17.0 * dpi_scale;
-  const double spin = EaseInOutCubic((t - 0.16) / 0.76) * 2.0 * kPi;
+  const double jump = stationary ? 0.0 : std::max(0.0, up - down) * 17.0 * dpi_scale;
+  const double spin = stationary ? 0.0 : EaseInOutCubic((t - 0.16) / 0.76) * 2.0 * kPi;
   const double fade_in = EaseOutCubic(t / 0.12);
   const double fade_out = 1.0 - EaseInCubic((t - 0.82) / 0.18);
-  const double opacity = Clamp01(fade_in * fade_out);
+  const double opacity = stationary ? 1.0 : Clamp01(fade_in * fade_out);
   if (opacity <= 0.0) {
     return;
   }
@@ -317,10 +328,90 @@ void DrawMark(uint32_t* pixels,
   }
 }
 
+// Cache the silhouette's soft shadows once. Scale the cached shadows with the
+// voice-reactive mark, then rasterize the vector mark at its exact current size.
+std::vector<double> BlurMarkAlpha(const std::vector<uint32_t>& mark,
+                                  int width, int height, double sigma) {
+  const int radius = static_cast<int>(std::ceil(sigma * 3.0));
+  std::vector<double> kernel(2 * radius + 1);
+  double total = 0.0;
+  for (int i = -radius; i <= radius; ++i) {
+    kernel[i + radius] = std::exp(-i * i / (2.0 * sigma * sigma));
+    total += kernel[i + radius];
+  }
+  for (double& weight : kernel) weight /= total;
+  std::vector<double> horizontal(width * height), result(width * height);
+  for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
+    double value = 0.0;
+    for (int i = -radius; i <= radius; ++i) {
+      const int sx = x + i;
+      if (sx >= 0 && sx < width) value += ((mark[y * width + sx] >> 24) / 255.0) * kernel[i + radius];
+    }
+    horizontal[y * width + x] = value;
+  }
+  for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
+    double value = 0.0;
+    for (int i = -radius; i <= radius; ++i) {
+      const int sy = y + i;
+      if (sy >= 0 && sy < height) value += horizontal[sy * width + x] * kernel[i + radius];
+    }
+    result[y * width + x] = value;
+  }
+  return result;
+}
+
+double VoicePulsePeriod(bool recording) { return recording ? 2400.0 : 550.0; }
+
+double SampleShadow(const std::vector<double>& shadow, int width, int height,
+                    double x, double y) {
+  const int x0 = static_cast<int>(std::floor(x));
+  const int y0 = static_cast<int>(std::floor(y));
+  if (x0 < 0 || y0 < 0 || x0 + 1 >= width || y0 + 1 >= height) return 0.0;
+  const double dx = x - x0, dy = y - y0;
+  const double upper = shadow[y0 * width + x0] * (1.0 - dx) + shadow[y0 * width + x0 + 1] * dx;
+  const double lower = shadow[(y0 + 1) * width + x0] * (1.0 - dx) + shadow[(y0 + 1) * width + x0 + 1] * dx;
+  return upper * (1.0 - dy) + lower * dy;
+}
+
+void DrawVoice(uint32_t* pixels, ToastState* state, double elapsed) {
+  if (state->voice_mark.empty()) {
+    state->voice_mark.resize(state->width * state->height);
+    DrawMark(state->voice_mark.data(), state->width, state->height, 0.0, state->scale, true);
+    state->shadow_near = BlurMarkAlpha(state->voice_mark, state->width, state->height, 4.0 * state->scale);
+    state->shadow_far = BlurMarkAlpha(state->voice_mark, state->width, state->height, 10.0 * state->scale);
+  }
+  const ULONGLONG now = GetTickCount64();
+  const double dt = state->frame_at ? std::min(100.0, static_cast<double>(now - state->frame_at)) : 0.0;
+  state->frame_at = now;
+  // Rise promptly with speech, settle more slowly, and never freeze at a large
+  // size if level updates stop. Processing returns smoothly to the resting size.
+  const double target = state->recording && now - state->level_at <= 350 ? state->level_target : 0.0;
+  const double response_ms = target > state->level_smoothed ? 65.0 : 190.0;
+  state->level_smoothed += (target - state->level_smoothed) * (1.0 - std::exp(-dt / response_ms));
+  BOOL animate = TRUE;
+  SystemParametersInfo(SPI_GETCLIENTAREAANIMATION, 0, &animate, 0);
+  const double size = animate ? 1.0 + 0.25 * state->level_smoothed : 1.0;
+  const double pulse = animate ? (1.0 - std::cos(elapsed / VoicePulsePeriod(state->recording) * 2.0 * kPi)) / 2.0 : 0.65;
+  const double near_opacity = 0.12 + 0.12 * pulse;
+  const double far_opacity = 0.16 + 0.52 * pulse;
+  const double cx = (state->width - 1) / 2.0, cy = (state->height - 1) / 2.0;
+  for (int y = 0; y < state->height; ++y) for (int x = 0; x < state->width; ++x) {
+    const int at = y * state->width + x;
+    const double sx = cx + (x - cx) / size, sy = cy + (y - cy) / size;
+    const double near_shadow = SampleShadow(state->shadow_near, state->width, state->height, sx, sy);
+    const double far_shadow = SampleShadow(state->shadow_far, state->width, state->height, sx, sy);
+    const double drop = SampleShadow(state->shadow_near, state->width, state->height, sx, sy - 2.0 * state->scale);
+    BlendPremul(pixels + at, 0, 0, 0, static_cast<int>(255.0 * drop * (0.16 + 0.12 * pulse)));
+    BlendPremul(pixels + at, 245, 179, 35,
+        static_cast<int>(255.0 * (near_shadow * near_opacity + far_shadow * far_opacity)));
+  }
+  DrawMark(pixels, state->width, state->height, 0.0, state->scale * size, true);
+}
+
 bool RenderToastFrame(ToastState* state) {
   const ULONGLONG now = GetTickCount64();
   const double elapsed = static_cast<double>(now - state->start_ms);
-  if (elapsed >= kDurationMs) {
+  if (!state->voice && elapsed >= kDurationMs) {
     return false;
   }
   const double t = elapsed / kDurationMs;
@@ -350,7 +441,8 @@ bool RenderToastFrame(ToastState* state) {
   HGDIOBJ old_bitmap = SelectObject(mem_dc, bitmap);
   auto* pixels = static_cast<uint32_t*>(bits);
   std::fill(pixels, pixels + state->width * state->height, 0);
-  DrawMark(pixels, state->width, state->height, t, state->scale);
+  if (state->voice) DrawVoice(pixels, state, elapsed);
+  else DrawMark(pixels, state->width, state->height, t, state->scale);
 
   POINT src = {0, 0};
   RECT rect{};
@@ -452,6 +544,7 @@ double DpiScaleForOwner(HWND owner) {
 
 bool ShowNativeGemToast(HWND owner) {
   EnsureToastClassRegistered();
+  if (g_active_toast && g_active_toast->voice) return false;
 
   if (g_active_toast && g_active_toast->hwnd) {
     DestroyWindow(g_active_toast->hwnd);
@@ -484,5 +577,57 @@ bool ShowNativeGemToast(HWND owner) {
   RenderToastFrame(state);
   ShowWindow(hwnd, SW_SHOWNOACTIVATE);
   SetTimer(hwnd, kTimerId, kTimerMs, nullptr);
+  return true;
+}
+
+void UpdateNativeVoiceLevel(double level) {
+  auto* state = g_active_toast;
+  if (!state || !state->voice || !state->recording) return;
+  const ULONGLONG now = GetTickCount64();
+  const double dt = state->level_at ? std::min(1000.0, static_cast<double>(now - state->level_at)) : 0.0;
+  state->level_at = now;
+  level = std::isfinite(level) ? std::clamp(level, 0.0, 1.0) : 0.0;
+  const double db = 20.0 * std::log10(std::max(level, 0.000001));
+  // Normalize this utterance's volume in dB, so quiet microphones still react.
+  // A -60 dB floor suppresses tiny noise; the reference relaxes by 3 dB/second
+  // so one loud syllable cannot suppress the animation for the rest of a note.
+  state->level_reference_db = std::clamp(std::max(db, state->level_reference_db - dt * 0.003), -42.0, -12.0);
+  state->level_target = std::pow(Clamp01((db + 60.0) / (state->level_reference_db + 60.0)), 1.2);
+}
+
+void HideNativeVoiceToast() {
+  if (g_active_toast && g_active_toast->voice) DestroyWindow(g_active_toast->hwnd);
+}
+
+bool ShowNativeVoiceToast(HWND target, bool recording) {
+  EnsureToastClassRegistered();
+  if (g_active_toast && g_active_toast->voice) {
+    if (g_active_toast->recording != recording) {
+      const ULONGLONG now = GetTickCount64();
+      const double phase = std::fmod(static_cast<double>(now - g_active_toast->start_ms) /
+          VoicePulsePeriod(g_active_toast->recording), 1.0);
+      g_active_toast->start_ms = now - static_cast<ULONGLONG>(phase * VoicePulsePeriod(recording));
+      g_active_toast->recording = recording;
+      RenderToastFrame(g_active_toast);
+    }
+    return true;
+  }
+  if (g_active_toast) DestroyWindow(g_active_toast->hwnd);
+  auto* state = new ToastState();
+  state->voice = true; state->recording = recording;
+  state->scale = DpiScaleForOwner(target);
+  state->width = static_cast<int>(112 * state->scale);
+  state->height = static_cast<int>(112 * state->scale);
+  MONITORINFO info{}; info.cbSize = sizeof(info);
+  RECT work = CursorMonitorWorkArea();
+  if (GetMonitorInfo(MonitorFromWindow(target, MONITOR_DEFAULTTONEAREST), &info)) work = info.rcWork;
+  const int x = work.left + ((work.right - work.left) - state->width) / 2;
+  const int y = work.bottom - state->height - static_cast<int>(56 * state->scale);
+  HWND hwnd = CreateWindowEx(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+      kToastClassName, L"Relic Voice", WS_POPUP, x, y, state->width, state->height, nullptr, nullptr, GetModuleHandle(nullptr), state);
+  if (!hwnd) { delete state; return false; }
+  state->hwnd = hwnd; state->start_ms = GetTickCount64(); g_active_toast = state;
+  SetWindowTextW(hwnd, L"Relic Voice");
+  RenderToastFrame(state); ShowWindow(hwnd, SW_SHOWNOACTIVATE); SetTimer(hwnd, kTimerId, 33, nullptr);
   return true;
 }

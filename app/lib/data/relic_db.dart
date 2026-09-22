@@ -90,6 +90,7 @@ class RelicDb {
     // markup would poison the FTS body with div/span/style/mso noise, and
     // detectTags would emit `code` on every browser copy.
     _ensureColumn(db, 'rich', 'TEXT');
+    _ensureColumn(db, 'voice', 'TEXT');
     // Machine tags the user explicitly removed — enrichment must not re-add
     // them. Local-only, like enrich_level (upsert never touches it).
     _ensureColumn(db, 'suppressed_tags', 'TEXT');
@@ -809,8 +810,8 @@ class RelicDb {
            (uid, created_at, updated_at, kind, source, promoted, byte_size,
             device, mime, filename, blob_key, content_hash, have_blob,
             tags, user_tags, title, note, content, preview, attachments,
-            rich)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            rich, voice)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(uid) DO UPDATE SET
              created_at=excluded.created_at, updated_at=excluded.updated_at,
              kind=excluded.kind, source=excluded.source, promoted=excluded.promoted,
@@ -819,7 +820,7 @@ class RelicDb {
              content_hash=excluded.content_hash, tags=excluded.tags,
              user_tags=excluded.user_tags, title=excluded.title, note=excluded.note,
              content=excluded.content, preview=excluded.preview,
-             attachments=excluded.attachments, rich=excluded.rich''',
+             attachments=excluded.attachments, rich=excluded.rich, voice=COALESCE(excluded.voice, relics.voice)''',
         [
           r.uid,
           r.createdAt,
@@ -834,7 +835,13 @@ class RelicDb {
           r.blobKey,
           r.content == null ? null : _hash(r.content!),
           haveBlob ? 1 : 0,
-          jsonEncode(r.tags),
+          jsonEncode(
+            {
+              ...r.tags,
+              if (r.voice != null)
+                r.voice!['mode'] == 'voice_note' ? 'voice-note' : 'dictation',
+            }.toList(),
+          ),
           jsonEncode(r.userTags),
           r.title,
           r.note,
@@ -844,6 +851,7 @@ class RelicDb {
               ? null
               : jsonEncode(Attachment.listToJson(r.attachments)),
           r.rich == null ? null : jsonEncode(r.rich!.toJson()),
+          r.voice == null ? null : jsonEncode(r.voice),
         ],
       );
       final attRs = _db.select(
@@ -883,8 +891,8 @@ class RelicDb {
          (uid, created_at, updated_at, kind, source, promoted, byte_size,
           device, mime, filename, blob_key, content_hash, have_blob,
           tags, user_tags, title, note, content, preview, attachments,
-          rich)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          rich, voice)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
          ON CONFLICT(uid) DO UPDATE SET
            created_at=excluded.created_at, updated_at=excluded.updated_at,
            kind=excluded.kind, source=excluded.source, promoted=excluded.promoted,
@@ -893,7 +901,7 @@ class RelicDb {
            content_hash=excluded.content_hash,
            tags=excluded.tags, user_tags=excluded.user_tags, title=excluded.title,
            note=excluded.note, content=excluded.content, preview=excluded.preview,
-           attachments=excluded.attachments, rich=excluded.rich''',
+           attachments=excluded.attachments, rich=excluded.rich, voice=COALESCE(excluded.voice, relics.voice)''',
     );
     final attSel = _db.prepare(
       'SELECT attachment_text FROM relics WHERE uid = ?',
@@ -923,7 +931,13 @@ class RelicDb {
           r.blobKey,
           r.content == null ? null : _hash(r.content!),
           (haveBlob?.call(r) ?? false) ? 1 : 0,
-          jsonEncode(r.tags),
+          jsonEncode(
+            {
+              ...r.tags,
+              if (r.voice != null)
+                r.voice!['mode'] == 'voice_note' ? 'voice-note' : 'dictation',
+            }.toList(),
+          ),
           jsonEncode(r.userTags),
           r.title,
           r.note,
@@ -933,6 +947,7 @@ class RelicDb {
               ? null
               : jsonEncode(Attachment.listToJson(r.attachments)),
           r.rich == null ? null : jsonEncode(r.rich!.toJson()),
+          r.voice == null ? null : jsonEncode(r.voice),
         ]);
         final attRs = attSel.select([r.uid]);
         final att = attRs.isEmpty
@@ -1016,9 +1031,8 @@ class RelicDb {
          (uid, created_at, updated_at, kind, source, promoted, byte_size,
           device, mime, filename, blob_key, content_hash, have_blob,
           tags, user_tags, title, note, content, preview, attachments,
-          rich)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-    );
+          rich, voice)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''');
     final fts = _db.prepare(
       'INSERT INTO relics_fts (uid, named, body, aux, tags) VALUES (?,?,?,?,?)',
     );
@@ -1042,7 +1056,13 @@ class RelicDb {
           r.blobKey,
           r.content == null ? null : _hash(r.content!),
           (haveBlob?.call(r) ?? false) ? 1 : 0,
-          jsonEncode(r.tags),
+          jsonEncode(
+            {
+              ...r.tags,
+              if (r.voice != null)
+                r.voice!['mode'] == 'voice_note' ? 'voice-note' : 'dictation',
+            }.toList(),
+          ),
           jsonEncode(r.userTags),
           r.title,
           r.note,
@@ -1052,6 +1072,7 @@ class RelicDb {
               ? null
               : jsonEncode(Attachment.listToJson(r.attachments)),
           r.rich == null ? null : jsonEncode(r.rich!.toJson()),
+          r.voice == null ? null : jsonEncode(r.voice),
         ]);
         // Same recipe as _writeIndexRows, minus the deletes. Kept in step with
         // it by relic_db_test's bulk-vs-upsert equivalence test.
@@ -1944,7 +1965,7 @@ class RelicDb {
   /// there `byte_size` is the bundle length, not the body.
   void setRich(String uid, RichBody? rich) {
     final rs = _db.select(
-      'SELECT content, blob_key FROM relics WHERE uid = ?',
+      'SELECT content, blob_key, voice FROM relics WHERE uid = ?',
       [uid],
     );
     if (rs.isEmpty) return;
@@ -1956,7 +1977,7 @@ class RelicDb {
     }
     _db.execute(
       'UPDATE relics SET rich = ?, byte_size = ? WHERE uid = ?',
-      [encoded, textByteSize(content, rich), uid],
+      [encoded, textByteSize(content, rich, voice: Relic.voiceFrom(rs.first['voice'])), uid],
     );
   }
 
@@ -3642,6 +3663,7 @@ class RelicDb {
     preview: j['preview'] as String?,
     attachments: Attachment.listFrom(j['attachments']),
     rich: RichBody.fromJson(j['rich']),
+    voice: Relic.voiceFrom(j['voice']),
   );
 
   static List<String> _jsonList(Object? v) {

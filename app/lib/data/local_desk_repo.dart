@@ -10,6 +10,7 @@ import 'package:super_clipboard/super_clipboard.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/relic.dart';
+import 'voice_capture.dart';
 import '../models/rich_body.dart';
 import '../platform/clipboard_bridge.dart';
 import '../platform/login_item.dart';
@@ -2529,6 +2530,69 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
 
   // --- capture ---
 
+  /// Stable session IDs make retries idempotent, independently of text content.
+  VoiceCaptureResult captureVoice({
+    required String sessionId,
+    required String text,
+    required Map<String, dynamic> metadata,
+    required bool promote,
+    String? sourceApp,
+  }) {
+    final db = _db;
+    if (db == null) throw StateError('The local vault is unavailable.');
+    if (!RegExp(r'^[a-f0-9-]{36}$').hasMatch(sessionId)) {
+      throw ArgumentError('Invalid voice session');
+    }
+    final existing = db.getByUid(sessionId);
+    if (existing != null) {
+      return VoiceCaptureResult(
+        existing,
+        created: false,
+        promotionRefused: promote && !existing.promoted,
+      );
+    }
+    final content = text.trim();
+    final size = textByteSize(content, null, voice: metadata);
+    if (content.isEmpty || size > maxItemBytes) {
+      throw StateError(
+        'The voice note is empty or exceeds the item size limit.',
+      );
+    }
+    final requested = promote || _autoVault;
+    final promoted = _promoteOnCapture(requested, size);
+    final tags = _tagsFor(content);
+    tags.add(promote ? 'voice-note' : 'dictation');
+    if (sourceApp != null &&
+        sourceApp.isNotEmpty &&
+        !tags.contains(sourceApp)) {
+      tags.add(sourceApp);
+    }
+    final relic = Relic(
+      uid: sessionId,
+      createdAt: _now,
+      updatedAt: _now,
+      kind: Kind.string,
+      source: Source.voice,
+      promoted: promoted,
+      byteSize: size,
+      device: deviceLabel,
+      tags: tags,
+      content: content,
+      preview: _preview(content),
+      voice: Map<String, dynamic>.from(metadata),
+    );
+    db.upsert(relic, queuePush: syncEnabled);
+    _enforceRetention();
+    _refreshWindow();
+    notifyListeners();
+    _kickSync();
+    return VoiceCaptureResult(
+      relic,
+      created: true,
+      promotionRefused: requested && !promoted,
+    );
+  }
+
   /// Capture clipboard text. Re-copying existing content bumps it rather than
   /// duplicating (also makes picking idempotent vs the watcher). [sourceApp]
   /// is the foreground app the copy came from (already tag-normalized) —
@@ -2735,7 +2799,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     if (manifest.isEmpty) {
       // Last attachment removed: degrade to a plain text note. The UI blocks
       // the text-less case (that's a delete, not an edit).
-      byteSize = utf8.encode(cur.content ?? '').length;
+      byteSize = textByteSize(cur.content ?? '', cur.rich, voice: cur.voice);
     } else {
       final bundle = packBundle([...keptBytes, for (final f in added) f.$3]);
       if (bundle.length > maxItemBytes) return AttachmentEditResult.tooLarge;
@@ -3610,6 +3674,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       if (redact) {
         j.remove('content');
         j.remove('preview'); // preview holds plaintext head — scrub it too
+        j.remove(
+          'voice',
+        ); // Raw recognition can contain the same masked secret.
         j.remove('rich'); // the HTML/RTF flavors hold the SAME secret, unmasked
         j['redacted'] = true;
       }
@@ -4427,7 +4494,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       preview: newContent == null ? null : _preview(newContent),
       // Blob-less string relics: the body IS the payload, so its size follows.
       byteSize: newContent != null && cur.blobKey == null
-          ? textByteSize(newContent, staleRich ? null : cur.rich)
+          ? textByteSize(newContent, staleRich ? null : cur.rich, voice: cur.voice)
           : null,
       clearRich: staleRich,
       updatedAt: _now,
@@ -5348,6 +5415,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         // fields within a version"). Capped at 256 KB so the envelope stays
         // well inside the Worker's caps.item * 1.5 body gate.
         if (r.rich != null) 'rich': r.rich!.toJson(),
+        if (r.voice != null) 'voice': r.voice,
         // Attachment manifest rides inside the encrypted payload (filenames
         // never reach the server); the bundle is the single blob_key.
         if (r.attachments.isNotEmpty)
@@ -5613,7 +5681,11 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   /// preview for images. Degrades to Stage-A while the models download. Mirrors
   /// relic-app's enricher: scoped to the vault, idempotent via enrich_level,
   /// and it never clobbers the user's title/note/user_tags.
+  /// Interactive speech takes precedence over starting background enrichment.
+  bool voiceBusy = false;
+
   Future<void> _enrichCycle() async {
+    if (voiceBusy) return;
     final sift = _sift;
     final db = _db;
     if (_enriching || !_mlEnrich || sift == null || db == null) return;
@@ -6269,6 +6341,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       preview: p['preview'] as String?,
       attachments: Attachment.listFrom(p['attachments']),
       rich: RichBody.fromJson(p['rich']),
+      voice: Relic.voiceFrom(p['voice']),
     );
   }
 
@@ -6497,6 +6570,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     preview: j['preview'] as String?,
     attachments: Attachment.listFrom(j['attachments']),
     rich: RichBody.fromJson(j['rich']),
+    voice: Relic.voiceFrom(j['voice']),
   );
 }
 
