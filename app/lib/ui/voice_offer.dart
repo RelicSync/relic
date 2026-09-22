@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../data/voice_controller.dart';
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/controls.dart';
@@ -65,10 +66,11 @@ class VoiceOffer extends StatelessWidget {
                     ),
                     const SizedBox(height: Insets.md),
                     Text(
-                      'Hold Right Alt, speak, and let go. The words land in '
-                      'whatever you were typing into, and a copy is kept in '
-                      'Relic. Hold Left Ctrl too and it saves a voice note '
-                      'to your vault instead.',
+                      'Hold ${VoiceController.keyLabel}, speak, and let go. '
+                      'The words land in whatever you were typing into, and '
+                      'a copy is kept in Relic. Hold '
+                      '${VoiceController.modifierLabel} too and it saves a '
+                      'voice note to your vault instead.',
                       style: RelicTheme.sans(
                         size: 13,
                         color: c.text,
@@ -77,7 +79,7 @@ class VoiceOffer extends StatelessWidget {
                     ),
                     const SizedBox(height: Insets.sm),
                     Text(
-                      'Speech is recognized on this PC and never sent '
+                      'Speech is recognized on this computer and never sent '
                       'anywhere. Turning it on downloads about 716 MB of '
                       'models once. The microphone only opens while you '
                       'hold the key. You can turn it off any time in Settings.',

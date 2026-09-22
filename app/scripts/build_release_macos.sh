@@ -18,6 +18,10 @@
 #   --ort <path>             libonnxruntime .dylib to bundle beside sift
 #                            (default: fetched from the official onnxruntime release)
 #   --skip-dmg               stop after the signed .app
+#   --skip-voice             build without the Voice worker (a deliberately
+#                            voice-less build; never for a release that offers
+#                            Voice). By default relic-voice/build_macos.sh runs
+#                            first and the bundle is required.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,6 +36,7 @@ NOTARY_KEY_ID=""
 NOTARY_ISSUER=""
 ORT_DYLIB=""
 SKIP_DMG=0
+SKIP_VOICE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --identity) IDENTITY="$2"; shift 2 ;;
@@ -41,6 +46,7 @@ while [[ $# -gt 0 ]]; do
     --notary-issuer) NOTARY_ISSUER="$2"; shift 2 ;;
     --ort) ORT_DYLIB="$2"; shift 2 ;;
     --skip-dmg) SKIP_DMG=1; shift ;;
+    --skip-voice) SKIP_VOICE=1; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -65,10 +71,26 @@ if [[ -z "$ORT_DYLIB" ]]; then
 fi
 [[ -f "$ORT_DYLIB" ]] || { echo "onnxruntime dylib not found: $ORT_DYLIB" >&2; exit 1; }
 
+# --- the Voice worker (relic-voice/build_macos.sh): its own Python runtime,
+#     the transcribe.cpp CPU library, ONNX Runtime and PortAudio, frozen into
+#     one folder. Built first so a failure stops the release before Flutter.
+VOICE_BUNDLE="$ROOT/relic-voice/dist/relic-voice"
+if [[ "$SKIP_VOICE" == 0 ]]; then
+  echo "==> relic-voice/build_macos.sh"
+  "$ROOT/relic-voice/build_macos.sh"
+  [[ -x "$VOICE_BUNDLE/relic-voice" ]] || { echo "Voice bundle missing: $VOICE_BUNDLE/relic-voice" >&2; exit 1; }
+else
+  echo "==> skipping the Voice worker (--skip-voice)"
+fi
+
 # --- builds
+APP_BUNDLE="$APP_DIR/build/macos/Build/Products/Release/relic_app.app"
+# Xcode builds into the bundle that is already there and re-signs it, so a
+# Voice folder left by the previous run would be sealed (or refused) before
+# this script gets to it. Same reason build_release.ps1 clears Release\voice.
+rm -rf "$APP_BUNDLE/Contents/Resources/voice"
 echo "==> flutter build macos --release"
 (cd "$APP_DIR" && flutter build macos --release)
-APP_BUNDLE="$APP_DIR/build/macos/Build/Products/Release/relic_app.app"
 [[ -d "$APP_BUNDLE" ]] || { echo "flutter build did not produce $APP_BUNDLE" >&2; exit 1; }
 
 echo "==> cargo build sift + relic-cli (release)"
@@ -85,6 +107,17 @@ mkdir -p "$HELPERS_DIR"
 cp "$ROOT/target/release/sift" "$MACOS_DIR/sift"
 cp "$ORT_DYLIB" "$MACOS_DIR/libonnxruntime.dylib"
 cp "$ROOT/target/release/relic" "$HELPERS_DIR/relic"
+# The Voice worker: VoiceController.workerPath looks for
+# Contents/Resources/voice/relic-voice; without it Voice settings explains the
+# build has no Voice and the opt-in card never shows. Resources, not Helpers:
+# codesign treats a plain folder under Helpers as nested code and refuses the
+# Python sources inside it, while under Resources they are sealed as data and
+# only the Mach-O files (signed below) count as code.
+VOICE_DIR="$APP_BUNDLE/Contents/Resources/voice"
+if [[ "$SKIP_VOICE" == 0 ]]; then
+  rm -rf "$VOICE_DIR"
+  cp -R "$VOICE_BUNDLE" "$VOICE_DIR"
+fi
 
 # --- codesign, inside-out (Developer ID + hardened runtime; ad-hoc for dev —
 #     no timestamp/hardening there, both need a real certificate)
@@ -146,6 +179,35 @@ done
 codesign "${SIGN_ARGS[@]}" "$MACOS_DIR/libonnxruntime.dylib"
 codesign "${SIGN_ARGS[@]}" --entitlements "$SIFT_ENTITLEMENTS" "$MACOS_DIR/sift"
 codesign "${SIGN_ARGS[@]}" "$HELPERS_DIR/relic"
+# The Voice worker, inside out: every Mach-O the PyInstaller bundle carries
+# (the .so extension modules, the third-party dylibs, the transcribe.cpp
+# libraries, the Python shared library) gets our signature first, then the
+# worker executable with its own entitlements (Runner/Voice.entitlements:
+# microphone, and the loader relaxations a frozen Python needs under the
+# hardened runtime). Notarization checks each one of these.
+if [[ "$SKIP_VOICE" == 0 ]]; then
+  VOICE_ENTITLEMENTS="$APP_DIR/macos/Runner/Voice.entitlements"
+  echo "==> codesign the Voice worker ($(find "$VOICE_DIR" -type f | wc -l | tr -d ' ') files)"
+  find "$VOICE_DIR/_internal" -type f \( -name "*.dylib" -o -name "*.so" -o -name "Python" \) -print0 \
+    | while IFS= read -r -d '' lib; do
+        file "$lib" | grep -q "Mach-O" || continue
+        codesign "${SIGN_ARGS[@]}" "$lib"
+      done
+  # Any other Mach-O executable hiding in the tree (helper binaries some
+  # wheels ship) is signed as a plain tool.
+  find "$VOICE_DIR/_internal" -type f -perm -u+x ! -name "*.dylib" ! -name "*.so" ! -name "Python" -print0 \
+    | while IFS= read -r -d '' bin; do
+        file "$bin" | grep -q "Mach-O" || continue
+        codesign "${SIGN_ARGS[@]}" "$bin"
+      done
+  # The Python framework is a bundle: seal it as one (its binary was signed
+  # above) so the outer signature sees valid nested code, not loose files.
+  for fw in "$VOICE_DIR/_internal/Python.framework/Versions"/*/; do
+    [[ -d "$fw" && ! -L "${fw%/}" ]] || continue
+    codesign "${SIGN_ARGS[@]}" "${fw%/}"
+  done
+  codesign "${SIGN_ARGS[@]}" --entitlements "$VOICE_ENTITLEMENTS" "$VOICE_DIR/relic-voice"
+fi
 codesign "${APP_SIGN_ARGS[@]}" "$APP_BUNDLE"
 codesign --verify --deep --strict "$APP_BUNDLE"
 

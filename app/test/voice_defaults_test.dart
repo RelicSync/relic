@@ -7,13 +7,15 @@ import 'package:relic_app/data/voice_controller.dart';
 void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
   test(
-    'Windows leaves Voice off until it is offered or explicitly turned on',
+    'Desktop leaves Voice off until it is offered or explicitly turned on',
     () async {
       final profile = Platform.environment['RELIC_DATA_DIR'];
-      if (!Platform.isWindows ||
+      if (!VoiceController.supported ||
           profile == null ||
           profile.toLowerCase().contains('roaming')) {
-        markTestSkipped('Requires Windows and an isolated RELIC_DATA_DIR');
+        markTestSkipped(
+          'Requires Windows or macOS and an isolated RELIC_DATA_DIR',
+        );
         return;
       }
       const channel = MethodChannel('relic/voice');

@@ -82,14 +82,18 @@ void main() {
       });
       final voice = VoiceController(
         repo,
-        launchProcess: (_, _) =>
-            Process.start('${source.path}/.venv/Scripts/python.exe', [
-              '${source.path}/protocol_fixture.py',
-              '--models',
-              '${source.path}/test-output/r2-models',
-              '--audio',
-              fixture,
-            ]),
+        launchProcess: (_, _) => Process.start(
+          Platform.isWindows
+              ? '${source.path}/.venv/Scripts/python.exe'
+              : '${source.path}/.venv/bin/python',
+          [
+            '${source.path}/protocol_fixture.py',
+            '--models',
+            '${source.path}/test-output/r2-models',
+            '--audio',
+            fixture,
+          ],
+        ),
       );
       await voice.initialize();
       addTearDown(() async {

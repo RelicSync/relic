@@ -35,6 +35,9 @@
 		B7C0DEB10000000000000204 /* ForegroundAppBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7C0DEB10000000000000104 /* ForegroundAppBridge.swift */; };
 		B7C0DEB10000000000000205 /* LoginItemBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7C0DEB10000000000000105 /* LoginItemBridge.swift */; };
 		B7C0DEB10000000000000206 /* SoundBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7C0DEB10000000000000106 /* SoundBridge.swift */; };
+		B7C0DEB10000000000000208 /* VoiceBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7C0DEB10000000000000108 /* VoiceBridge.swift */; };
+		B7C0DEB10000000000000209 /* VoiceGesture.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7C0DEB10000000000000109 /* VoiceGesture.swift */; };
+		B7C0DEB1000000000000020A /* VoiceOverlayPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7C0DEB1000000000000010A /* VoiceOverlayPanel.swift */; };
 		DE560ABE818B2B3932F7BC8A /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6083646A8658F8E9030A0BC3 /* Pods_RunnerTests.framework */; };
 		F0E0CE082AFCD67247B44ADE /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08B42FB50316AD88980DFC65 /* Pods_Runner.framework */; };
 /* End PBXBuildFile section */
@@ -103,6 +106,9 @@
 		B7C0DEB10000000000000104 /* ForegroundAppBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForegroundAppBridge.swift; sourceTree = "<group>"; };
 		B7C0DEB10000000000000105 /* LoginItemBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginItemBridge.swift; sourceTree = "<group>"; };
 		B7C0DEB10000000000000106 /* SoundBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundBridge.swift; sourceTree = "<group>"; };
+		B7C0DEB10000000000000108 /* VoiceBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceBridge.swift; sourceTree = "<group>"; };
+		B7C0DEB10000000000000109 /* VoiceGesture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceGesture.swift; sourceTree = "<group>"; };
+		B7C0DEB1000000000000010A /* VoiceOverlayPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceOverlayPanel.swift; sourceTree = "<group>"; };
 		F63AC0B794AF604EDA19321B /* Pods-Runner.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.release.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -228,6 +234,9 @@
 				B7C0DEB10000000000000104 /* ForegroundAppBridge.swift */,
 				B7C0DEB10000000000000105 /* LoginItemBridge.swift */,
 				B7C0DEB10000000000000106 /* SoundBridge.swift */,
+				B7C0DEB10000000000000108 /* VoiceBridge.swift */,
+				B7C0DEB10000000000000109 /* VoiceGesture.swift */,
+				B7C0DEB1000000000000010A /* VoiceOverlayPanel.swift */,
 			);
 			path = Bridge;
 			sourceTree = "<group>";
@@ -486,6 +495,9 @@
 				B7C0DEB10000000000000205 /* LoginItemBridge.swift in Sources */,
 				B7C0DEB10000000000000206 /* SoundBridge.swift in Sources */,
 				B7C0DEB10000000000000207 /* ActivationBridge.swift in Sources */,
+				B7C0DEB10000000000000208 /* VoiceBridge.swift in Sources */,
+				B7C0DEB10000000000000209 /* VoiceGesture.swift in Sources */,
+				B7C0DEB1000000000000020A /* VoiceOverlayPanel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

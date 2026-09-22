@@ -76,11 +76,9 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byType(SettingsToggle), findsNWidgets(3));
         expect(find.byType(SwitchListTile), findsNothing);
-        expect(find.text('Right Alt shortcuts'), findsOneWidget);
-        expect(
-          find.textContaining('Hold Right Alt to dictate.'),
-          findsOneWidget,
-        );
+        final key = VoiceController.keyLabel;
+        expect(find.text('$key shortcuts'), findsOneWidget);
+        expect(find.textContaining('Hold $key to dictate.'), findsOneWidget);
         expect(find.text('PREFERRED SPELLING'), findsOneWidget);
         expect(find.text('WORD CORRECTIONS'), findsOneWidget);
         expect(find.text('Test microphone and transcription'), findsOneWidget);

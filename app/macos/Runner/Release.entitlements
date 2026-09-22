@@ -9,6 +9,11 @@
 	<!-- flutter_secure_storage uses the data-protection keychain on macOS;
 	     without this access group (which requires real, non-ad-hoc signing)
 	     every read/write fails with errSecMissingEntitlement (-34018). -->
+	<!-- Voice: the bundled worker (Contents/Helpers/voice) records through
+	     Core Audio as a child of this process, so the microphone grant and
+	     the hardened-runtime audio-input entitlement both belong to the app. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)</string>

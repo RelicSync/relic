@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Applied to Contents/Helpers/voice/relic-voice by
+	     scripts/build_release_macos.sh, not by Xcode: the worker is a
+	     PyInstaller bundle (its own Python runtime, ONNX Runtime, PortAudio,
+	     the transcribe.cpp library) copied into the app. -->
+	<!-- It records the microphone. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<!-- Python loads its extension modules and the third-party dylibs by
+	     path; they are all re-signed with our identity, but the loader still
+	     needs these under the hardened runtime: ctypes/cffi (sounddevice)
+	     build call trampolines in writable memory, and the interpreter is
+	     not a bundle with a team-id-matched library set. -->
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+	<key>com.apple.security.cs.allow-dyld-environment-variables</key>
+	<true/>
+</dict>
+</plist>
