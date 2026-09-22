@@ -478,6 +478,13 @@ class WorkerRepo implements RelicRepo {
   @override
   List<Relic> get all => List.unmodifiable(_items);
 
+  /// Whether a text item with exactly this body is already here, which is
+  /// what [captureText] will bump rather than store again.
+  bool holdsText(String text) {
+    final t = text.trim();
+    return _items.any((e) => e.kind == Kind.string && e.content == t);
+  }
+
   /// Bumped when a pull actually changed something. This class is deliberately
   /// not a [ChangeNotifier] (the mobile host drives its own repaints off the
   /// poll timer), so the doorbell needed a way to say "new data" to whatever is
@@ -2138,15 +2145,40 @@ class WorkerRepo implements RelicRepo {
     if (changed) await _saveCache();
   }
 
-  /// Capture image [bytes] as a photo relic. False when the key is unavailable
-  /// (see [captureText]).
-  Future<bool> captureImage(Uint8List bytes, {String? mime, String? filename}) async {
+  /// Bring an item the user shared again back to the top, as a fresh capture
+  /// would. Both stamps move, for the reason [captureText] gives: every list
+  /// orders by created_at, so a bump that kept the old one would be invisible.
+  /// The bytes stay where they are; nothing is uploaded again.
+  ///
+  /// False when the item is not here (deleted since, or another account's),
+  /// so the caller can store the share afresh instead.
+  Future<bool> resurface(String uid) async {
+    final i = _items.indexWhere((e) => e.uid == uid);
+    if (i < 0) return false;
     try {
       await _ensureKey();
     } catch (_) {
       return false;
     }
     if (_mk == null) return false;
+    final now = _now;
+    final bumped = _items[i].copyWith(createdAt: now, updatedAt: now);
+    _items
+      ..removeAt(i)
+      ..insert(0, bumped);
+    await _push(bumped);
+    return true;
+  }
+
+  /// Capture image [bytes] as a photo relic. Returns the new item's uid, or
+  /// null when the key is unavailable (see [captureText]).
+  Future<String?> captureImage(Uint8List bytes, {String? mime, String? filename}) async {
+    try {
+      await _ensureKey();
+    } catch (_) {
+      return null;
+    }
+    if (_mk == null) return null;
     final now = _now;
     final blobKey = _uuid.v4(); // 36 chars, matches the worker's blob-id regex
     await _putBlob(blobKey, bytes);
@@ -2168,19 +2200,19 @@ class WorkerRepo implements RelicRepo {
     );
     _items.insert(0, r);
     await _push(r);
-    return true;
+    return r.uid;
   }
 
   /// Capture an arbitrary file (share sheet / picker) as a `Kind.file` relic —
-  /// uploads the blob, stamps friendly file-type chips, and pushes. False when
-  /// the key is unavailable (see [captureText]).
-  Future<bool> captureFile(Uint8List bytes, {String? filename, String? mime}) async {
+  /// uploads the blob, stamps friendly file-type chips, and pushes. Returns the
+  /// new item's uid, or null when the key is unavailable (see [captureText]).
+  Future<String?> captureFile(Uint8List bytes, {String? filename, String? mime}) async {
     try {
       await _ensureKey();
     } catch (_) {
-      return false;
+      return null;
     }
-    if (_mk == null) return false;
+    if (_mk == null) return null;
     final now = _now;
     final blobKey = _uuid.v4();
     await _putBlob(blobKey, bytes);
@@ -2202,7 +2234,7 @@ class WorkerRepo implements RelicRepo {
     );
     _items.insert(0, r);
     await _push(r);
-    return true;
+    return r.uid;
   }
 
   @override

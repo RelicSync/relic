@@ -20,17 +20,25 @@ void main() {
           isNot(ShareDedup.fingerprint('file', [1, 2, 3])));
     });
 
-    test('alreadySeen reflects the map', () {
+    test('uidFor finds the item a share landed on', () {
       final fp = ShareDedup.fingerprint('img', [9, 9, 9]);
-      expect(ShareDedup.alreadySeen({}, fp), isFalse);
-      expect(ShareDedup.alreadySeen({fp: 100}, fp), isTrue);
+      expect(ShareDedup.uidFor({}, fp), isNull);
+      expect(ShareDedup.uidFor({fp: const SeenShare(100, 'u1')}, fp), 'u1');
+    });
+
+    test('an entry from an older build has no uid, so the share is stored afresh',
+        () {
+      final fp = ShareDedup.fingerprint('img', [9, 9, 9]);
+      final seen = ShareDedup.decode(jsonEncode({fp: 100}));
+      expect(seen[fp], const SeenShare(100, null));
+      expect(ShareDedup.uidFor(seen, fp), isNull);
     });
 
     test('prune drops entries older than the TTL', () {
       const now = 1000000000;
       final seen = {
-        'fresh': now - 10,
-        'stale': now - ShareDedup.ttlSeconds - 1,
+        'fresh': const SeenShare(now - 10, 'a'),
+        'stale': SeenShare(now - ShareDedup.ttlSeconds - 1, 'b'),
       };
       final pruned = ShareDedup.prune(seen, now);
       expect(pruned.containsKey('fresh'), isTrue);
@@ -40,7 +48,8 @@ void main() {
     test('prune caps the map to the most recent maxEntries', () {
       const now = 2000000000;
       final seen = {
-        for (var i = 0; i < ShareDedup.maxEntries + 25; i++) 'k$i': now - i,
+        for (var i = 0; i < ShareDedup.maxEntries + 25; i++)
+          'k$i': SeenShare(now - i, 'u$i'),
       };
       final pruned = ShareDedup.prune(seen, now);
       expect(pruned.length, ShareDedup.maxEntries);
@@ -53,11 +62,15 @@ void main() {
       expect(ShareDedup.decode(null), isEmpty);
       expect(ShareDedup.decode(''), isEmpty);
       expect(ShareDedup.decode('not json'), isEmpty);
-      expect(ShareDedup.decode('{"a":5}'), {'a': 5});
+      expect(ShareDedup.decode('{"a":{"t":5,"u":"x"}}'),
+          {'a': const SeenShare(5, 'x')});
     });
 
     test('encode/decode round-trips', () {
-      final seen = {'img:abc': 111, 'txt:def': 222};
+      final seen = {
+        'img:abc': const SeenShare(111, 'u-1'),
+        'txt:def': const SeenShare(222, null),
+      };
       expect(ShareDedup.decode(ShareDedup.encode(seen)), seen);
       // and it is valid JSON
       expect(jsonDecode(ShareDedup.encode(seen)), isA<Map<String, dynamic>>());
