@@ -2575,7 +2575,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       source: Source.voice,
       promoted: promoted,
       byteSize: size,
-      device: _deviceLabel,
+      device: deviceLabel,
       tags: tags,
       content: content,
       preview: _preview(content),

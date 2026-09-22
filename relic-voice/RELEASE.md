@@ -29,12 +29,13 @@ Source map: [controller](../app/lib/data/voice_controller.dart),
    Keep generated builds, model caches, test profiles and personal audio out.
    Mirror the public commit into the private release repo, naming its SHA.
    Build the signed installer from that same source revision.
-2. **Complete the release packaging gate.** The public tagged-release workflow
-   already builds Voice before Flutter. The local signed installer script still
-   needs to build/require the Voice bundle before Flutter and sign the bundled
-   `voice/relic-voice.exe` with the other first-party executables before Inno
-   Setup. Do this before publishing; a plain Flutter build can deliberately omit
-   the optional worker, which is unsuitable for the default-on release.
+2. **The release packaging gate is in place.** The public tagged-release
+   workflow installs Python 3.11 and builds Voice before Flutter.
+   `app/scripts/build_release.ps1` builds the worker first, refuses to package
+   if `voice/relic-voice.exe` is missing from the Flutter output, and signs
+   `voice/relic-voice.exe` plus our own `_internal/native/*.dll` with the other
+   first-party executables before Inno Setup. `-SkipVoice` exists only for a
+   deliberately voice-less build; never use it for the default-on release.
 3. **Choose a new version** in `app/pubspec.yaml`, include Voice in release notes,
    and run the checks below. Windows support for this bundle is x64 with
    AVX2/FMA/F16C; do not label it Windows ARM64 or legacy-CPU compatible.
@@ -44,8 +45,7 @@ Source map: [controller](../app/lib/data/voice_controller.dart),
    Do not put signing material in source control.
 
    ```powershell
-   .\relic-voice\build.ps1
-   .\app\scripts\build_release.ps1 # add the configured signing arguments
+   .\app\scripts\build_release.ps1 # builds the Voice worker itself; add the signing arguments
    ```
 
    Check `app/build/windows/x64/runner/Release/voice/relic-voice.exe`, its native
