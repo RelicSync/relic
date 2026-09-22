@@ -83,6 +83,15 @@ function Get-Flutter {
 }
 $flutter = Get-Flutter
 if (-not $flutter) { throw "flutter not found on PATH or in known locations" }
+# The CMake install step copies the Voice bundle over whatever is already in
+# Releaseoice and never deletes stale files, so a rebuild in the same tree
+# would ship leftovers from an earlier bundle. Start from an empty folder.
+$staleVoice = Join-Path $appDir "build\windowsdunner\Releaseoice"
+if (Test-Path $staleVoice) {
+  Write-Host "==> Removing the previous Voice bundle from the build output"
+  Remove-Item -Recurse -Force $staleVoice
+}
+
 Write-Host "==> flutter build windows --release ($flutter)"
 & $flutter build windows --release
 if ($LASTEXITCODE -ne 0) { throw "flutter build failed" }
