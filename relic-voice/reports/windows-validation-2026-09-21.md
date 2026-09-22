@@ -213,3 +213,15 @@ The rebuilt packaged worker reprocessed the same 73 clips: 71 word errors on
 are slower because another worker process ran alongside it. Two clips written
 out at 48 kHz produced text identical to their 16 kHz originals through the
 frozen worker, which is the path a real microphone takes.
+
+## Caret lookup removed (1.0.50)
+
+The Windows accessibility caret lookup, its background thread, the
+foreground-window event hook and the per-window continuation tracking were
+removed on 2026-09-21 after a report that typing a space in Relic's own search
+box selected the whole query on a machine with Voice turned on. Insertion is
+now synchronous: the transcript is sent as Unicode keystrokes followed by one
+space unless it already ends in whitespace, and no leading space is ever
+added. The keyboard hook now does nothing except the Right Alt gesture and
+Escape; the mouse hook only invalidates the insertion target. The native
+fixture's spacing cases were rewritten for the trailing space.

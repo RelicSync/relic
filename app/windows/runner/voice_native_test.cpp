@@ -41,12 +41,11 @@ class InsertionReply : public flutter::MethodResult<Value> {
   bool* done_;
   std::string* outcome_;
 };
-std::string InsertAndPump(const std::string& text, bool change_target = false) {
+std::string InsertAndPump(const std::string& text) {
   bool done = false; std::string outcome;
   BeginInsertion(text, std::make_unique<InsertionReply>(&done, &outcome));
-  if (change_target) Snapshot();
   const auto deadline = GetTickCount64() + 2000;
-  while (!done && GetTickCount64() < deadline) { Pump(5); PollInsertion(); }
+  while (!done && GetTickCount64() < deadline) Pump(5);
   assert(done);
   return outcome;
 }
@@ -61,44 +60,6 @@ void Key(WORD key, bool down) {
 int main(int argc, char** argv) {
   const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   assert(SUCCEEDED(com));
-  if (argc > 1 && std::string(argv[1]) == "--java-test") {
-    HWND java = FindWindowW(L"SunAwtFrame", L"Relic Voice Java Fixture");
-    if (!java || App(java) != "java.exe") return 3;
-    const DWORD active_thread = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
-    const DWORD own_thread = GetCurrentThreadId();
-    const DWORD java_thread = GetWindowThreadProcessId(java, nullptr);
-    const bool attached = active_thread != own_thread && AttachThreadInput(own_thread, active_thread, TRUE);
-    const bool target_attached = java_thread != own_thread && java_thread != active_thread && AttachThreadInput(own_thread, java_thread, TRUE);
-    ShowWindow(java, SW_SHOWNORMAL); BringWindowToTop(java); SetForegroundWindow(java);
-    Pump(100);
-    if (target_attached) AttachThreadInput(own_thread, java_thread, FALSE);
-    if (attached) AttachThreadInput(own_thread, active_thread, FALSE);
-    if (GetForegroundWindow() != java) {
-      std::cerr << "Fixture could not obtain foreground; actual app=" << App(GetForegroundWindow()) << "\n";
-      return 5;
-    }
-    SetEnabled(true);
-    Snapshot();
-    auto read = ReadVoiceTextContextAsync(java);
-    while (read.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) Pump(5);
-    assert(!read.get().known);  // Exercise the same missing UIA range as PyCharm.
-    const auto clipboard = GetClipboardSequenceNumber();
-    assert(InsertAndPump("First.") == "sent"); Pump(100);
-    Snapshot(); assert(ContinuedDictation());
-    assert(InsertAndPump("Second.") == "sent"); Pump(100);
-    if (GetForegroundWindow() != java) return 5;
-    Key(VK_SPACE, true); Key(VK_SPACE, false);
-    Snapshot(); assert(!ContinuedDictation());
-    assert(InsertAndPump("Third.") == "sent"); Pump(100);
-    assert(GetClipboardSequenceNumber() == clipboard);
-    if (GetForegroundWindow() != java) return 5;
-    Key(VK_LEFT, true); Key(VK_LEFT, false);
-    assert(!ContinuedDictation());
-    SetEnabled(false);
-    ShutdownVoiceTextContext(); CoUninitialize();
-    std::cout << "Java terminal continuation, manual space, caret-edit invalidation and clipboard checks passed\n";
-    return 0;
-  }
   if (argc > 1 && std::string(argv[1]) == "--terminal-test") {
     HWND terminal = nullptr;
     EnumWindows([](HWND window, LPARAM out) -> BOOL {
@@ -121,8 +82,6 @@ int main(int argc, char** argv) {
     const auto outcome = InsertAndPump("Ask Claude about my tennis shoes. 42");
     Pump(100);
     std::cout << outcome << "\n";
-    if (context_task.valid()) { while (context_task.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) Pump(5); context_task.get(); }
-    ShutdownVoiceTextContext();
     CoUninitialize();
     return outcome == "sent" && before == GetClipboardSequenceNumber() ? 0 : 4;
   }
@@ -143,7 +102,6 @@ int main(int argc, char** argv) {
     const auto outcome = InsertAndPump("Ask Claude about my tennis shoes. 42");
     Pump(100);
     std::cout << outcome << "\n";
-    ShutdownVoiceTextContext();
     CoUninitialize();
     return outcome == "sent" && before == GetClipboardSequenceNumber() ? 0 : 4;
   }
@@ -183,7 +141,7 @@ int main(int argc, char** argv) {
   const auto sequence = GetClipboardSequenceNumber();
   assert(InsertAndPump("Ask Claude about the tennis shoes.") == "sent"); Pump(100);
   wchar_t text[256]{}; GetWindowTextW(edit,text,256);
-  assert(std::wstring(text) == L"Ask Claude about the tennis shoes.");
+  assert(std::wstring(text) == L"Ask Claude about the tennis shoes. ");
   assert(GetClipboardSequenceNumber() == sequence);
   assert(Insert("duplicate") == "target_changed");
   auto spacing = [&](const wchar_t* initial, int start, int end, const wchar_t* expected, const char* spoken = "more") {
@@ -195,20 +153,15 @@ int main(int argc, char** argv) {
     assert(std::wstring(text) == expected);
     assert(GetClipboardSequenceNumber() == sequence);
   };
-  spacing(L"", 0, 0, L"more");
-  spacing(L"Existing.", 9, 9, L"Existing. more");
-  spacing(L"Existing. ", 10, 10, L"Existing. more");
-  spacing(L"Existing.\r\n", 11, 11, L"Existing.\r\nmore");
-  spacing(L"Existing.\u00a0", 10, 10, L"Existing.\u00a0more");
-  spacing(L"Old", 0, 0, L"moreOld");
-  spacing(L"Old", 0, 3, L"more");
+  // Every insertion ends with one space and never adds a leading one.
+  spacing(L"", 0, 0, L"more ");
+  spacing(L"Existing. ", 10, 10, L"Existing. more ");
+  spacing(L"Old", 0, 0, L"more Old");
+  spacing(L"Old", 0, 3, L"more ");
   spacing(L"Keep old ending", 5, 8, L"Keep more ending");
-  spacing(L"Existing.", 9, 9, L"Existing. more", " more");
-  SetWindowTextW(edit, L"Untouched"); SendMessageW(edit, EM_SETSEL, 9, 9);
-  Snapshot(); valid_target = true;
-  assert(InsertAndPump("must not insert", true) == "target_changed");
-  GetWindowTextW(edit, text, 256); assert(std::wstring(text) == L"Untouched");
-  std::cout << "Caret spacing, selection replacement, whitespace and stale-target checks passed" << std::endl;
+  spacing(L"Existing.", 9, 9, L"Existing. more ", " more");
+  spacing(L"", 0, 0, L"more ", "more ");
+  std::cout << "Trailing space and selection replacement checks passed" << std::endl;
   gesture.Complete();
   Key(VK_RMENU,true); Key(VK_RMENU,false); Pump(40);
   Key(VK_RMENU,true); Key(VK_RMENU,false);
@@ -298,8 +251,6 @@ int main(int argc, char** argv) {
   assert(Insert("must not type") == "modifiers_held");
   Key(VK_LSHIFT,false);
   SetEnabled(false);
-  if (context_task.valid()) { while (context_task.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) Pump(5); context_task.get(); }
-  ShutdownVoiceTextContext();
   DestroyWindow(window);
   CoUninitialize();
   std::cout << "Native Right Alt hold/latch, Ctrl mode, Left Alt passthrough, AltGr, Escape, focus, Unicode insertion and clipboard checks passed\n";

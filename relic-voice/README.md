@@ -99,18 +99,13 @@ partial injection leave the saved item available in Relic. No automatic retry
 follows a partial injection. Controls that ignore Unicode input need manual Copy.
 Accepted Windows events do not prove a custom editor consumed the text.
 
-Before insertion, a read-only Windows accessibility lookup checks the character
-immediately before the caret or selection. If it is not whitespace, one leading
-space separates the dictation from existing text. Empty fields, the start of a
-field, and existing spaces or newlines get no extra space. Only the inserted text
-gets this separator; the saved transcript stays unchanged. The lookup runs off
-the UI thread during decoding, with at most 350 ms additional wait at insertion.
-For inputs without a readable caret, including PyCharm's Java terminal, an
-uninterrupted preceding dictation can establish the need for a separator. This
-fallback stores only window identity and a separator flag, never input text.
-Typing, caret navigation, clicks, scrolling, a changed foreground window or
-clipboard, and 90 seconds of inactivity clear it. It cannot inspect pre-existing
-manually typed text in an inaccessible field.
+Every inserted transcript ends with one space, so the next dictation or the
+next thing you type never runs into it. Only the keystrokes get that space;
+the saved transcript is unchanged. Relic does not read the text around the
+caret and never adds a leading space, so dictating straight after a word you
+typed joins to it. An earlier build looked up the character before the caret
+through Windows accessibility and tracked consecutive dictations per window;
+that was removed in 1.0.50.
 
 Voice metadata travels inside the ordinary encrypted item payload and is stored
 with the item locally. Raw text is not separately indexed. Existing local data
