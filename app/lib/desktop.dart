@@ -42,6 +42,7 @@ import 'data/self_update.dart';
 import 'data/supabase_auth.dart';
 import 'data/update_check.dart';
 import 'models/relic.dart';
+import 'data/voice_controller.dart';
 import 'onboarding/add_device.dart';
 import 'onboarding/install_offer.dart';
 import 'theme/relic_theme.dart';
@@ -149,8 +150,14 @@ Future<void> runRealApp(List<String> args) async {
   // The run-at-login entry passes --autostart (input_win.dart): settle straight
   // into the tray, never surface a window or the first-run onboarding.
   final autostart = args.contains('--autostart');
-  runApp(RealApp(
-      repo: repo, showOnLaunch: launchLink != null, autostart: autostart));
+  runApp(
+    RealApp(
+      repo: repo,
+      showOnLaunch: launchLink != null,
+      autostart: autostart,
+      voiceSettingsOnLaunch: args.contains('--voice-settings'),
+    ),
+  );
   // macOS: begin listening for the launch URL event + any later links.
   unawaited(DesktopLinks.init());
 }
@@ -164,11 +171,13 @@ class RealApp extends StatefulWidget {
   /// the tray, skipping even the first-run onboarding, so login never surfaces
   /// a window that grabs focus.
   final bool autostart;
+  final bool voiceSettingsOnLaunch;
   const RealApp({
     super.key,
     required this.repo,
     this.showOnLaunch = false,
     this.autostart = false,
+    this.voiceSettingsOnLaunch = false,
   });
   @override
   State<RealApp> createState() => _RealAppState();
@@ -180,6 +189,7 @@ class _RealAppState extends State<RealApp>
         WindowListener,
         TrayListener,
         ClipboardListener {
+  late final VoiceController _voice = VoiceController(widget.repo);
   bool _paused = false;
   /// Timed pause: auto-resume timer + the moment capture comes back (null =
   /// paused until resumed / not paused). The notifier drives the popup's
@@ -191,6 +201,8 @@ class _RealAppState extends State<RealApp>
   bool _connecting = false;
   bool _onboardStartAtSignIn = false; // onboarding step: false = main welcome page
   bool _settingsOpen = false;
+  bool _voiceSettingsRequested = false;
+
   /// Non-null when this copy of Relic is running from the disk image (or the
   /// shadow copy macOS makes of one) and should offer to install itself into
   /// /Applications before anything else. Read once at startup: the answer
@@ -254,6 +266,10 @@ class _RealAppState extends State<RealApp>
   @override
   void initState() {
     super.initState();
+    if (Platform.isWindows) {
+      _voice.addListener(_voiceChanged);
+      unawaited(_voice.initialize());
+    }
     WidgetsBinding.instance.addObserver(this);
     windowManager.addListener(this);
     trayManager.addListener(this);
@@ -368,6 +384,17 @@ class _RealAppState extends State<RealApp>
         await _dismiss();
         return;
       }
+      if (widget.voiceSettingsOnLaunch && Platform.isWindows) {
+        setState(() {
+          _settingsOpen = true;
+          _voiceSettingsRequested = true;
+        });
+        await _sizeWindow(820, 650);
+        await windowManager.center();
+        await _present(foreground: true);
+        _visible = true;
+        return;
+      }
       if (firstRun) {
         setState(() => _connecting = true);
         await _sizeWindow(520, 560);
@@ -409,8 +436,20 @@ class _RealAppState extends State<RealApp>
     unawaited(_show(Summon.deepLink));
   }
 
+  String _voiceMenuState = '';
+  void _voiceChanged() {
+    final key =
+        '${_voice.ready}/${_voice.busy}/${_voice.recording}/${_voice.hasPending}';
+    if (mounted && key != _voiceMenuState) {
+      _voiceMenuState = key;
+      unawaited(_rebuildMenu());
+    }
+  }
+
   @override
   void dispose() {
+    _voice.removeListener(_voiceChanged);
+    _voice.dispose();
     DesktopLinks.onLink = null;
     WidgetsBinding.instance.removeObserver(this);
     widget.repo.onHotkeysChanged = null;
@@ -552,6 +591,17 @@ class _RealAppState extends State<RealApp>
       Menu(
         items: [
           MenuItem(key: 'show', label: 'Open history'),
+          if (Platform.isWindows) ...[
+            MenuItem(key: 'voice_settings', label: 'Voice settings'),
+            if (_voice.ready && !_voice.busy && !_voice.hasPending) ...[
+              MenuItem(key: 'voice_dictate', label: 'Start dictation'),
+              MenuItem(key: 'voice_note', label: 'Save a voice note'),
+            ],
+            if (_voice.recording)
+              MenuItem(key: 'voice_stop', label: 'Stop recording'),
+            if (_voice.busy)
+              MenuItem(key: 'voice_cancel', label: 'Cancel recording'),
+          ],
           // Timed pause: forgetting a pause used to silently eat copies for
           // days; the timed options resume by themselves and the popup shows
           // a pill while paused either way.
@@ -1306,7 +1356,10 @@ class _RealAppState extends State<RealApp>
         nav.pop();
         return KeyEventResult.handled;
       }
-      setState(() => _settingsOpen = false);
+      setState(() {
+        _settingsOpen = false;
+        _voiceSettingsRequested = false;
+      });
       _sizeWindow(_popupDims.width, _popupDims.height);
       return KeyEventResult.handled;
     }
@@ -1430,7 +1483,12 @@ class _RealAppState extends State<RealApp>
         );
         return;
       }
-      if (_settingsOpen) setState(() => _settingsOpen = false);
+      if (_settingsOpen) {
+        setState(() {
+          _settingsOpen = false;
+          _voiceSettingsRequested = false;
+        });
+      }
       _annotateRequest = EditRequest(r, promoted: promoted);
       if (mounted) setState(() {});
       await _show(Summon.annotate);
@@ -1792,6 +1850,20 @@ class _RealAppState extends State<RealApp>
   @override
   void onTrayMenuItemClick(MenuItem item) async {
     switch (item.key) {
+      case 'voice_settings':
+        _voiceSettingsRequested = true;
+        setState(() => _settingsOpen = true);
+        await _sizeWindow(820, 650);
+        await _present(foreground: true);
+        _visible = true;
+      case 'voice_dictate':
+        await _voice.start();
+      case 'voice_note':
+        await _voice.start(note: true);
+      case 'voice_stop':
+        await _voice.stop();
+      case 'voice_cancel':
+        await _voice.cancel();
       case 'show':
         _show(Summon.tray);
       case 'pause_10':
@@ -1821,6 +1893,15 @@ class _RealAppState extends State<RealApp>
       case 'pause_help':
         await _openHelpPage('tray.pause');
       case 'quit':
+        if (Platform.isWindows && _voice.hasPending) {
+          _voiceSettingsRequested = true;
+          setState(() => _settingsOpen = true);
+          await _sizeWindow(820, 650);
+          await _present(foreground: true);
+          _visible = true;
+          return;
+        }
+        if (Platform.isWindows) await _voice.shutdown();
         await trayManager.destroy();
         await windowManager.destroy();
     }
@@ -2010,7 +2091,12 @@ class _RealAppState extends State<RealApp>
   /// and leave the next summon on the plain popup, not Settings.
   void _afterBillingOpened() {
     _hide();
-    if (mounted) setState(() => _settingsOpen = false);
+    if (mounted) {
+      setState(() {
+        _settingsOpen = false;
+        _voiceSettingsRequested = false;
+      });
+    }
     _sizeWindow(_popupDims.width, _popupDims.height);
   }
 
@@ -2104,10 +2190,15 @@ class _RealAppState extends State<RealApp>
     }
     if (_settingsOpen) {
       return SettingsView(
+        voice: Platform.isWindows ? _voice : null,
+        startOnVoice: _voiceSettingsRequested,
         repo: widget.repo,
         startOnSync: !widget.repo.syncEnabled,
         onClose: () {
-          setState(() => _settingsOpen = false);
+          setState(() {
+            _settingsOpen = false;
+            _voiceSettingsRequested = false;
+          });
           _sizeWindow(_popupDims.width, _popupDims.height);
         },
         onConnect: () {

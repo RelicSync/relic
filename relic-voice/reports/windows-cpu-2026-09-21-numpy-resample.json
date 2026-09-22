@@ -1,0 +1,13 @@
+{
+  "worker": "packaged Windows AVX2 CPU",
+  "model_source": "Relic R2, SHA-256 verified",
+  "clips": 73,
+  "reference_words": 1150,
+  "word_errors": 71,
+  "wer": 0.06173913043478261,
+  "audio_seconds": 481.035,
+  "median_processing_ms": 313,
+  "p95_processing_ms": 709,
+  "punctuation_word_mutations": 0,
+  "total_wall_seconds": 26.865621500008274
+}

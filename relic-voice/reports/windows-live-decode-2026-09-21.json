@@ -1,0 +1,115 @@
+{
+  "replay_speed": 10,
+  "groups": [
+    {
+      "audio_ms": 34655,
+      "words": 83,
+      "baseline_errors": 4,
+      "live_errors": 4,
+      "baseline_after_stop_ms": 1838,
+      "live_after_stop_ms": 555,
+      "segments": 6,
+      "word_mutations": false
+    },
+    {
+      "audio_ms": 54890,
+      "words": 117,
+      "baseline_errors": 10,
+      "live_errors": 10,
+      "baseline_after_stop_ms": 3039,
+      "live_after_stop_ms": 359,
+      "segments": 7,
+      "word_mutations": false
+    },
+    {
+      "audio_ms": 59005,
+      "words": 130,
+      "baseline_errors": 2,
+      "live_errors": 5,
+      "baseline_after_stop_ms": 2921,
+      "live_after_stop_ms": 406,
+      "segments": 9,
+      "word_mutations": false
+    },
+    {
+      "audio_ms": 56630,
+      "words": 147,
+      "baseline_errors": 1,
+      "live_errors": 1,
+      "baseline_after_stop_ms": 2988,
+      "live_after_stop_ms": 292,
+      "segments": 6,
+      "word_mutations": false
+    },
+    {
+      "audio_ms": 56974,
+      "words": 119,
+      "baseline_errors": 12,
+      "live_errors": 12,
+      "baseline_after_stop_ms": 2737,
+      "live_after_stop_ms": 406,
+      "segments": 8,
+      "word_mutations": false
+    },
+    {
+      "audio_ms": 59650,
+      "words": 138,
+      "baseline_errors": 14,
+      "live_errors": 13,
+      "baseline_after_stop_ms": 3321,
+      "live_after_stop_ms": 385,
+      "segments": 9,
+      "word_mutations": false
+    },
+    {
+      "audio_ms": 58575,
+      "words": 128,
+      "baseline_errors": 7,
+      "live_errors": 7,
+      "baseline_after_stop_ms": 2920,
+      "live_after_stop_ms": 299,
+      "segments": 12,
+      "word_mutations": false
+    },
+    {
+      "audio_ms": 51619,
+      "words": 112,
+      "baseline_errors": 8,
+      "live_errors": 8,
+      "baseline_after_stop_ms": 3017,
+      "live_after_stop_ms": 302,
+      "segments": 9,
+      "word_mutations": false
+    },
+    {
+      "audio_ms": 58310,
+      "words": 128,
+      "baseline_errors": 9,
+      "live_errors": 8,
+      "baseline_after_stop_ms": 3060,
+      "live_after_stop_ms": 378,
+      "segments": 9,
+      "word_mutations": false
+    },
+    {
+      "audio_ms": 19925,
+      "words": 48,
+      "baseline_errors": 5,
+      "live_errors": 5,
+      "baseline_after_stop_ms": 1060,
+      "live_after_stop_ms": 342,
+      "segments": 4,
+      "word_mutations": false
+    }
+  ],
+  "baseline_wer": 0.06260869565217392,
+  "live_wer": 0.06347826086956522,
+  "source": "73 human LibriSpeech clips, joined into at-most-60-second groups with 400 ms quiet gaps",
+  "reference_words": 1150,
+  "baseline_word_errors": 72,
+  "live_word_errors": 73,
+  "median_baseline_after_stop_ms": 2954.5,
+  "median_live_after_stop_ms": 368.5,
+  "max_live_after_stop_ms": 555,
+  "limitations": "10x realtime replay; final CPU decode and formatting only, excludes microphone shutdown, save, and insertion. Continuous speech without a quiet pause still uses full-utterance decoding."
+}

@@ -1,0 +1,8 @@
+.venv/
+_vendor/
+.build/
+build/
+dist/
+__pycache__/
+*.spec
+test-output/

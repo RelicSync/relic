@@ -44,7 +44,7 @@ more** (the "minimal metadata" of SPEC §13):
 operator can see *which* items you marked, not what they are).
 
 `byte_size` is the whole stored payload, not just the body: for a text relic
-it is the plain content plus the `rich` flavors, and for a blob relic it is
+it includes the plain content, `rich` flavors and any `voice` metadata; for a blob relic it is
 the bundle length. Declaring less is what the Worker's plausibility floor
 catches (it refuses a push whose body exceeds `byte_size * 4 + 16 KiB`),
 because a client that under-declares is getting storage it is not charged
@@ -57,7 +57,7 @@ AEAD-decrypts (key = MK, AAD = `relic.relic.v1:<uid>`) to:
 ```json
 {
   "kind": "string | photo | file | other",
-  "source": "clipboard | upload | hotkey | share | api",
+  "source": "clipboard | upload | hotkey | share | api | voice",
   "device": "desktop-1",
   "mime": "image/png",
   "filename": "screenshot.png",
@@ -84,6 +84,18 @@ inside the Worker's `caps.item * 1.5` body gate. `h` is a fingerprint of the
 writer edited the text without knowing this field exists) must ignore the
 formatting rather than paste it. A relic tagged `secret` never carries this
 field, and it is stripped from a redacted export.
+
+`voice` is an optional object for spoken text. It stays inside `ct` and is
+included in `byte_size`. Current writers use `v: 1`, `session_id` (the same UUID
+as the relic), `mode` (`dictation` or `voice_note`), `raw`, `duration_ms`, `model`,
+`captured_at` (UTC ISO 8601), `source_app` (executable name), `applied_rules`
+(device-local correction indices), and `settings_version`. No audio is stored.
+The final transcript remains ordinary `content`, with a `dictation` or
+`voice-note` tag. Only the final content is indexed; `raw` is provenance, not a
+second search document. Edits preserve the original metadata. It is omitted
+from redacted exports of secrets. A client that predates this field can discard
+it when rebuilding a payload, as described below. This additive field does not
+change the envelope version.
 
 JSON arrays here; the comma-joined form exists only in the local SQLite FTS
 columns. Optional fields are `null`/omitted.
