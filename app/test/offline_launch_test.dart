@@ -236,9 +236,9 @@ void main() {
         passphrase: 'correct horse battery staple',
       );
       expect(await r.captureText('never stored'), isFalse);
-      expect(await r.captureImage(Uint8List.fromList([1, 2, 3])), isFalse);
+      expect(await r.captureImage(Uint8List.fromList([1, 2, 3])), isNull);
       expect(await r.captureFile(Uint8List.fromList([4, 5]), filename: 'a.bin'),
-          isFalse);
+          isNull);
       expect(r.debugOutbox, isEmpty);
     });
 

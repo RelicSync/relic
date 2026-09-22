@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:app_links/app_links.dart';
@@ -92,13 +91,14 @@ class _Creds {
   static Future<void> markPhoneExpectationSeen() =>
       _s.write(key: _kPhoneExpectation, value: '1');
 
-  // Fingerprints of recently captured shares, so a share intent Android
-  // re-delivers on a later launch-from-recents isn't captured twice. See
-  // [ShareDedup]. Kept out of [clear] so it survives disconnect/reconnect.
+  // Fingerprints of recently shared photos and files, and the item each one
+  // landed on, so sharing the same thing again moves that item to the top
+  // instead of storing a copy. See [ShareDedup]. Kept out of [clear] so it
+  // survives disconnect/reconnect.
   static const _kShareSeen = 'relic.share.seen';
-  static Future<Map<String, int>> shareSeen() async =>
+  static Future<Map<String, SeenShare>> shareSeen() async =>
       ShareDedup.decode(await _s.read(key: _kShareSeen));
-  static Future<void> setShareSeen(Map<String, int> seen) async {
+  static Future<void> setShareSeen(Map<String, SeenShare> seen) async {
     try {
       await _s.write(key: _kShareSeen, value: ShareDedup.encode(seen));
     } catch (_) {}
@@ -1425,64 +1425,70 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
 
   /// Capture shared content, reporting what landed.
   ///
-  /// [live] is whether the share arrived while Relic was already on screen, and
-  /// it decides one thing only: whether "everything here was already captured"
-  /// is worth a toast. Sharing into a running Relic changes nothing on screen,
-  /// so a skip has to be spoken or the share looks lost. A share that LAUNCHED
-  /// Relic is a different situation — the vault is now in front of the user,
-  /// which is answer enough, and the launch path is also where Android's
-  /// replayed intents arrive (see MainActivity.stripStaleShare). Between a
-  /// re-delivery, which is common, and a deliberate immediate re-share of
-  /// identical bytes, which is not, the toast cannot tell; staying quiet is
-  /// wrong only in the rare case, and it is never a lie.
+  /// Sharing something Relic already holds moves that item to the top, dated
+  /// now, the way copying the same text again does on a desktop. Nothing is
+  /// stored twice: text is matched by its content in the repo, and a photo or
+  /// file by the fingerprint this phone remembered when it first shared it
+  /// (see [ShareDedup]). Android's replayed launch intents never reach here,
+  /// so a bump is always something the user just did
+  /// (see MainActivity.stripStaleShare).
+  ///
+  /// [live] is whether the share arrived while Relic was already on screen.
+  /// Every outcome is spoken either way: a share that changed the list has to
+  /// say so, or it looks lost.
   Future<void> _captureShared(WorkerRepo repo, List<SharedMediaFile> files,
       {bool live = true}) async {
     final seen = await _Creds.shareSeen();
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    var added = 0, skipped = 0, failed = 0, tooBig = 0;
+    var added = 0, moved = 0, failed = 0, tooBig = 0;
     var dirty = false;
     for (final f in files) {
       try {
-        // Fingerprint the content and capture it, unless we've already captured
-        // this exact share recently — Android re-delivers a share's launch
-        // intent when the app is reopened from recents, which would otherwise
-        // resurface a days-old screenshot as a new (and desync'd) item.
-        final String fp;
-        final Future<bool> Function() capture;
         if (f.type == SharedMediaType.text || f.type == SharedMediaType.url) {
-          fp = ShareDedup.fingerprint('txt', utf8.encode(f.path));
-          capture = () => repo.captureText(f.path);
-        } else {
-          // An image or any other file (PDF, zip, video, …) → an image/file
-          // relic. Both are read whole into memory, so check the per-item cap
-          // against the file's length BEFORE the read: the server would
-          // reject an oversized item anyway, and a giant readAsBytes can take
-          // the whole app down long before it gets that answer.
-          if (await File(f.path).length() > repo.maxItemBytes) {
-            tooBig++;
-            continue;
-          }
-          final bytes = await File(f.path).readAsBytes();
-          if (f.type == SharedMediaType.image) {
-            fp = ShareDedup.fingerprint('img', bytes);
-            capture = () => repo.captureImage(bytes,
-                mime: mimeType(f), filename: _basename(f.path));
+          // captureText finds an identical text item and bumps it itself; the
+          // only thing to work out here is which of the two it did.
+          final bump = repo.holdsText(f.path);
+          if (await repo.captureText(f.path)) {
+            if (bump) {
+              moved++;
+            } else {
+              added++;
+            }
           } else {
-            fp = ShareDedup.fingerprint('file', bytes);
-            capture = () => repo.captureFile(bytes,
-                mime: mimeType(f), filename: _basename(f.path));
+            failed++;
           }
-        }
-        if (ShareDedup.alreadySeen(seen, fp)) {
-          skipped++;
           continue;
         }
-        // Only remember the fingerprint for a capture that actually landed. A
-        // failed capture that recorded one would be skipped as "Already in
-        // Relic" on every retry for the whole 90-day window, so the content
-        // could never be shared in again.
-        if (await capture()) {
-          seen[fp] = now;
+        // An image or any other file (PDF, zip, video, …) → an image/file
+        // relic. Both are read whole into memory, so check the per-item cap
+        // against the file's length BEFORE the read: the server would
+        // reject an oversized item anyway, and a giant readAsBytes can take
+        // the whole app down long before it gets that answer.
+        if (await File(f.path).length() > repo.maxItemBytes) {
+          tooBig++;
+          continue;
+        }
+        final bytes = await File(f.path).readAsBytes();
+        final image = f.type == SharedMediaType.image;
+        final fp = ShareDedup.fingerprint(image ? 'img' : 'file', bytes);
+        // Shared before, and the item is still here: bring it to the top.
+        final known = ShareDedup.uidFor(seen, fp);
+        if (known != null && await repo.resurface(known)) {
+          seen[fp] = SeenShare(now, known);
+          dirty = true;
+          moved++;
+          continue;
+        }
+        // Otherwise store it. Only a capture that actually landed is
+        // remembered: a failed one that was would be treated as a re-share
+        // of an item that does not exist on every retry for 90 days.
+        final uid = image
+            ? await repo.captureImage(bytes,
+                mime: mimeType(f), filename: _basename(f.path))
+            : await repo.captureFile(bytes,
+                mime: mimeType(f), filename: _basename(f.path));
+        if (uid != null) {
+          seen[fp] = SeenShare(now, uid);
           dirty = true;
           added++;
         } else {
@@ -1493,12 +1499,13 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
       }
     }
     if (dirty) await _Creds.setShareSeen(ShareDedup.prune(seen, now));
-    if (added > 0 && mounted) {
+    if ((added > 0 || moved > 0) && mounted) {
       setState(() {});
-      _toast('$added added to Relic');
-    } else if (skipped > 0 && live && mounted) {
-      // The share was already captured — reassure rather than silently no-op.
-      _toast(skipped == 1 ? 'Already in Relic' : 'Already in Relic ($skipped)');
+      _toast(moved == 0
+          ? '$added added to Relic'
+          : added == 0
+              ? (moved == 1 ? 'Moved to the top' : '$moved moved to the top')
+              : '$added added, $moved moved to the top');
     } else if (tooBig > 0 && mounted) {
       // Say WHY nothing landed, or the refusal reads as a bug.
       final mb = repo.maxItemBytes ~/ (1024 * 1024);
