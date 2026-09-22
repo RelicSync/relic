@@ -11,7 +11,11 @@ class CoachStep {
   final GlobalKey targetKey;
   final String title;
   final String body;
-  const CoachStep({required this.targetKey, required this.title, required this.body});
+  const CoachStep({
+    required this.targetKey,
+    required this.title,
+    required this.body,
+  });
 }
 
 /// A dismissable, first-run coach-mark overlay. Dims the popup, spotlights one
@@ -24,8 +28,12 @@ class CoachMarks extends StatefulWidget {
   /// Help key for the page that walks the same ground as these marks; shown
   /// as a quiet link on every card when set.
   final String? helpKey;
-  const CoachMarks(
-      {super.key, required this.steps, required this.onDone, this.helpKey});
+  const CoachMarks({
+    super.key,
+    required this.steps,
+    required this.onDone,
+    this.helpKey,
+  });
 
   @override
   State<CoachMarks> createState() => _CoachMarksState();
@@ -57,58 +65,69 @@ class _CoachMarksState extends State<CoachMarks> {
   Widget build(BuildContext context) {
     final c = RelicTheme.of(context);
     final step = widget.steps[_i];
-    return LayoutBuilder(builder: (context, constraints) {
-      final overlay = Size(constraints.maxWidth, constraints.maxHeight);
-      final rect = _targetRect();
-      // Callout goes below the target if there's room, else above. Falls back to
-      // centered when the target isn't measurable.
-      const cardW = 268.0;
-      const cardH = 156.0;
-      double left, top;
-      bool arrowUp; // arrow points up (callout is below the target)
-      if (rect == null) {
-        left = (overlay.width - cardW) / 2;
-        top = (overlay.height - cardH) / 2;
-        arrowUp = false;
-      } else {
-        left = (rect.center.dx - cardW / 2).clamp(12.0, overlay.width - cardW - 12);
-        final below = rect.bottom + 12;
-        if (below + cardH <= overlay.height - 12) {
-          top = below;
-          arrowUp = true;
-        } else {
-          top = (rect.top - cardH - 12).clamp(12.0, overlay.height - cardH - 12);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final overlay = Size(constraints.maxWidth, constraints.maxHeight);
+        final rect = _targetRect();
+        // Callout goes below the target if there's room, else above. Falls back to
+        // centered when the target isn't measurable.
+        // The card's footprint for placement only; the card itself sizes to its
+        // text. Two footer rows (dots and the help link, then the buttons)
+        // since 2026-09: on one row the buttons bled past the card edge.
+        const cardW = 280.0;
+        const cardH = 196.0;
+        double left, top;
+        bool arrowUp; // arrow points up (callout is below the target)
+        if (rect == null) {
+          left = (overlay.width - cardW) / 2;
+          top = (overlay.height - cardH) / 2;
           arrowUp = false;
+        } else {
+          left = (rect.center.dx - cardW / 2).clamp(
+            12.0,
+            overlay.width - cardW - 12,
+          );
+          final below = rect.bottom + 12;
+          if (below + cardH <= overlay.height - 12) {
+            top = below;
+            arrowUp = true;
+          } else {
+            top = (rect.top - cardH - 12).clamp(
+              12.0,
+              overlay.height - cardH - 12,
+            );
+            arrowUp = false;
+          }
         }
-      }
-      return Stack(
-        children: [
-          // Scrim + spotlight cutout; absorbs taps so the popup behind is inert.
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {},
-              child: CustomPaint(
-                // The dim is the shadow black both palettes already use,
-                // carried up to scrim strength: parchment is too light to dim
-                // with, and ink would wash out in the dark theme.
-                painter: _ScrimPainter(
-                  rect,
-                  c.shadowStrong.withValues(alpha: c.isDark ? 0.74 : 0.58),
-                  c.accent,
+        return Stack(
+          children: [
+            // Scrim + spotlight cutout; absorbs taps so the popup behind is inert.
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {},
+                child: CustomPaint(
+                  // The dim is the shadow black both palettes already use,
+                  // carried up to scrim strength: parchment is too light to dim
+                  // with, and ink would wash out in the dark theme.
+                  painter: _ScrimPainter(
+                    rect,
+                    c.shadowStrong.withValues(alpha: c.isDark ? 0.74 : 0.58),
+                    c.accent,
+                  ),
                 ),
               ),
             ),
-          ),
-          Positioned(
-            left: left,
-            top: top,
-            width: cardW,
-            child: _callout(c, step, arrowUp),
-          ),
-        ],
-      );
-    });
+            Positioned(
+              left: left,
+              top: top,
+              width: cardW,
+              child: _callout(c, step, arrowUp),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Widget _callout(RelicColors c, CoachStep step, bool arrowUp) {
@@ -136,16 +155,25 @@ class _CoachMarksState extends State<CoachMarks> {
         children: [
           Text(step.title, style: RelicTheme.headline(size: 15, color: c.text)),
           const SizedBox(height: Insets.sm),
-          Text(step.body,
-              style: RelicTheme.sans(
-                  size: 12.5, color: c.textSecondary, height: 1.45)),
+          Text(
+            step.body,
+            style: RelicTheme.sans(
+              size: 12.5,
+              color: c.textSecondary,
+              height: 1.45,
+            ),
+          ),
           const SizedBox(height: Insets.lg),
-          Row(children: [
-            // progress dots
-            for (var k = 0; k < widget.steps.length; k++)
-              Padding(
-                padding: const EdgeInsets.only(right: Insets.xs),
-                child: Container(
+          // Progress and the help link on their own line, the buttons on the
+          // next: the two never compete for width, however many steps there
+          // are, so nothing bleeds past the card edge.
+          Wrap(
+            spacing: Insets.xs,
+            runSpacing: Insets.xs,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              for (var k = 0; k < widget.steps.length; k++)
+                Container(
                   width: 6,
                   height: 6,
                   decoration: BoxDecoration(
@@ -156,24 +184,30 @@ class _CoachMarksState extends State<CoachMarks> {
                     color: k == _i ? c.accent : c.track,
                   ),
                 ),
+              if (widget.helpKey case final k?)
+                Padding(
+                  padding: const EdgeInsets.only(left: Insets.xs),
+                  child: LearnMore(k),
+                ),
+            ],
+          ),
+          const SizedBox(height: Insets.md),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              if (!last) ...[
+                GhostButton(label: 'Skip', size: 30, onTap: widget.onDone),
+                const SizedBox(width: Insets.sm),
+              ],
+              // The one gold CTA in the view; it carries its own glow.
+              GhostButton(
+                label: last ? 'Got it' : 'Next',
+                size: 30,
+                style: GhostStyle.filled,
+                onTap: _next,
               ),
-            if (widget.helpKey case final k?) ...[
-              const SizedBox(width: Insets.sm),
-              LearnMore(k),
             ],
-            const Spacer(),
-            if (!last) ...[
-              GhostButton(label: 'Skip', size: 30, onTap: widget.onDone),
-              const SizedBox(width: Insets.sm),
-            ],
-            // The one gold CTA in the view; it carries its own glow.
-            GhostButton(
-              label: last ? 'Got it' : 'Next',
-              size: 30,
-              style: GhostStyle.filled,
-              onTap: _next,
-            ),
-          ]),
+          ),
         ],
       ),
     );
@@ -193,7 +227,10 @@ class _ScrimPainter extends CustomPainter {
       canvas.drawPath(full, Paint()..color = scrim);
       return;
     }
-    final rr = RRect.fromRectAndRadius(hole!, const Radius.circular(Radii.tile));
+    final rr = RRect.fromRectAndRadius(
+      hole!,
+      const Radius.circular(Radii.tile),
+    );
     final holePath = Path()..addRRect(rr);
     canvas.drawPath(
       Path.combine(PathOperation.difference, full, holePath),
