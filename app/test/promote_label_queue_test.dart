@@ -11,6 +11,8 @@ Relic _relic({
   required Kind kind,
   bool promoted = true,
   String? title,
+  String? filename,
+  String content = 'some captured text',
 }) => Relic(
   uid: 'u1',
   createdAt: 1785000000,
@@ -20,7 +22,8 @@ Relic _relic({
   promoted: promoted,
   byteSize: 42,
   title: title,
-  content: 'some captured text',
+  filename: filename,
+  content: content,
 );
 
 void main() {
@@ -58,6 +61,43 @@ void main() {
         reason: '$kind with a title must not be re-labeled over',
       );
     }
+  });
+
+  test('a photo still named after its file is re-queued', () {
+    // The phone names a shared photo after its file at capture time. That is
+    // a placeholder, not a name the user chose, so it must not hold the photo
+    // back from a real description.
+    expect(
+      shouldRequeueForLabel(
+        _relic(kind: Kind.photo, title: 'IMG_4821.jpg', filename: 'IMG_4821.jpg'),
+        describeItems: true,
+        bulk: false,
+      ),
+      isTrue,
+    );
+    expect(
+      shouldRequeueForLabel(
+        _relic(kind: Kind.photo, title: 'Shared image'),
+        describeItems: true,
+        bulk: false,
+      ),
+      isTrue,
+    );
+  });
+
+  test('a photo named from its own text is re-queued too', () {
+    expect(
+      shouldRequeueForLabel(
+        _relic(
+          kind: Kind.photo,
+          title: 'Blue Bottle Coffee',
+          content: 'Blue Bottle Coffee\nOrder #4821\nTotal \$6.50',
+        ),
+        describeItems: true,
+        bulk: false,
+      ),
+      isTrue,
+    );
   });
 
   test('nothing is re-queued while item descriptions are switched off', () {
@@ -165,6 +205,65 @@ void _titleTests() {
   test('an empty or missing caption leaves the title untouched', () {
     expect(titleAfterLabel(kind: Kind.string, current: null, caption: null), isNull);
     expect(titleAfterLabel(kind: Kind.string, current: null, caption: '   '), isNull);
+  });
+
+  test('a phone-shared photo gives up its filename for a real name', () {
+    expect(
+      titleAfterLabel(
+        kind: Kind.photo,
+        current: 'IMG_4821.jpg',
+        caption: 'Blue Bottle Coffee',
+        filename: 'IMG_4821.jpg',
+      ),
+      'Blue Bottle Coffee',
+    );
+    expect(
+      titleAfterLabel(
+        kind: Kind.photo,
+        current: 'Shared image',
+        caption: 'Blue Bottle Coffee',
+      ),
+      'Blue Bottle Coffee',
+    );
+  });
+
+  test('a photo named from its OCR text still takes a description', () {
+    // The OCR name is the app's, not the user's: when the labeler later has a
+    // better one, it lands.
+    expect(
+      titleAfterLabel(
+        kind: Kind.photo,
+        current: 'Blue Bottle Coffee',
+        caption: 'a coffee shop receipt',
+        content: 'Blue Bottle Coffee\nOrder #4821',
+      ),
+      'a coffee shop receipt',
+    );
+  });
+
+  test('a name the user gave a photo outranks both', () {
+    expect(
+      titleAfterLabel(
+        kind: Kind.photo,
+        current: 'Receipt for the client dinner',
+        caption: 'Blue Bottle Coffee',
+        filename: 'IMG_4821.jpg',
+        content: 'Blue Bottle Coffee\nOrder #4821',
+      ),
+      'Receipt for the client dinner',
+    );
+  });
+
+  test('a file keeps its filename even when it matches', () {
+    expect(
+      titleAfterLabel(
+        kind: Kind.file,
+        current: 'invoice.pdf',
+        caption: 'Kessler Roofing invoice',
+        filename: 'invoice.pdf',
+      ),
+      'invoice.pdf',
+    );
   });
 }
 

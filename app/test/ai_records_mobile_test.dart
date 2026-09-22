@@ -42,6 +42,7 @@ void main() {
     String uid, {
     required String content,
     String? title,
+    String? filename,
     List<String> tags = const [],
     int updatedAt = 10,
     String kind = 'string',
@@ -52,6 +53,7 @@ void main() {
       'content': content,
       'preview': content,
       'title': ?title,
+      'filename': ?filename,
       'tags': tags,
       'user_tags': <String>[],
     });
@@ -140,6 +142,44 @@ void main() {
     await r.debugAbsorbAiEnv(
         await aiEnv('u1', title: 'a spreadsheet of numbers'));
     expect(r.all.single.title, 'Q3 budget');
+  });
+
+  test('a photo shared from the phone takes the name a desktop read out of it',
+      () async {
+    // The phone names a shared photo after its file so it has a headline at
+    // once. That placeholder must give way to the name a desktop produces
+    // from the text in the image, or the photo stays IMG_4821.jpg forever.
+    final r = await repo();
+    await r.debugUpsertEnv(await relicEnv(
+      'u1',
+      kind: 'photo',
+      content: '',
+      title: 'IMG_4821.jpg',
+      filename: 'IMG_4821.jpg',
+    ));
+    expect(r.all.single.title, 'IMG_4821.jpg');
+
+    await r.debugAbsorbAiEnv(await aiEnv(
+      'u1',
+      title: 'Blue Bottle Coffee',
+      text: 'Blue Bottle Coffee\nOrder #4821\nTotal \$6.50',
+    ));
+    expect(r.all.single.title, 'Blue Bottle Coffee');
+    expect(r.all.single.content, contains('Order #4821'),
+        reason: 'and the words inside it became searchable');
+  });
+
+  test('a name the user gave a shared photo on the phone stays', () async {
+    final r = await repo();
+    await r.debugUpsertEnv(await relicEnv(
+      'u1',
+      kind: 'photo',
+      content: '',
+      title: 'Receipt for the client dinner',
+      filename: 'IMG_4821.jpg',
+    ));
+    await r.debugAbsorbAiEnv(await aiEnv('u1', title: 'Blue Bottle Coffee'));
+    expect(r.all.single.title, 'Receipt for the client dinner');
   });
 
   test('another vault\'s record is refused rather than half-applied', () async {

@@ -194,9 +194,18 @@ bool shouldRequeueForLabel(
   required bool bulk,
 }) {
   if (!r.promoted || !describeItems) return false;
-  // An existing title is the thing labeling would write; don't clobber it.
+  // An existing title is the thing labeling would write; don't clobber it. A
+  // photo's placeholder name (its filename, or the first line of its own OCR
+  // text) is not one the user chose, so it does not hold the item back.
+  if (r.kind == Kind.photo) {
+    return isPlaceholderTitle(
+      kind: r.kind,
+      title: r.title,
+      filename: r.filename,
+      content: r.content,
+    );
+  }
   if (r.title != null && r.title!.trim().isNotEmpty) return false;
-  if (r.kind == Kind.photo) return true;
   // Only text goes through the promoted-text label path; `file` relics are
   // labeled by the image branch or not at all.
   return !bulk && r.kind == Kind.string;
@@ -1230,6 +1239,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   String? _summonApp;
   Timer? _enrichTimer;
   bool _enriching = false;
+  // Set when a pass stores a record it owes its peers; the cycle kicks a sync
+  // once the batch is done so the record leaves within seconds.
+  bool _aiRecordsOwed = false;
   /// Uids queued or in flight in the current enrich cycle — drives the per-row
   /// "Analyzing…" spinner. Empty whenever the worker is idle.
   Set<String> _analyzing = {};
@@ -5745,6 +5757,13 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         // Clear per item so the spinner retreats down the list as it goes.
         if (_analyzing.remove(r.uid)) notifyListeners();
       }
+      // Ship what this pass produced now rather than on the next sync tick:
+      // a phone that just shared a photo is waiting on the name this desk
+      // read out of it, and the tick is up to 45 s away.
+      if (_aiRecordsOwed) {
+        _aiRecordsOwed = false;
+        _kickSync();
+      }
       // Embed anything a peer generated for us. Deliberately after the batch:
       // generating is the scarce work, indexing is the cheap work, and the
       // cheap work must never delay the scarce work.
@@ -6003,10 +6022,27 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         preview = res.preview.trim();
       }
     }
+    // The name the models propose. The labeler's description when it ran, and
+    // otherwise, for a photo, the first line of what OCR read out of it: a
+    // screenshot of a receipt is then "Blue Bottle Coffee" rather than
+    // IMG_4821.jpg, on this desk and, through the record below, on the phone
+    // that shared it. Text items only ever get the labeler's answer.
+    final aiCaption = res.caption?.trim();
+    final aiTitle = (aiCaption != null && aiCaption.isNotEmpty)
+        ? aiCaption
+        : r.kind == Kind.photo
+            ? titleFromExtractedText(ocrText)
+            : null;
     // Deliberately outside the block above: that one is for extracted text, and
     // its `kind != string` guard would make this unreachable for the text the
     // labeler now handles.
-    title = titleAfterLabel(kind: r.kind, current: cur.title, caption: res.caption);
+    title = titleAfterLabel(
+      kind: r.kind,
+      current: cur.title,
+      caption: aiTitle,
+      filename: cur.filename,
+      content: cur.content,
+    );
 
     // Record what the models produced as a document of its own, so it can reach
     // the user's other devices. Without this the whole pass is a local side
@@ -6016,13 +6052,12 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     // the row — if the user had already titled the item, `title` above keeps
     // their name while the record still carries the generated one, so a peer
     // that has no title yet can still use it.
-    final aiCaption = res.caption?.trim();
     final rec = AiRecord(
       uid: r.uid,
       at: _now,
       level: level,
       by: _deviceId,
-      title: (aiCaption != null && aiCaption.isNotEmpty) ? aiCaption : null,
+      title: aiTitle,
       tags: aiTags,
       // What the models READ, not just what they said about it. Without this a
       // screenshot of an invoice is findable by its text on this desk and
@@ -6038,7 +6073,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     // is wire traffic that buys nothing, and it would put a placeholder record
     // in front of the real one.
     if (!rec.isEmpty) {
-      db.putAiRecord(rec, needsPush: syncEnabled && ml);
+      final push = syncEnabled && ml;
+      if (db.putAiRecord(rec, needsPush: push) && push) _aiRecordsOwed = true;
     }
 
     final changed =
