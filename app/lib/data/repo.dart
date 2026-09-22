@@ -298,6 +298,10 @@ abstract class RelicRepo {
   bool get coachMarksSeen => true;
   Future<void> markCoachMarksSeen() async {}
 
+  /// Forget that the tour was seen, so the next popup open runs it again
+  /// (Settings, About, Replay the tour).
+  Future<void> replayCoachMarks() async {}
+
   /// The one-time "nothing kept yet" hint (desktop). Same shape as the coach
   /// marks: default true = never show; LocalDeskRepo persists it.
   bool get keepHintShown => true;
@@ -752,6 +756,8 @@ class MemoryRepo implements RelicRepo {
   bool get coachMarksSeen => true;
   @override
   Future<void> markCoachMarksSeen() async {}
+  @override
+  Future<void> replayCoachMarks() async {}
   @override
   bool get keepHintShown => true;
   @override

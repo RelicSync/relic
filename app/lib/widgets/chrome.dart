@@ -333,12 +333,16 @@ class SearchField extends StatelessWidget {
 
   /// Desktop: opens the search-and-shortcuts cheatsheet ("?" button).
   final VoidCallback? onHelp;
+
+  /// Anchor for the "?" button, so the first-run tour can spotlight it.
+  final Key? helpKey;
   const SearchField({
     super.key,
     required this.controller,
     required this.focusNode,
     required this.onChanged,
     this.onHelp,
+    this.helpKey,
   });
 
   @override
@@ -397,6 +401,7 @@ class SearchField extends StatelessWidget {
                 if (onHelp != null) ...[
                   const SizedBox(width: 8),
                   Tooltip(
+                    key: helpKey,
                     message: 'Search operators and shortcuts',
                     waitDuration: const Duration(milliseconds: 500),
                     textStyle: RelicTheme.mono(size: 10, color: c.text),

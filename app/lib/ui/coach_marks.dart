@@ -11,10 +11,15 @@ class CoachStep {
   final GlobalKey targetKey;
   final String title;
   final String body;
+
+  /// The help page this step walks; the card's Learn more points there
+  /// instead of the tour's general page when set.
+  final String? helpKey;
   const CoachStep({
     required this.targetKey,
     required this.title,
     required this.body,
+    this.helpKey,
   });
 }
 
@@ -184,7 +189,7 @@ class _CoachMarksState extends State<CoachMarks> {
                     color: k == _i ? c.accent : c.track,
                   ),
                 ),
-              if (widget.helpKey case final k?)
+              if (step.helpKey ?? widget.helpKey case final k?)
                 Padding(
                   padding: const EdgeInsets.only(left: Insets.xs),
                   child: LearnMore(k),

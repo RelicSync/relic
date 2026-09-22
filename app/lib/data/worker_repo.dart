@@ -826,6 +826,8 @@ class WorkerRepo implements RelicRepo {
   @override
   Future<void> markCoachMarksSeen() async {}
   @override
+  Future<void> replayCoachMarks() async {}
+  @override
   bool get pasteStackOn => false;
   @override
   List<Relic> get pasteStack => const [];

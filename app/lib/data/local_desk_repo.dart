@@ -813,6 +813,14 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     _savePrefs();
   }
 
+  @override
+  Future<void> replayCoachMarks() async {
+    if (!_coachSeen) return;
+    _coachSeen = false;
+    _savePrefs();
+    notifyListeners();
+  }
+
   /// The history-ring notices already shown, as a copy the caller can edit.
   /// Hand the edited set back to [setRingNotified] to persist it.
   Set<String> get ringNotified => {..._ringNotified};
