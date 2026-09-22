@@ -88,6 +88,10 @@ class VoiceController extends ChangeNotifier {
     return '$root${sep}voice${sep}relic-voice.exe';
   }
 
+  /// This install ships a Voice worker: the tour and the offer card only
+  /// mention Voice when it is really there.
+  static bool get bundled => supported && File(workerPath).existsSync();
+
   /// macOS refused (or the person refused) microphone access; Voice settings
   /// shows the way to System Settings.
   bool microphoneDenied = false;

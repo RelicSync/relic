@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../data/local_save.dart';
 import '../data/repo.dart';
+import '../data/voice_controller.dart';
 import '../data/save_prefs.dart';
 import '../data/result_grouping.dart';
 import '../data/temporal_parser.dart';
@@ -272,6 +273,10 @@ class _PopupViewState extends State<PopupView> {
   final _kSettings = GlobalKey();
   final _kList = GlobalKey();
   final _kScope = GlobalKey();
+  final _kHelp = GlobalKey();
+  // Never laid out: a step anchored here centers its card, for the things
+  // (global shortcuts, Voice) that have no control to point at.
+  final _kNone = GlobalKey();
   bool _showCoach = false;
   Scope _scope = Scope.all;
   SortMode _sort = SortMode.relevance;
@@ -568,36 +573,108 @@ class _PopupViewState extends State<PopupView> {
     widget.repo.markCoachMarksSeen();
   }
 
+  /// A global chord as the platform writes it. The defaults are physical
+  /// Control + Shift everywhere (hotkeys.dart), so the Mac gets ⌃⇧, never ⌘.
+  static String _chord(String key, {bool alt = false}) => Platform.isMacOS
+      ? (alt ? '⌃⌥$key' : '⌃⇧$key')
+      : (alt ? 'Ctrl+Alt+$key' : 'Ctrl+Shift+$key');
+
+  /// The tour: what the window does, then the shortcuts that reach it from
+  /// anywhere, then the settings people ask about. Two steps show only when
+  /// the feature is on for this install. Every card links to its own help
+  /// page; Settings, About replays the whole thing.
   List<CoachStep> _coachSteps() => [
         CoachStep(
           targetKey: _kSearch,
           title: 'Find anything, instantly',
           body:
               'Search by keyword or by meaning. Relic reads text, screenshots and files on-device, so "that receipt" or "the api key" just finds it.',
+          helpKey: 'find.search',
+        ),
+        CoachStep(
+          targetKey: _kNone,
+          title: 'Summon it from anywhere',
+          body:
+              '${_chord('Q')} opens this window over whatever you are doing. ${_chord('Space')} opens the small picker right at your cursor.',
+          helpKey: 'help.shortcuts',
         ),
         CoachStep(
           targetKey: _kCompose,
           title: 'Add things yourself',
           body:
               'Hit + for a quick note, or paste and drop in text, files and screenshots. Everything you copy is captured here automatically, too.',
+          helpKey: 'capture.compose',
+        ),
+        CoachStep(
+          targetKey: _kList,
+          title: 'Paste it back',
+          body:
+              'Pick a row and press Enter. It lands in the app you came from. ${_chord('1')} to ${_chord('5')} paste your five most recent copies without opening anything.',
+          helpKey: 'paste.onSelect',
         ),
         CoachStep(
           targetKey: _kList,
           title: 'Tag and describe for recall',
           body:
               'Open any item to edit its tags and description. Relic auto-tags, but a quick tweak makes it far easier to find later.',
+          helpKey: 'keep.tags',
         ),
         CoachStep(
           targetKey: _kScope,
           title: 'Keep what matters',
           body:
-              'Copies come and go. Keep one and it stays forever, on every device: select a row and click the gem, or press ${Platform.isMacOS ? '⌘' : 'Ctrl+'}K. Vault shows only what you kept.',
+              'Copies come and go. Keep one and it stays forever, on every device. Select a row and click the gem, press ${Platform.isMacOS ? '⌘' : 'Ctrl+'}K here, or ${_chord('W')} from any app. Vault shows only what you kept.',
+          helpKey: 'keep.vault',
+        ),
+        CoachStep(
+          targetKey: _kNone,
+          title: 'Save and name it',
+          body:
+              'Select text, pick a file in ${Platform.isMacOS ? 'Finder' : 'Explorer'}, or copy an image, then press ${_chord('E')}. The editor opens so you can name it, and it goes straight to your vault.',
+          helpKey: 'capture.annotate',
+        ),
+        if (widget.repo.pasteStackOn)
+          CoachStep(
+            targetKey: _kNone,
+            title: 'The paste stack',
+            body:
+                '${_chord('D', alt: true)} queues what you copy. ${_chord('B', alt: true)} pastes the next one out. Copy five things, then paste them back in order.',
+            helpKey: 'paste.stack',
+          ),
+        CoachStep(
+          targetKey: _kSettings,
+          title: 'Decide what never gets captured',
+          body:
+              'Settings, Capture: block apps like your password manager, and pause capture from the ${Platform.isMacOS ? 'menu bar' : 'tray'} for an hour or a day. Keys and passwords are held back by default.',
+          helpKey: 'capture.blocklist',
         ),
         CoachStep(
           targetKey: _kSettings,
-          title: 'Hotkeys and settings',
+          title: 'Only you can read it',
           body:
-              'Set the global hotkey to summon Relic from anywhere, plus capture preferences and more, in Settings.',
+              'Your vault is locked with your passphrase and Relic never sees it. The recovery kit is the one way back if you forget it. Settings, Sync and account, Security.',
+          helpKey: 'privacy.recoveryKit',
+        ),
+        CoachStep(
+          targetKey: _kSettings,
+          title: 'Add your phone',
+          body:
+              "Settings, Sync and account, Add a device. Point your phone's camera at the code, and everything you keep shows up there too.",
+          helpKey: 'sync.addDevice',
+        ),
+        if (VoiceController.bundled)
+          CoachStep(
+            targetKey: _kNone,
+            title: 'Talk instead of type',
+            body:
+                'Hold ${VoiceController.keyLabel} and speak. The words land in whatever you were typing into, and a copy is kept here. Turn it on in Settings, Voice.',
+          ),
+        CoachStep(
+          targetKey: _kHelp,
+          title: 'Every shortcut, one place',
+          body:
+              'The question mark lists every shortcut and search trick. Settings, General lets you change any of them.',
+          helpKey: 'help.shortcuts',
         ),
       ];
 
@@ -3314,6 +3391,7 @@ class _PopupViewState extends State<PopupView> {
                   onHelp: (mini || RelicTheme.isMobileOf(context))
                       ? null
                       : _openHelp,
+                  helpKey: _kHelp,
                 ),
                 if (!mini) _slimControls(c, searching),
                 if (!mini && (_activeTags.isNotEmpty || _dateChipLabel != null))

@@ -2193,6 +2193,22 @@ class _SettingsViewState extends State<SettingsView>
             ),
           ],
         ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            // The first-run tour, again: it runs once by itself, and the
+            // window is where it lives, so this closes Settings to start it.
+            _btn(
+              c,
+              'Replay the tour',
+              LucideIcons.compass,
+              onTap: () async {
+                await widget.repo.replayCoachMarks();
+                widget.onClose();
+              },
+            ),
+          ],
+        ),
         if (_updateMsg.isNotEmpty) ...[
           const SizedBox(height: 10),
           Row(
