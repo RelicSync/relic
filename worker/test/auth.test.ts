@@ -246,3 +246,81 @@ describe("session revocation watermark", () => {
     expect((auth as { account: string }).account).toBe("legacy-acct");
   });
 });
+
+// --- D1 cost of the hot path ------------------------------------------------
+//
+// Auth runs before every handler, including the ones that return without
+// touching the database, so its query count is the floor under the whole
+// Worker. It used to be two sequential reads (account_links, then accounts)
+// and that made auth ~73% of all D1 queries we issue. These pin it at one.
+//
+// Counting queries, not asserting on SQL: the point is the number of round
+// trips, and any rewrite that keeps it at one is fine.
+describe("authenticate — D1 round trips", () => {
+  function countQueries(): { n: () => number; restore: () => void } {
+    let n = 0;
+    const real = E.DB.prepare.bind(E.DB);
+    E.DB.prepare = (q: string) => {
+      n++;
+      return real(q);
+    };
+    return { n: () => n, restore: () => { E.DB.prepare = real; } };
+  }
+
+  it("an established account authenticates in ONE query", async () => {
+    await E.DB.prepare(
+      "INSERT INTO accounts (account_id, tier) VALUES ('sub-hot','pro')",
+    ).run();
+    const token = await mintJwt({ sub: "sub-hot", email: "h@x.com" });
+    const spy = countQueries();
+    let auth;
+    try {
+      auth = await authenticate(bearer(token), supabaseEnv());
+    } finally {
+      spy.restore();
+    }
+    expect(auth).toMatchObject({ account: "sub-hot", tier: "pro" });
+    expect(spy.n()).toBe(1);
+  });
+
+  it("a linked sub also resolves in ONE query, tier and all", async () => {
+    await E.DB.prepare(
+      "INSERT INTO accounts (account_id, tier, min_valid_iat) VALUES ('linked-hot','max',0)",
+    ).run();
+    await E.DB.prepare(
+      "INSERT INTO account_links (supabase_sub, account_id) VALUES ('sub-linked-hot','linked-hot')",
+    ).run();
+    const token = await mintJwt({ sub: "sub-linked-hot", email: "l@x.com" });
+    const spy = countQueries();
+    let auth;
+    try {
+      auth = await authenticate(bearer(token), supabaseEnv());
+    } finally {
+      spy.restore();
+    }
+    // The join has to carry the LINKED account's tier, not the sub's absence
+    // of one. Collapsing the two reads is only correct if this still holds.
+    expect(auth).toMatchObject({ account: "linked-hot", tier: "max" });
+    expect(spy.n()).toBe(1);
+  });
+
+  it("first contact costs one more, to write the free row once", async () => {
+    const token = await mintJwt({ sub: "sub-new-hot", email: "n@x.com" });
+    const spy = countQueries();
+    try {
+      await authenticate(bearer(token), supabaseEnv());
+    } finally {
+      spy.restore();
+    }
+    expect(spy.n()).toBe(2); // the read, then INSERT OR IGNORE
+
+    // ...and only once: the account exists now, so the next request is back to one.
+    const spy2 = countQueries();
+    try {
+      await authenticate(bearer(token), supabaseEnv());
+    } finally {
+      spy2.restore();
+    }
+    expect(spy2.n()).toBe(1);
+  });
+});

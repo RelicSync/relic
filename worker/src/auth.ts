@@ -134,35 +134,63 @@ async function verifySupabaseJwt(
   }
 }
 
-// Read (and lazily provision) the cached tier for an account. The Stripe webhook
-// consumer keeps `accounts.tier` current; the reconcile cron handles grace
-// expiry. First contact for a new account writes a free row, once.
+// Resolve a Supabase subject to the account it acts as, with that account's
+// cached tier and revocation watermark, in ONE query.
 //
-// Also carries min_valid_iat, the session-revocation watermark, so the hot path
-// gets it in the read it was already doing. Zero extra round trips.
-async function accountState(
+// It was two: `account_links` to resolve the sub, then `accounts` for the tier.
+// Sequential, uncached, and on EVERY authenticated request, which made auth
+// roughly 73% of this Worker's entire D1 query load (measured 2026-09-22:
+// ~6,000 requests in an hour against 16,441 read queries). That is the floor
+// under everything — an endpoint that returns without touching the database
+// still paid both — so halving it is worth more than any single handler.
+//
+// The one-row base (`SELECT ?1`) is what makes a single statement possible:
+// both joins are LEFT, so a sub with no link and no account row still comes
+// back, and `provisioned` distinguishes "no accounts row" from "row whose tier
+// is somehow unreadable". Those are not the same case and must not be treated
+// alike (see below).
+//
+// The Stripe webhook consumer keeps `accounts.tier` current; the reconcile cron
+// handles grace expiry. First contact for a new account writes a free row, once.
+async function resolveSupabaseAccount(
   env: Env,
-  accountId: string,
+  sub: string,
   email?: string,
-): Promise<{ tier: Tier; minValidIat: number }> {
+): Promise<{ account: string; tier: Tier; minValidIat: number }> {
+  // account_links resolves first: a linked identity acts AS the linked account,
+  // so the tier and the watermark must come from THAT account, never from the
+  // sub's own row. COALESCE in the join condition is what enforces the order.
   const row = await env.DB.prepare(
-    "SELECT tier, min_valid_iat FROM accounts WHERE account_id = ?1",
+    `SELECT COALESCE(l.account_id, ?1) AS account_id,
+            a.account_id               AS provisioned,
+            a.tier                     AS tier,
+            a.min_valid_iat            AS min_valid_iat
+       FROM (SELECT ?1 AS sub)
+       LEFT JOIN account_links l ON l.supabase_sub = ?1
+       LEFT JOIN accounts      a ON a.account_id = COALESCE(l.account_id, ?1)`,
   )
-    .bind(accountId)
-    .first<{ tier: string; min_valid_iat: number }>();
+    .bind(sub)
+    .first<{
+      account_id: string;
+      provisioned: string | null;
+      tier: string | null;
+      min_valid_iat: number | null;
+    }>();
+  const account = row?.account_id ?? sub;
   // An existing row wins even if its tier is somehow unreadable: the INSERT
   // below is a no-op against it anyway, and dropping to the default would throw
   // the watermark away, which is the one field here that must never regress.
-  if (row) {
+  if (row?.provisioned != null) {
     return {
+      account,
       tier: isTier(row.tier) ? row.tier : "free",
       minValidIat: Number(row.min_valid_iat) || 0,
     };
   }
   await env.DB.prepare(
     "INSERT OR IGNORE INTO accounts (account_id, email) VALUES (?1, ?2)",
-  ).bind(accountId, email ?? null).run();
-  return { tier: "free", minValidIat: 0 };
+  ).bind(account, email ?? null).run();
+  return { account, tier: "free", minValidIat: 0 };
 }
 
 async function sha256Hex(s: string): Promise<string> {
@@ -184,11 +212,11 @@ export async function authenticate(req: Request, env: Env): Promise<Auth | Respo
     if (claims) {
       // Resolve through account_links first: a linked identity acts AS the
       // linked account (see header). No row → the sub is the account id.
-      const link = await env.DB.prepare(
-        "SELECT account_id FROM account_links WHERE supabase_sub = ?1",
-      ).bind(claims.sub).first<{ account_id: string }>();
-      const account = link?.account_id ?? claims.sub;
-      const { tier, minValidIat } = await accountState(env, account, claims.email);
+      const { account, tier, minValidIat } = await resolveSupabaseAccount(
+        env,
+        claims.sub,
+        claims.email,
+      );
       // Session revocation. Removing a device revokes every refresh token for
       // the account at the IdP and stamps this watermark, so a token minted
       // before the removal is dead now rather than in an hour's time. Checked
