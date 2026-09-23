@@ -865,13 +865,24 @@ String? titleAfterLabel({
 /// [Kind.string] is excluded outright: a text relic's content IS the relic, it
 /// already syncs in the envelope, and letting an AI record write it would put
 /// a second, stale copy of the body on a path with no last-write-wins.
+///
+/// A photo is the exception to "never overwrites". Its content is only ever
+/// what the models read out of it: every photo starts with none, and the
+/// editor shows the read text but never lets the user type into it. So the
+/// record's text always replaces it. That matters when a photo is read again
+/// (a sideways photo read before the upright fix came back as "S 6A" in place
+/// of a tax letter), because otherwise every other device keeps the old junk
+/// forever. The record a device holds is already the winner of the level and
+/// earliest-wins rules, so every device lands on the same text.
 String? contentAfterExtract({
   required Kind kind,
   required String? current,
   required String? text,
 }) {
   if (kind == Kind.string) return current;
-  if (current != null && current.trim().isNotEmpty) return current;
   final t = text?.trim();
-  return (t != null && t.isNotEmpty) ? t : current;
+  final hasText = t != null && t.isNotEmpty;
+  if (kind == Kind.photo && hasText) return t;
+  if (current != null && current.trim().isNotEmpty) return current;
+  return hasText ? t : current;
 }

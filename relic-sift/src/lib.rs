@@ -27,6 +27,7 @@ pub mod labeler;
 pub mod models;
 pub mod perf;
 pub mod ocr;
+pub mod orient;
 pub mod pii;
 pub mod ppocr;
 pub mod pipeline;

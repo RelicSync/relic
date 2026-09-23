@@ -32,6 +32,18 @@ const NORM_STD: f32 = 0.5;
 /// reaches the title/preview or the OCR-fed text classifier. 0.5 is PaddleOCR's
 /// own default `drop_score`.
 const REC_DROP_SCORE: f32 = 0.5;
+/// An upright read with at least this many letters and digits is trusted as
+/// is; below it, the page may be lying on its side (see [`PpOcr::run`]).
+const STRONG_ALNUM: usize = 80;
+/// Fewest text-line boxes that count as "a page of text" for the rotation
+/// checks, so a stray sign in a photo never triggers the extra reads.
+const MIN_LINES: usize = 4;
+/// Mean recognizer confidence of a clean upright read. Upside-down text still
+/// decodes into characters, but less surely than this.
+const STRONG_CONF: f32 = 0.85;
+/// A rotated read replaces the current one only when it finds at least this
+/// many letters and digits, and scores half again as high (see [`Read::score`]).
+const MIN_ROTATED_ALNUM: usize = 20;
 
 pub struct PpOcr {
     det: Session,
@@ -56,26 +68,73 @@ impl PpOcr {
         Ok(PpOcr { det, rec, chars, model_version: models::OCR_V6.version.to_string() })
     }
 
+    /// Read the image, and if it looks like a page lying on its side or upside
+    /// down, read it that way instead. The pipeline already turns photos upright
+    /// from their EXIF tag; this covers the ones with no tag (stripped by a
+    /// messaging app, a scan fed in sideways, a screenshot of a rotated PDF).
+    ///
+    /// Cost is bounded. A strong upright read returns at once. Otherwise one
+    /// extra detection pass runs on a small copy turned 90°, and the full
+    /// sideways reads only happen when that pass finds clearly more text lines
+    /// than the upright one did. A photo with no text pays one small pass.
     pub fn run(&mut self, img: &DynamicImage) -> Result<OcrOutput, String> {
         let rgb = img.to_rgb8();
-        let (ow, oh) = rgb.dimensions();
         let boxes = self.detect(&rgb)?;
+        let base = self.read(&rgb, &boxes)?;
+        if alnum(&base.out.text) >= STRONG_ALNUM && base.conf >= STRONG_CONF {
+            return Ok(base.out);
+        }
+        let upright_lines = line_boxes(&boxes);
+        let (base_kept, base_conf) = (base.kept, base.conf);
+        let mut best = base;
+
+        // Sideways probe on a detection-sized copy, so a textless photo never
+        // pays for rotating the full-resolution frame.
+        let small = shrink(&rgb, DET_MAX_SIDE);
+        let probe = self.detect(&image::imageops::rotate90(&small))?;
+        if line_boxes(&probe) >= (upright_lines * 2).max(MIN_LINES) {
+            for deg in [90u16, 270] {
+                let turned = rotate(&rgb, deg);
+                let b = self.detect(&turned)?;
+                best = better(best, self.read(&turned, &b)?, deg);
+            }
+        } else if upright_lines >= MIN_LINES
+            && (base_kept * 3 < upright_lines || base_conf < STRONG_CONF)
+        {
+            // Plenty of horizontal lines that read as junk or read unsure:
+            // the look of a page that is upside down.
+            let turned = rotate(&rgb, 180);
+            let b = self.detect(&turned)?;
+            best = better(best, self.read(&turned, &b)?, 180);
+        }
+        Ok(best.out)
+    }
+
+    /// Recognize every detected box. Returns the output and how many boxes
+    /// survived the confidence gate.
+    fn read(&mut self, rgb: &image::RgbImage, boxes: &[Box2]) -> Result<Read, String> {
+        let (ow, oh) = rgb.dimensions();
         if boxes.is_empty() {
-            return Ok(OcrOutput::default());
+            return Ok(Read { out: OcrOutput::default(), kept: 0, conf: 0.0 });
         }
         let img_area = (ow as f32) * (oh as f32);
         let mut covered = 0f32;
         let mut lines: Vec<(i32, i32, String)> = Vec::new();
-        for b in &boxes {
-            let crop = image::imageops::crop_imm(&rgb, b.x, b.y, b.w, b.h).to_image();
+        let (mut conf_sum, mut conf_w) = (0f32, 0f32);
+        for b in boxes {
+            let crop = image::imageops::crop_imm(rgb, b.x, b.y, b.w, b.h).to_image();
             let (text, conf) = self.recognize(&crop)?;
             // Drop low-confidence decodes (non-text crops the detector picked up)
             // and count coverage only for the boxes we actually keep.
             if !text.trim().is_empty() && conf >= REC_DROP_SCORE {
                 covered += (b.w as f32) * (b.h as f32);
+                let w = text.chars().count() as f32;
+                conf_sum += conf * w;
+                conf_w += w;
                 lines.push((b.y as i32, b.x as i32, text));
             }
         }
+        let kept = lines.len();
         // Reading order: top-to-bottom, then left-to-right within a line band.
         lines.sort_by(|a, b| {
             if (a.0 - b.0).abs() <= (REC_HEIGHT as i32 / 2) {
@@ -84,10 +143,15 @@ impl PpOcr {
                 a.0.cmp(&b.0)
             }
         });
-        let text = lines.iter().map(|l| l.2.as_str()).collect::<Vec<_>>().join("\n");
+        let text = lines.iter().map(|l| l.2.as_str()).collect::<Vec<_>>().join("
+");
         let word_count = text.split_whitespace().count();
         let coverage = (covered / img_area.max(1.0)).clamp(0.0, 1.0);
-        Ok(OcrOutput { text, word_count, coverage })
+        let conf = if conf_w > 0.0 { conf_sum / conf_w } else { 0.0 };
+        if std::env::var_os("SIFT_OCR_DEBUG").is_some() {
+            eprintln!("ocr read: {} boxes, {} kept, conf {conf:.3}, {} alnum", boxes.len(), kept, alnum(&text));
+        }
+        Ok(Read { out: OcrOutput { text, word_count, coverage, rotation: 0 }, kept, conf })
     }
 
     /// DB detection → axis-aligned line boxes in original-image coordinates.
@@ -200,6 +264,66 @@ impl PpOcr {
         }
         let conf = if emitted > 0 { conf_sum / emitted as f32 } else { 0.0 };
         Ok((out, conf))
+    }
+}
+
+fn alnum(s: &str) -> usize {
+    s.chars().filter(|c| c.is_alphanumeric()).count()
+}
+
+/// Boxes shaped like a line of text: clearly wider than tall. Text on its side
+/// gives tall or square boxes instead, which is what the probe keys on.
+fn line_boxes(boxes: &[Box2]) -> usize {
+    boxes.iter().filter(|b| b.w >= b.h * 3).count()
+}
+
+/// Keep `cand` (read after turning the image `deg`° clockwise) only when it is
+/// decisively better than `cur`.
+fn better(cur: Read, mut cand: Read, deg: u16) -> Read {
+    if alnum(&cand.out.text) >= MIN_ROTATED_ALNUM && cand.score() >= cur.score() * 1.5 {
+        cand.out.rotation = deg;
+        cand
+    } else {
+        cur
+    }
+}
+
+/// Turn `rgb` clockwise by a multiple of 90°.
+pub(crate) fn rotate(rgb: &image::RgbImage, deg: u16) -> image::RgbImage {
+    match deg % 360 {
+        90 => image::imageops::rotate90(rgb),
+        180 => image::imageops::rotate180(rgb),
+        270 => image::imageops::rotate270(rgb),
+        _ => rgb.clone(),
+    }
+}
+
+/// Downscale so the long side is at most `max_side` (never upscales).
+fn shrink(rgb: &image::RgbImage, max_side: u32) -> image::RgbImage {
+    let (w, h) = rgb.dimensions();
+    let long = w.max(h);
+    if long <= max_side {
+        return rgb.clone();
+    }
+    let s = max_side as f32 / long as f32;
+    let (nw, nh) = (((w as f32 * s) as u32).max(1), ((h as f32 * s) as u32).max(1));
+    image::imageops::resize(rgb, nw, nh, image::imageops::FilterType::Triangle)
+}
+
+/// One full read of the image at one orientation.
+struct Read {
+    out: OcrOutput,
+    /// Boxes that survived the confidence gate.
+    kept: usize,
+    /// Mean recognizer confidence over the kept lines, weighted by length.
+    conf: f32,
+}
+
+impl Read {
+    /// Letters and digits the reader is sure of: text read the wrong way up
+    /// still decodes into characters, but at visibly lower confidence.
+    fn score(&self) -> f32 {
+        alnum(&self.out.text) as f32 * self.conf
     }
 }
 

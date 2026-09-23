@@ -820,7 +820,7 @@ fn cmd_label(
     for p in &paths {
         let name = p.display().to_string();
         if is_image(p) {
-            let img = image::open(p).map_err(|e| format!("open {name}: {e}"))?;
+            let img = relic_sift::orient::open_upright(p).map_err(|e| format!("open {name}: {e}"))?;
             emit(&name, labeler.label_image(&img)?, None);
         } else {
             let body = std::fs::read_to_string(p).map_err(|e| format!("read {name}: {e}"))?;

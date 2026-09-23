@@ -250,6 +250,40 @@ void main() {
           reason: 'a peer already did this work; do not redo it');
     });
 
+    test('finds the photos read before the upright fix, and only those', () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      Relic photo(String uid, {String? blobKey = 'b'}) => Relic(
+            uid: uid,
+            createdAt: 1000,
+            updatedAt: 1000,
+            kind: Kind.photo,
+            source: Source.share,
+            promoted: true,
+            byteSize: 16,
+            blobKey: blobKey == null ? null : '$blobKey-$uid',
+          );
+      db.upsert(photo('old'));
+      db.upsert(photo('new'));
+      db.upsert(photo('unread'));
+      db.upsert(photo('noblob', blobKey: null));
+      db.upsert(_r('text'));
+      db.raiseEnrichLevel('old', 3);
+      db.raiseEnrichLevel('new', 4);
+      db.raiseEnrichLevel('noblob', 3);
+      db.raiseEnrichLevel('text', 3);
+      expect(db.photosReadBetween(3, 4).map((p) => (p.uid, p.blobKey)),
+          [('old', 'b-old')]);
+    });
+
+    test('a level 4 record takes a photo out of the queue for good', () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      db.upsert(_r('u1', kind: Kind.photo));
+      db.raiseEnrichLevel('u1', 4);
+      expect(db.needingEnrich(3, 10), isEmpty);
+    });
+
     test('never moves backwards', () {
       // A record from a device on an OLDER model generation must not re-queue
       // the corpus on a newer one.
@@ -404,15 +438,37 @@ void main() {
       expect(out.content, 'INVOICE 4471 Kessler Roofing \$2,480');
     });
 
-    test('never overwrites text that is already here', () {
-      // A peer cannot tell this device's own extraction from something the user
-      // typed into the item, so the only safe rule is to leave both alone.
+    test('a newer read replaces the text of a photo', () {
+      // A photo's text is only ever what the models read: it starts empty and
+      // the editor never lets anyone type into it. So when a photo is read
+      // again (the sideways-photo fix re-reads "S 6A" into the real letter),
+      // the better text has to land on every device, not just the reader.
       final out = mergeAiRecord(
-        cur: _r('u1', kind: Kind.photo, content: 'what the user wrote'),
+        cur: _r('u1', kind: Kind.photo, content: 'S 6A'),
+        rec: _rec('u1', level: 4, text: 'Dear Jordan, your 2025 return'),
+        suppressed: const {},
+      );
+      expect(out.content, 'Dear Jordan, your 2025 return');
+    });
+
+    test('a photo keeps its text when the record read nothing', () {
+      final out = mergeAiRecord(
+        cur: _r('u1', kind: Kind.photo, content: 'BOARDING PASS 14C'),
+        rec: _rec('u1', title: 'a boarding pass'),
+        suppressed: const {},
+      );
+      expect(out.content, 'BOARDING PASS 14C');
+    });
+
+    test('never overwrites text already on a file', () {
+      // A peer cannot tell this device's own extraction of a document from
+      // something else that put text there, so a file keeps what it has.
+      final out = mergeAiRecord(
+        cur: _r('u1', kind: Kind.file, content: 'what this device read'),
         rec: _rec('u1', text: 'what the model read'),
         suppressed: const {},
       );
-      expect(out.content, 'what the user wrote');
+      expect(out.content, 'what this device read');
     });
 
     test('a text relic never takes AI text', () {

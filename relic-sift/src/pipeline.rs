@@ -432,7 +432,9 @@ impl Sift {
         ctx.is_image = true;
         let mime = infer::get(bytes).map(|t| t.mime_type().to_string());
         ctx.mime = mime.clone();
-        let decoded: Option<DynamicImage> = image::load_from_memory(bytes).ok();
+        // Upright, as the user sees it: a phone portrait is stored sideways with
+        // an EXIF rotate tag, and every stage below reads text and shapes.
+        let decoded: Option<DynamicImage> = crate::orient::decode_upright(bytes).ok();
 
         let t_a = Instant::now();
         if let Some(img) = &decoded {
@@ -443,7 +445,7 @@ impl Sift {
         }
         ctx.timing.stage_a += t_a.elapsed().as_millis() as u64;
 
-        let Some(img) = decoded else { return };
+        let Some(mut img) = decoded else { return };
 
         // OCR feeder: extracted text re-enters the text path, demoted —
         // except secrets, which keep full strength (spec §6.2).
@@ -452,6 +454,15 @@ impl Sift {
             match ocr_engine.run(&img) {
                 Ok(out) => {
                     ctx.timing.ocr = t_ocr.elapsed().as_millis() as u64;
+                    // The text only read once the image was turned: a page with
+                    // no EXIF tag arrived on its side. CLIP and the labeler get
+                    // it the same way up.
+                    img = match out.rotation {
+                        90 => img.rotate90(),
+                        180 => img.rotate180(),
+                        270 => img.rotate270(),
+                        _ => img,
+                    };
                     if !out.text.trim().is_empty() {
                         ctx.votes.extend(ocr::density_votes(&out));
                         let text = out.text.clone();
