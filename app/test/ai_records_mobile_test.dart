@@ -211,14 +211,24 @@ void main() {
     expect(r.visible.map((x) => x.uid), ['u1']);
   });
 
-  test('extracted text never overwrites what is already on the item', () async {
-    // Could be this device's own copy, could be something the user typed. The
-    // sending device cannot tell the two apart, so it defers to neither.
+  test('a photo takes the newer read of its text', () async {
+    // A photo's text is only ever what a desktop read out of it, so a better
+    // read (a sideways photo read again upright) replaces the old one here.
+    final r = await repo();
+    await r.debugUpsertEnv(await relicEnv('u1', content: 'S 6A', kind: 'photo'));
+    await r.debugAbsorbAiEnv(
+        await aiEnv('u1', text: 'Dear Jordan, your 2025 return'));
+    expect(r.all.single.content, 'Dear Jordan, your 2025 return');
+  });
+
+  test('extracted text never overwrites what is already on a file', () async {
+    // The sending device cannot tell this device's copy of a document's text
+    // from anything else that put it there, so it defers.
     final r = await repo();
     await r.debugUpsertEnv(
-        await relicEnv('u1', content: 'the user\'s own words', kind: 'photo'));
+        await relicEnv('u1', content: 'what this device read', kind: 'file'));
     await r.debugAbsorbAiEnv(await aiEnv('u1', text: 'what the model read'));
-    expect(r.all.single.content, 'the user\'s own words');
+    expect(r.all.single.content, 'what this device read');
   });
 
   test('a text relic keeps its own body', () async {

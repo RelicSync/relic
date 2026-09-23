@@ -62,6 +62,11 @@ pub struct OcrOutput {
     pub word_count: usize,
     /// Fraction of image area covered by detected words.
     pub coverage: f32,
+    /// Degrees clockwise the image was turned to read it: 0 when it read
+    /// upright, else 90/180/270 for a page that arrived on its side or upside
+    /// down with no EXIF tag to say so. Later stages turn the image the same
+    /// way so they see what the text says is up.
+    pub rotation: u16,
 }
 
 impl OcrFeeder {
@@ -105,7 +110,7 @@ impl OcrFeeder {
             .filter(|l| !l.trim().is_empty())
             .collect::<Vec<_>>()
             .join("\n");
-        Ok(OcrOutput { text, word_count, coverage: coverage.clamp(0.0, 1.0) })
+        Ok(OcrOutput { text, word_count, coverage: coverage.clamp(0.0, 1.0), rotation: 0 })
     }
 }
 
@@ -162,9 +167,10 @@ mod tests {
             text: "WALMART\nSUBTOTAL 23.48\nTAX 1.93\nTOTAL $25.41\nVISA 25.41".into(),
             word_count: 10,
             coverage: 0.1,
+            rotation: 0,
         };
         assert!(density_votes(&o).iter().any(|v| v.category == "receipt"));
-        let o2 = OcrOutput { text: "total eclipse of the heart".into(), word_count: 5, coverage: 0.05 };
+        let o2 = OcrOutput { text: "total eclipse of the heart".into(), word_count: 5, coverage: 0.05, rotation: 0 };
         assert!(density_votes(&o2).is_empty());
     }
 
@@ -174,12 +180,12 @@ mod tests {
         // is 3 alphanumerics, so even a confident 2-glyph pair ("OK!", "S6") is
         // dropped — never a real image capture, always detector noise.
         for junk in ["P", "A", "S\n6", "日 m", "OK!", ""] {
-            let o = OcrOutput { text: junk.into(), word_count: 1, coverage: 0.01 };
+            let o = OcrOutput { text: junk.into(), word_count: 1, coverage: 0.01, rotation: 0 };
             assert!(denoise(o).text.is_empty(), "should drop {junk:?}");
         }
         // Any genuine word / price / line survives.
         for real in ["yes", "5.25", "hello", "CORNER CAFE"] {
-            let o = OcrOutput { text: real.into(), word_count: 2, coverage: 0.05 };
+            let o = OcrOutput { text: real.into(), word_count: 2, coverage: 0.05, rotation: 0 };
             assert_eq!(denoise(o).text, real, "should keep {real:?}");
         }
     }

@@ -1871,6 +1871,19 @@ class RelicDb {
       .map(_toRelic)
       .toList();
 
+  /// Photos this device has read at [from] or above but below [to], with the
+  /// blob each one points at. Drives the one-time re-read of photos read
+  /// before sift turned them upright.
+  List<({String uid, String blobKey})> photosReadBetween(int from, int to) => [
+    for (final row in _db.select(
+      "SELECT uid, blob_key FROM relics WHERE kind = 'photo' "
+      'AND enrich_level >= ? AND enrich_level < ? '
+      'AND blob_key IS NOT NULL AND held_by IS NULL',
+      [from, to],
+    ))
+      (uid: row['uid'] as String, blobKey: row['blob_key'] as String),
+  ];
+
   /// Relics this device considers enriched but holds no embedding for.
   ///
   /// This is the hole the work-claim opened. Only one device runs the models on

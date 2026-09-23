@@ -27,6 +27,7 @@ import 'recovery.dart';
 import 'file_types.dart';
 import 'heuristic_tags.dart';
 import 'hotkeys.dart';
+import 'exif_orientation.dart';
 import 'relic_db.dart';
 import 'repo.dart';
 import 'secure_key_store.dart';
@@ -274,6 +275,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   int _tombCursor = 0;
   int _aiCursor = 0; // AI records ride their own timeline; see worker/src/ai.ts
   bool _aiConverged = false; // the one-time publish of pre-existing AI titles
+  bool _uprightRescanned = false; // the one-time re-read of rotated photos
   Timer? _syncTimer;
   SyncSocket? _syncSocket; // live-sync doorbell; null until first connect
   // "Online" is a verdict, not the fate of the last request. One failed
@@ -1283,6 +1285,18 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   // existing relics pick up title+note embeddings, bare-fact vectors, chunked
   // long-doc vectors, and captions-for-all-photos.
   static const int _levelMl = 3;
+  // v4, photos only: sift now turns a photo upright before reading it. Before
+  // that a phone portrait (sideways pixels plus an EXIF rotate tag) was read on
+  // its side and came back as noise, "S 6A" off a full tax letter. A photo read
+  // by the new sift is stamped 4 so the server lets it replace a level 3 read
+  // on every device. The work queue still selects on [_levelMl], so a peer's
+  // level 3 read of a new photo is never redone; only the photos the one-time
+  // scan in [_rescanRotatedPhotos] finds go back through.
+  static const int _levelUpright = 4;
+
+  /// The level to claim and stamp for [r] when enriching toward [target].
+  static int _stampLevel(Relic r, int target) =>
+      target == _levelMl && r.kind == Kind.photo ? _levelUpright : target;
 
   bool get mlAvailable => _sift != null;
   bool get mlEnrich => _mlEnrich;
@@ -1677,6 +1691,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _analysisSpeed = AnalysisSpeed.byName(j['analysis_speed'] as String?);
         _prunedGen = j['models_pruned_gen'] as int? ?? 0;
         _aiConverged = j['ai_records_converged'] as bool? ?? false;
+        _uprightRescanned = j['upright_rescan_done'] as bool? ?? false;
         _aiOcr = j['ai_ocr'] as bool? ?? true;
         _aiImageTags = j['ai_image_tags'] as bool? ?? true;
         _aiEmbeddings = j['ai_embeddings'] as bool? ?? true;
@@ -1791,6 +1806,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           'analysis_speed': _analysisSpeed.name,
           'models_pruned_gen': _prunedGen,
           'ai_records_converged': _aiConverged,
+          'upright_rescan_done': _uprightRescanned,
           'ai_ocr': _aiOcr,
           'ai_image_tags': _aiImageTags,
           'ai_embeddings': _aiEmbeddings,
@@ -5747,6 +5763,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         }
       }
       final target = sift.modelsReady ? _levelMl : _levelStageA;
+      if (aiCapable) await _rescanRotatedPhotos(db);
       // The settings "tagging N items…" progress line, refreshed per cycle.
       // The number jumps when models become ready (target 1 → 3): correct —
       // the full-ML pass really does revisit the corpus.
@@ -5777,7 +5794,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       }
       if (aiCapable) unfinished.addAll(batch.map((r) => r.uid));
       for (final r in batch) {
-        if (await _enrichOne(sift, r, target)) changed = true;
+        if (await _enrichOne(sift, r, _stampLevel(r, target))) changed = true;
         unfinished.remove(r.uid);
         // Clear per item so the spinner retreats down the list as it goes.
         if (_analyzing.remove(r.uid)) notifyListeners();
@@ -5808,6 +5825,45 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _analyzing = {};
         notifyListeners();
       }
+    }
+  }
+
+  /// One-time: send back through the models every photo that was read on its
+  /// side. Those are the ones whose file carries an EXIF rotate tag, since sift
+  /// used to ignore it. Everything else keeps the read it has.
+  ///
+  /// Only the local copy of each photo is looked at, and only its first
+  /// [exifHeadBytes]. A photo this desk never downloaded is left to a desk that
+  /// has it; its better read reaches here as a level 4 record.
+  Future<void> _rescanRotatedPhotos(RelicDb db) async {
+    if (_uprightRescanned) return;
+    // Done first, like [_convergeAiRecords]: a crash part-way leaves the photos
+    // already re-queued correct, and never re-reads the vault on every launch.
+    _uprightRescanned = true;
+    _savePrefs();
+    var requeued = 0;
+    for (final p in db.photosReadBetween(_levelMl, _levelUpright)) {
+      final path = _blobPathIfExists(p.blobKey);
+      if (path == null) continue;
+      Uint8List head;
+      try {
+        final f = await File(path).open();
+        try {
+          head = await f.read(exifHeadBytes);
+        } finally {
+          await f.close();
+        }
+      } catch (_) {
+        continue;
+      }
+      final o = jpegExifOrientation(head);
+      if (o != null && o != 1) {
+        db.setEnrichLevel(p.uid, _levelStageA);
+        requeued++;
+      }
+    }
+    if (requeued > 0) {
+      debugPrint('enrich: re-reading $requeued photo(s) stored sideways');
     }
   }
 
@@ -6187,7 +6243,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
             headers: {..._h, 'Content-Type': 'application/json'},
             body: jsonEncode({
               'items': [
-                for (final r in batch) {'uid': r.uid, 'level': level},
+                for (final r in batch) {'uid': r.uid, 'level': _stampLevel(r, level)},
               ],
             }),
           )
