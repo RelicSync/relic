@@ -29,5 +29,39 @@ int main() {
   g.Alt(false, false, false, 3050);
   g.Alt(true, false, true, 4000); g.Tick(4200);
   assert(g.Other(true, false).actions[0] == Action::stop_no_insert);
+
+  // A hidden press may always stay hidden. A release may only be hidden when
+  // the system never saw the press, or Right Alt stays down everywhere.
+  assert(SafeSwallow(true, true, false));
+  assert(SafeSwallow(true, true, true));
+  assert(SafeSwallow(true, false, false));
+  assert(!SafeSwallow(true, false, true));
+  assert(!SafeSwallow(false, false, false));
+  // The full stall: the press leaked through while the hook was late, and the
+  // gesture (which thinks it hid the press) wants to hide the release.
+  Gesture stall;
+  assert(stall.Alt(true, false, true, 10000).swallow);  // system saw it anyway
+  const auto late = stall.Alt(false, false, true, 10080);
+  assert(late.swallow && !SafeSwallow(late.swallow, false, true));
+
+  // Gesture timing uses when the key moved, not when the hook got to it.
+  assert(EventTime(5000, 5000, 4700) == 4700);
+  assert(EventTime(5000, 3u, 0xFFFFFFFFu) == 4996);  // 32-bit tick wrapped
+  assert(EventTime(5000, 5000, 5000) == 5000);
+  assert(EventTime(100, 5000, 4000) == 100);   // never before the clock began
+  assert(EventTime(200000, 200000, 100) == 200000);  // implausibly old: use now
+  // A late double tap is still a double tap when measured by key time.
+  Gesture tap;
+  tap.Alt(true, false, true, EventTime(9000, 9000, 8500));
+  tap.Alt(false, false, true, EventTime(9000, 9000, 8580));
+  assert(tap.Alt(true, false, true, EventTime(9000, 9000, 8700)).actions[1] == Action::latched);
+
+  // Typed text goes out in batches that never split a surrogate pair.
+  const std::wstring text = L"ab\U0001F600cd";  // a b hi lo c d
+  assert(NextBatch(text, 0, 2) == 2);
+  assert(NextBatch(text, 0, 3) == 4);  // the pair stays together
+  assert(NextBatch(text, 4, 32) == 2);
+  assert(NextBatch(text, 6, 32) == 0);
+  assert(NextBatch(L"x\xD800", 0, 2) == 2);  // a lone high surrogate at the end
   std::cout << "Voice gesture timing, repeat, mode and chord checks passed\n";
 }

@@ -249,7 +249,7 @@ class _VoiceSettingsState extends State<VoiceSettings> {
                 const SizedBox(height: Insets.sm),
                 _description(
                   c,
-                  'Pressing ${VoiceController.keyLabel} briefly opens the microphone while checking the gesture. Wait for the pulsing shadow before speaking. The icon follows your voice. Recording ends after 60 seconds.',
+                  'Pressing ${VoiceController.keyLabel} briefly opens the microphone while checking the gesture. Wait for the pulsing shadow before speaking. The icon follows your voice. Recording ends after ${_limit(v.maxSeconds)}.',
                 ),
               ],
             ),
@@ -429,4 +429,11 @@ class _VoiceSettingsState extends State<VoiceSettings> {
       );
     },
   );
+}
+
+/// "10 minutes", "1 minute" or "90 seconds", for the recording limit.
+String _limit(int seconds) {
+  if (seconds % 60 != 0) return '$seconds seconds';
+  final minutes = seconds ~/ 60;
+  return minutes == 1 ? '1 minute' : '$minutes minutes';
 }

@@ -1,9 +1,40 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 // Pure physical-key state machine; Win32 adapters own timers, audio and UI.
 namespace relic_voice {
+
+// Whether a key event the gesture wants to hide may really be hidden.
+// A release is only safe to hide when the system never saw the press. If the
+// press got through anyway (Windows skips a hook that answers too slowly),
+// hiding the release leaves the key held down for every app until it is
+// pressed again. `system_down` is the key's async state from inside the hook,
+// which still reflects the moment before this event.
+inline bool SafeSwallow(bool swallow, bool down, bool system_down) {
+  return swallow && (down || !system_down);
+}
+
+// A keyboard event's timestamp on the 64-bit tick clock. Hook events carry a
+// 32-bit GetTickCount() time from when the key moved, which is what gesture
+// timing must use: the hook itself can run late.
+inline uint64_t EventTime(uint64_t now64, uint32_t now32, uint32_t event32) {
+  const uint32_t age = now32 - event32;  // wraps correctly
+  return age <= 60000 && age <= now64 ? now64 - age : now64;
+}
+
+// The length of the next batch of typed text starting at `from`, at most
+// `max` UTF-16 units, never splitting a surrogate pair.
+inline size_t NextBatch(const std::wstring& text, size_t from, size_t max) {
+  if (from >= text.size()) return 0;
+  size_t n = text.size() - from < max ? text.size() - from : max;
+  const wchar_t last = text[from + n - 1];
+  if (last >= 0xD800 && last <= 0xDBFF && from + n < text.size()) ++n;
+  return n;
+}
+
 enum class Action { candidate, held, latched, cancel, stop, stop_no_insert, alt_tap, alt_down };
 enum class State { idle, candidate, waiting, held, latched, processing };
 struct Decision { bool swallow = false; std::vector<Action> actions; };
