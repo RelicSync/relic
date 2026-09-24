@@ -238,6 +238,59 @@ class _VoiceSettingsState extends State<VoiceSettings> {
                     v.savePreferences();
                   },
           ),
+          if (VoiceController.keyConfigurable)
+            SettingsRow(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Voice key',
+                    style: RelicTheme.sans(size: 13, color: c.text),
+                  ),
+                  const SizedBox(height: Insets.sm),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 11),
+                    decoration: BoxDecoration(
+                      color: c.surface,
+                      borderRadius: BorderRadius.circular(Radii.input),
+                      border: Border.all(color: c.border),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        key: const ValueKey('voice-key'),
+                        value: v.keyId,
+                        isExpanded: true,
+                        dropdownColor: c.surface,
+                        borderRadius: BorderRadius.circular(Radii.input),
+                        style: RelicTheme.sans(size: 13, color: c.text),
+                        icon: Icon(
+                          LucideIcons.chevronDown,
+                          size: 15,
+                          color: c.textMuted,
+                        ),
+                        items: [
+                          for (final k in VoiceController.windowsKeys)
+                            DropdownMenuItem<String>(
+                              value: k.id,
+                              child: Text(k.label),
+                            ),
+                        ],
+                        onChanged: v.busy
+                            ? null
+                            : (id) {
+                                if (id != null) v.setKey(id);
+                              },
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: Insets.sm),
+                  _description(
+                    c,
+                    'A quick single tap still does what the key normally does.',
+                  ),
+                ],
+              ),
+            ),
           SettingsRow(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -249,7 +302,7 @@ class _VoiceSettingsState extends State<VoiceSettings> {
                 const SizedBox(height: Insets.sm),
                 _description(
                   c,
-                  'Pressing ${VoiceController.keyLabel} briefly opens the microphone while checking the gesture. Wait for the pulsing shadow before speaking. The icon follows your voice. Recording ends after 60 seconds.',
+                  'Pressing ${VoiceController.keyLabel} briefly opens the microphone while checking the gesture. Wait for the pulsing shadow before speaking. The icon follows your voice. Recording ends after ${_limit(v.maxSeconds)}.',
                 ),
               ],
             ),
@@ -429,4 +482,11 @@ class _VoiceSettingsState extends State<VoiceSettings> {
       );
     },
   );
+}
+
+/// "10 minutes", "1 minute" or "90 seconds", for the recording limit.
+String _limit(int seconds) {
+  if (seconds % 60 != 0) return '$seconds seconds';
+  final minutes = seconds ~/ 60;
+  return minutes == 1 ? '1 minute' : '$minutes minutes';
 }

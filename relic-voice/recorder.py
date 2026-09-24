@@ -1,7 +1,9 @@
 """Bounded microphone capture with device-native sample rate."""
 import numpy as np
 import sounddevice as sd
-MAX_SECONDS = 60
+# A voice note can run ten minutes. Audio is decoded in phrases while it is
+# recorded and dropped once handed over, so memory stays at about one phrase.
+MAX_SECONDS = 600
 
 
 def input_devices():

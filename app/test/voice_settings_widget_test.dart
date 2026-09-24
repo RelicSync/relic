@@ -79,6 +79,10 @@ void main() {
         final key = VoiceController.keyLabel;
         expect(find.text('$key shortcuts'), findsOneWidget);
         expect(find.textContaining('Hold $key to dictate.'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('voice-key')),
+          VoiceController.keyConfigurable ? findsOneWidget : findsNothing,
+        );
         expect(find.text('PREFERRED SPELLING'), findsOneWidget);
         expect(find.text('WORD CORRECTIONS'), findsOneWidget);
         expect(find.text('Test microphone and transcription'), findsOneWidget);

@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from engine import Engine
 from model_store import ensure_models
-from recorder import Recorder, input_devices
+from recorder import MAX_SECONDS, Recorder, input_devices
 from live_decode import LiveDecode
 
 MAX_LINE = 256 * 1024
@@ -46,7 +46,7 @@ def serve(folder):
             return
         emit('loading')
         engine = Engine(folder)
-        emit('ready', devices=[{'id': i, 'name': name} for i, name in input_devices()])
+        emit('ready', devices=[{'id': i, 'name': name} for i, name in input_devices()], max_seconds=MAX_SECONDS)
         last_level = 0.0
         while not quit_event.is_set():
             try:
@@ -80,6 +80,11 @@ def serve(folder):
             if active and future is None:
                 sid = active['id']
                 live.observe(recorder.blocks)
+                # Drop the blocks the decoder has taken, so a long note keeps
+                # about one phrase of audio in memory. Blocks the microphone
+                # adds meanwhile land after the cut and stay unseen.
+                del recorder.blocks[:live.seen_blocks]
+                live.seen_blocks = 0
                 if recorder.frames and not active.get('started'):
                     active['started'] = True
                     emit('audio_started', id=sid)
