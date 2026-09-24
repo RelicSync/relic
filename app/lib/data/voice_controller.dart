@@ -71,8 +71,48 @@ class VoiceController extends ChangeNotifier {
   /// separate port (relic-voice/RELEASE.md).
   static bool get supported => Platform.isWindows || Platform.isMacOS;
 
+  /// The keys Voice can listen on, on Windows. Each one is safe to hold and to
+  /// double-tap: it types nothing on its own, and a quick single tap still
+  /// reaches the app (a little late) so the key keeps its normal job. The
+  /// native side accepts only these codes.
+  static const windowsKeys = <VoiceKey>[
+    VoiceKey('right_alt', 'Right Alt', 0xA5),
+    VoiceKey('right_ctrl', 'Right Ctrl', 0xA3),
+    VoiceKey('caps_lock', 'Caps Lock', 0x14),
+    VoiceKey('menu', 'Menu key', 0x5D),
+    VoiceKey('insert', 'Insert', 0x2D),
+    VoiceKey('scroll_lock', 'Scroll Lock', 0x91),
+    VoiceKey('pause', 'Pause', 0x13),
+  ];
+
+  /// Whether this platform lets the person pick the Voice key. The Mac keeps
+  /// Right Option until its bridge learns other keys.
+  static bool get keyConfigurable => Platform.isWindows;
+
+  /// The chosen key. Static because every label that mentions it (settings,
+  /// the offer card, the tour) reads [keyLabel], and there is one Voice.
+  static VoiceKey _key = windowsKeys.first;
+
   /// The Voice key as this platform names it, for every label that mentions it.
-  static String get keyLabel => Platform.isMacOS ? 'Right Option' : 'Right Alt';
+  static String get keyLabel => Platform.isMacOS ? 'Right Option' : _key.label;
+
+  /// The chosen key's id, as saved in voice.json.
+  String get keyId => _key.id;
+
+  /// Choose the Voice key. Saved at once, and it takes effect on the next
+  /// press. Unknown ids are ignored.
+  Future<void> setKey(String id) async {
+    final key = windowsKeys.where((k) => k.id == id).firstOrNull;
+    if (key == null || key.id == _key.id) return;
+    _key = key;
+    await savePreferences();
+  }
+
+  /// Tell the native hook which key to watch (Windows only).
+  Future<void> _sendKey() async {
+    if (!keyConfigurable) return;
+    await _native.invokeMethod('key', _key.vk);
+  }
 
   /// The modifier that turns a dictation into a voice note.
   static String get modifierLabel => Platform.isMacOS ? 'Control' : 'Left Ctrl';
@@ -159,6 +199,7 @@ class VoiceController extends ChangeNotifier {
     // Voice stays off until the person turns it on, from the one-time offer
     // on first open or from Settings. A saved choice always wins.
     enabled = false;
+    _key = windowsKeys.first;
     repo.addListener(_syncBlocklist);
     _syncBlocklist();
     try {
@@ -167,6 +208,9 @@ class VoiceController extends ChangeNotifier {
       offered = j['offered'] == true || j.containsKey('enabled');
       punctuation = j['punctuation'] != false;
       shortcuts = j['shortcuts'] != false;
+      _key =
+          windowsKeys.where((k) => k.id == j['key']).firstOrNull ??
+          windowsKeys.first;
       device = j['device'] as int?;
       _deviceName = j['device_name'] as String?;
       vocabulary = (j['vocabulary'] as List? ?? [])
@@ -205,6 +249,7 @@ class VoiceController extends ChangeNotifier {
       'offered': offered,
       'punctuation': punctuation,
       'shortcuts': shortcuts,
+      'key': _key.id,
       'device': device,
       'device_name': _deviceName,
       'vocabulary': vocabulary,
@@ -219,7 +264,12 @@ class VoiceController extends ChangeNotifier {
     });
     _preferenceWrite = result;
     return result.then((_) async {
-      if (ready && !busy) await _native.invokeMethod('enable', shortcuts);
+      if (ready && !busy) {
+        // Enabling restarts the hook with a fresh gesture, and the key only
+        // changes between gestures, so the key goes second.
+        await _native.invokeMethod('enable', shortcuts);
+        await _sendKey();
+      }
       _changed();
     });
   }
@@ -354,6 +404,7 @@ class VoiceController extends ChangeNotifier {
       }
       await _native.invokeMethod('blocklist', repo.captureBlocklist.toList());
       final registered = await _native.invokeMethod<bool>('enable', shortcuts);
+      await _sendKey();
       status = shortcuts && registered != true
           ? 'Voice is ready. Keyboard shortcut unavailable.'
           : 'Ready';
@@ -621,4 +672,13 @@ class VoiceController extends ChangeNotifier {
     if (supported) _native.setMethodCallHandler(null);
     super.dispose();
   }
+}
+
+/// A key Voice can listen on: a stable id for voice.json, the name people
+/// see, and the Windows virtual-key code the native hook watches.
+class VoiceKey {
+  const VoiceKey(this.id, this.label, this.vk);
+  final String id;
+  final String label;
+  final int vk;
 }

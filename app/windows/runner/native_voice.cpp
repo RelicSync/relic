@@ -34,15 +34,18 @@ using Action = relic_voice::Action;
 using State = relic_voice::State;
 constexpr UINT kDispatch = WM_APP + 171;
 constexpr UINT kInsertDone = WM_APP + 172;
-constexpr ULONG_PTR kOwnInput = 0x52454c56;  // Right Alt replays
+constexpr ULONG_PTR kOwnInput = 0x52454c56;  // voice key replays
 constexpr ULONG_PTR kOwnText = 0x52454c54;   // dictated text
-constexpr DWORD kVoiceAlt = VK_RMENU;
 constexpr size_t kBatch = 32;              // UTF-16 units per SendInput batch
 constexpr DWORD kBatchWaitMs = 2000;
 constexpr WPARAM kBlockedEvent = 100;
 constexpr LPARAM kNoteFlag = 1, kWaitingFlag = 2, kCanInsertFlag = 4;
 
 std::mutex state_mutex;
+// The key that dictates, chosen in Voice settings. Only keys that are safe to
+// hold and to double-tap are accepted (see VoiceKeyAllowed). Guarded by
+// state_mutex; the hook copies it once per event.
+DWORD voice_key = VK_RMENU;
 DWORD left_ctrl_down_at = 0;
 bool left_ctrl_down_seen = false;
 HWND owner = nullptr;
@@ -110,7 +113,19 @@ bool Password(HWND hwnd) {
   GetClassNameW(hwnd, cls, 80);
   return (_wcsicmp(cls, L"Edit") == 0 || wcsstr(cls, L"RichEdit")) && (GetWindowLongPtr(hwnd, GWL_STYLE) & ES_PASSWORD);
 }
-bool SystemAltDown() { return (GetAsyncKeyState(kVoiceAlt) & 0x8000) != 0; }
+bool SystemKeyDown(DWORD vk) { return (GetAsyncKeyState(static_cast<int>(vk)) & 0x8000) != 0; }
+bool VoiceKeyAllowed(DWORD vk) {
+  switch (vk) {
+    case VK_RMENU: case VK_RCONTROL: case VK_CAPITAL: case VK_APPS:
+    case VK_INSERT: case VK_SCROLL: case VK_PAUSE: return true;
+    default: return false;
+  }
+}
+// Keys whose physical scan code carries the E0 prefix, so a replay reads the
+// same to the target app as the real key did.
+bool Extended(DWORD vk) {
+  return vk == VK_RMENU || vk == VK_RCONTROL || vk == VK_APPS || vk == VK_INSERT;
+}
 // Callers hold state_mutex.
 void Snapshot() {
   ++target_generation;
@@ -140,13 +155,13 @@ void Emit(const std::string& event, LPARAM flags) {
     {Value("waiting"), Value((flags & kWaitingFlag) != 0)},
     {Value("app"), Value(app)}, {Value("can_insert"), Value((flags & kCanInsertFlag) != 0)}}));
 }
-void ReplayAlt(bool up) {
+void ReplayKey(DWORD vk, bool up) {
   INPUT input{}; input.type = INPUT_KEYBOARD;
-  input.ki.wVk = kVoiceAlt; input.ki.dwExtraInfo = kOwnInput;
-  input.ki.dwFlags = KEYEVENTF_EXTENDEDKEY | (up ? KEYEVENTF_KEYUP : 0);
+  input.ki.wVk = static_cast<WORD>(vk); input.ki.dwExtraInfo = kOwnInput;
+  input.ki.dwFlags = (Extended(vk) ? KEYEVENTF_EXTENDEDKEY : 0) | (up ? KEYEVENTF_KEYUP : 0);
   SendInput(1, &input, sizeof(INPUT));
 }
-// Callers hold state_mutex. Right Alt replays are collected, not sent, so they
+// Callers hold state_mutex. Voice key replays are collected, not sent, so they
 // go out after the lock is released (still before the hook returns).
 void Dispatch(const relic_voice::Decision& d, std::vector<bool>* replays) {
   for (auto action : d.actions) {
@@ -165,8 +180,8 @@ void Dispatch(const relic_voice::Decision& d, std::vector<bool>* replays) {
     PostMessage(owner, kDispatch, static_cast<WPARAM>(action), Flags());
   }
 }
-void Replay(const std::vector<bool>& replays) {
-  for (bool up : replays) ReplayAlt(up);
+void Replay(DWORD vk, const std::vector<bool>& replays) {
+  for (bool up : replays) ReplayKey(vk, up);
 }
 LRESULT CALLBACK Keyboard(int code, WPARAM message, LPARAM data) {
   last_hook_call = GetTickCount();
@@ -186,25 +201,32 @@ LRESULT CALLBACK Keyboard(int code, WPARAM message, LPARAM data) {
   const uint64_t now = relic_voice::EventTime(GetTickCount64(), GetTickCount(), key.time);
   std::vector<bool> replays;
   bool swallow = false;
+  DWORD vk;
   {
     std::lock_guard<std::mutex> lock(state_mutex);
+    vk = voice_key;
     relic_voice::Decision d;
     if (key.vkCode == VK_LCONTROL) {
       if (down && !left_ctrl_down_seen) left_ctrl_down_at = key.time;
       left_ctrl_down_seen = down;
     }
-    if (key.vkCode == kVoiceAlt) {
+    if (key.vkCode == vk) {
       // AltGr layouts precede Right Alt with a same-timestamp Left Ctrl event.
       // Only a Ctrl held before that pair selects voice-note mode.
       const bool ctrl = (GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0 &&
-          (!left_ctrl_down_seen || left_ctrl_down_at != key.time);
-      bool eligible = !(GetAsyncKeyState(VK_SHIFT) & 0x8000) && !(GetAsyncKeyState(VK_LWIN) & 0x8000) && !(GetAsyncKeyState(VK_RWIN) & 0x8000) && !(GetAsyncKeyState(VK_RCONTROL) & 0x8000) && !(GetAsyncKeyState(VK_LMENU) & 0x8000);
+          (vk != VK_RMENU || !left_ctrl_down_seen || left_ctrl_down_at != key.time);
+      // Another modifier held means a shortcut, not dictation. Left Ctrl is
+      // the voice-note modifier and the voice key never counts against itself.
+      bool eligible = !(GetAsyncKeyState(VK_SHIFT) & 0x8000);
+      for (DWORD other : {VK_LWIN, VK_RWIN, VK_RCONTROL, VK_LMENU, VK_RMENU}) {
+        if (other != vk && SystemKeyDown(other)) eligible = false;
+      }
       if (down && !gesture.alt_down && !ctrl && gesture.state == State::idle) {
         const auto app = App(GetForegroundWindow());
         if (AppBlocked(app)) eligible = false;
       }
       d = gesture.Alt(down, ctrl, eligible, now);
-      swallow = relic_voice::SafeSwallow(d.swallow, down, SystemAltDown());
+      swallow = relic_voice::SafeSwallow(d.swallow, down, SystemKeyDown(vk));
     } else {
       if (down && key.vkCode == VK_TAB && gesture.state != State::idle) valid_target = false;
       if (down && finishing && key.vkCode != VK_LCONTROL && key.vkCode != VK_RCONTROL) valid_target = false;
@@ -214,7 +236,7 @@ LRESULT CALLBACK Keyboard(int code, WPARAM message, LPARAM data) {
     }
     Dispatch(d, &replays);
   }
-  Replay(replays);
+  Replay(vk, replays);
   return swallow ? 1 : CallNextHookEx(nullptr, code, message, data);
 }
 LRESULT CALLBACK Mouse(int code, WPARAM message, LPARAM data) {
@@ -246,11 +268,13 @@ void HookThread(std::promise<bool> ready) {
     if (msg.message != WM_TIMER || msg.wParam != tick) { DispatchMessage(&msg); continue; }
     const uint64_t now = GetTickCount64();
     std::vector<bool> replays;
+    DWORD vk;
     {
       std::lock_guard<std::mutex> lock(state_mutex);
+      vk = voice_key;
       if (enabled) Dispatch(gesture.Tick(now), &replays);
     }
-    Replay(replays);
+    Replay(vk, replays);
     // Watchdog. Windows removes a hook that times out without telling anyone.
     // Input the system saw that neither hook did means ours are gone: put
     // them back. A false alarm costs one reinstall, at most every 10 s.
@@ -278,17 +302,19 @@ void SetEnabled(bool value) {
   enabled = false;
   StopHookThread();  // no hook runs past this line
   bool involved;
+  DWORD vk;
   {
     std::lock_guard<std::mutex> lock(state_mutex);
+    vk = voice_key;
     ++target_generation;
     involved = gesture.alt_down || gesture.owned_alt || gesture.forwarding;
     gesture = {}; finishing = false; valid_target = false; left_ctrl_down_seen = false;
   }
-  // Never leave Right Alt held down for other apps once this hook is gone:
+  // Never leave the voice key held down for other apps once this hook is gone:
   // always when Voice turns off or Relic quits, and on a restart whenever the
   // gesture had a hand in the key. If a finger really is on it, its own
   // release passes straight through and does no harm.
-  if (SystemAltDown() && (!value || involved)) ReplayAlt(true);
+  if (SystemKeyDown(vk) && (!value || involved)) ReplayKey(vk, true);
   if (!value) return;
   std::promise<bool> ready;
   auto installed = ready.get_future();
@@ -394,6 +420,18 @@ void InitializeNativeVoice(HWND window, flutter::BinaryMessenger* messenger) {
     const auto str = [&](const char* key) { if (!args) return std::string{}; auto it = args->find(Value(key)); return it != args->end() && std::holds_alternative<std::string>(it->second) ? std::get<std::string>(it->second) : std::string{}; };
     if (call.method_name() == "enable") {
       SetEnabled(call.arguments() && std::get<bool>(*call.arguments())); result->Success(Value(enabled.load()));
+    } else if (call.method_name() == "key") {
+      // Takes effect between gestures only; a take in progress keeps its key.
+      const auto* vk = call.arguments() ? std::get_if<int32_t>(call.arguments()) : nullptr;
+      bool changed = false;
+      if (vk && VoiceKeyAllowed(static_cast<DWORD>(*vk))) {
+        std::lock_guard<std::mutex> lock(state_mutex);
+        if (gesture.state == State::idle && !gesture.alt_down) {
+          voice_key = static_cast<DWORD>(*vk);
+          changed = true;
+        }
+      }
+      result->Success(Value(changed));
     } else if (call.method_name() == "blocklist") {
       std::lock_guard<std::mutex> lock(state_mutex);
       blocked.clear();

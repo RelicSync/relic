@@ -9,7 +9,9 @@ Downloads resume and every completed file is checked against its embedded SHA-25
 The three files are hosted on Relic's R2 bucket. There is no cloud speech service.
 
 - Hold the Voice key (physical Right Alt on Windows, Right Option on a Mac),
-  speak when the shadow pulses, release to finish.
+  speak when the shadow pulses, release to finish. On Windows the key can be
+  changed in Voice settings to Right Ctrl, Caps Lock, the Menu key, Insert,
+  Scroll Lock or Pause.
 - Double-tap the Voice key to keep recording, then tap once to finish.
 - Hold Left Ctrl (Control on a Mac) first for a voice note saved directly to
   the vault.
@@ -31,8 +33,9 @@ numpy polyphase filter in `resample.py`; the worker does not ship scipy. End use
 x64 with AVX2/FMA/F16C, or an Apple Silicon Mac, is required. Model weights stay resident while enabled.
 After at least five seconds of speech capture, a quiet pause lets the worker
 decode that completed segment while recording continues. The final result is
-still saved and inserted only after release. There are no forced cuts through
-continuous speech; uninterrupted long utterances can still take longer to finish.
+still saved and inserted only after release. Past 20 seconds a shorter pause
+is enough. A segment never runs past 30 seconds: speech with no pause at all is
+cut at the quietest moment of its last 5 seconds, so no audio is lost.
 Corrections and punctuation run once on the joined text.
 New background enrichment work yields while a voice session is active.
 
@@ -135,8 +138,8 @@ Windows holds every keystroke on the machine until a low-level hook answers,
 so a hook on the app's main thread made typing wait whenever the app was busy.
 Text goes out in batches of 32 characters. Each batch must pass through the
 hook before the next one is sent. A key press, a click, or a change of window
-between batches stops the rest. A Right Alt release is never hidden while
-Windows thinks the key is down, so Right Alt cannot get stuck. A watchdog
+between batches stops the rest. A Voice key release is never hidden while
+Windows thinks the key is down, so the key cannot get stuck. A watchdog
 reinstalls the hook if Windows drops it.
 
 Every inserted transcript ends with one space, so the next dictation or the
