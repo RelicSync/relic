@@ -72,6 +72,9 @@ dependencies:
   # iOS OAuth in an in-app ASWebAuthenticationSession (see data/oauth_flow.dart);
   # every other platform keeps the browser + callback path it already had.
   flutter_web_auth_2: ^5.0.3
+  # The store's own rating sheet (Play In-App Review / SKStoreReviewController),
+  # asked for once after the 10th capture on a phone. See data/review_prompt.dart.
+  in_app_review: ^2.0.12
 dev_dependencies:
   flutter_test:
     sdk: flutter

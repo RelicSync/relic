@@ -18,6 +18,7 @@ import 'data/help_urls.dart';
 import 'data/oauth_flow.dart';
 import 'data/pairing_link.dart';
 import 'data/repo.dart';
+import 'data/review_prompt.dart';
 import 'data/save_prefs.dart';
 import 'data/secure_key_store.dart';
 import 'data/share_dedup.dart';
@@ -360,6 +361,9 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   // The bottom sheet must open from a context *below* MaterialApp's Navigator;
   // this key gives us one (the State's own context is above it).
   final _navKey = GlobalKey<NavigatorState>();
+  // The one-time store rating request after the tenth capture. Off on every
+  // platform but Android and iOS (see [reviewPromptSupported]).
+  final _review = ReviewPrompt();
 
   Timer? _poll; // live refresh while the app is foregrounded
   bool _refreshing = false; // guard against overlapping loads
@@ -724,6 +728,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     repo.maskSecrets = _maskSecrets;
     repo.personalRank = _personalRank;
     repo.pasteRichText = _pasteRich;
+    repo.onUserCapture = _onUserCapture;
     // Searching during the first seconds of a launch is answered by the
     // degraded matcher while the real index builds; this repaints with the
     // proper ranking the moment it lands.
@@ -1306,6 +1311,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
       final repo = await _silentSupabaseRepo();
       if (repo != null) {
         repo.maskSecrets = _maskSecrets;
+        repo.onUserCapture = _onUserCapture;
         // Must precede any capture: _push saves the whole cache, so an unprimed
         // repo would write a one-item vault over the real one. See primeCache.
         await repo.primeCache();
@@ -1322,6 +1328,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
       autoVault: _autoVault,
       maskSecrets: _maskSecrets,
     );
+    repo.onUserCapture = _onUserCapture;
     await repo.primeCache();
     return _captureRepo = repo;
   }
@@ -1518,6 +1525,30 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   }
 
   String? mimeType(SharedMediaFile f) => f.mimeType;
+
+  /// A new item the user made on this phone landed (see
+  /// [WorkerRepo.onUserCapture]). Counts it, and on the tenth asks the store
+  /// for a rating once things have settled.
+  void _onUserCapture() {
+    unawaited(() async {
+      if (!await _review.recordCapture()) return;
+      // Let the "added" toast finish and any share batch wind down first.
+      await Future<void>.delayed(const Duration(seconds: 3));
+      await _review.askIfDue(calm: _calmForReview);
+    }());
+  }
+
+  /// Nothing else is on screen: the app is in front, the vault is open, and
+  /// no dialog, sheet, upgrade notice, editor or first-run screen sits on top
+  /// of the list. Anything else waits for a later capture.
+  bool _calmForReview() {
+    if (!mounted || _repo == null) return false;
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      return false;
+    }
+    final nav = _navKey.currentState;
+    return nav != null && !nav.canPop();
+  }
   String _basename(String path) => path.split(RegExp(r'[\\/]')).last;
 
   void _toast(String msg, {int seconds = 2}) {

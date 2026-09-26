@@ -184,6 +184,16 @@ class WorkerRepo implements RelicRepo {
   /// (possibly rotated) refresh token.
   void Function(WorkerRepo repo)? onSupabaseRefresh;
 
+  /// Called once for every new item the user made on this device: a share, a
+  /// clipboard trigger (Quick Settings tile, Shortcut), or a typed note. It is
+  /// the phone's "the user captured something" signal, which the one-time
+  /// store review prompt counts (see ReviewPrompt).
+  ///
+  /// Deliberately silent for everything else. A re-capture that only moves an
+  /// existing item to the top, an item pulled in from another device, an Undo
+  /// [restore], and the cache loading at launch never call it.
+  void Function()? onUserCapture;
+
   /// Sign in or sign up with Supabase, then bind sync using the access token as
   /// the Worker bearer. Identity = the stable Supabase user id; the long-lived
   /// refresh token is exposed via [refreshToken] for the host to persist.
@@ -2077,6 +2087,7 @@ class WorkerRepo implements RelicRepo {
     );
     _items.insert(0, r);
     await _push(r);
+    onUserCapture?.call();
     return true;
   }
 
@@ -2202,6 +2213,7 @@ class WorkerRepo implements RelicRepo {
     );
     _items.insert(0, r);
     await _push(r);
+    onUserCapture?.call();
     return r.uid;
   }
 
@@ -2236,6 +2248,7 @@ class WorkerRepo implements RelicRepo {
     );
     _items.insert(0, r);
     await _push(r);
+    onUserCapture?.call();
     return r.uid;
   }
 
@@ -2500,6 +2513,7 @@ class WorkerRepo implements RelicRepo {
     _indexUpsert(r); // show it in search immediately (blob upload continues async)
     _refreshWindow();
     unawaited(_finishNote(r, blobKey, bundle));
+    onUserCapture?.call();
     return true;
   }
 
