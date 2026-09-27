@@ -144,10 +144,13 @@ class _PhoneExpectationScreenState extends State<PhoneExpectationScreen> {
                   ),
                 ),
               ],
+              // Continue is the main button. Most phone-first people have no
+              // computer to hand, and the gold link button sent them off to
+              // one instead of into the app (2026-09-27 logs).
               _cta(c, 'Send me the download link',
-                  primary: true, onTap: _sending ? null : _send),
+                  primary: false, onTap: _sending ? null : _send),
               const SizedBox(height: Insets.sm),
-              _cta(c, 'Continue', primary: false, onTap: _continue),
+              _cta(c, 'Continue', primary: true, onTap: _continue),
             ],
           ),
         ),

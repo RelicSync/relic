@@ -182,6 +182,19 @@ void main() {
       );
     });
 
+    test('stays away while the list is empty', () {
+      expect(
+        showSecondVaultNotice(
+          connected: true,
+          deviceCount: 1,
+          anyFromOtherDevice: false,
+          itemCount: 0,
+          dismissed: false,
+        ),
+        isFalse,
+      );
+    });
+
     test('stays away once dismissed', () {
       expect(
         showSecondVaultNotice(

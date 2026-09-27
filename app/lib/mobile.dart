@@ -2352,6 +2352,17 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
         thisDeviceLabel: _deviceName,
         onJoinExistingVault: () =>
             unawaited(_confirmSwitchAccount(returning: true)),
+        // The phone's empty list: a button for each way in.
+        onNewNote: () => unawaited(_openCompose()),
+        onShareHelp: () {
+          final c = _navKey.currentContext;
+          if (c != null) {
+            showQuickCaptureTutorial(
+              c,
+              colors: _dark ? RelicColors.dark : RelicColors.light,
+            );
+          }
+        },
       );
       // Stack banners above the list: signed-out (the session was revoked) and
       // the verify-to-sync notice (email not confirmed).

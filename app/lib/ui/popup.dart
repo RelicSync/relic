@@ -54,7 +54,9 @@ const int secondVaultNoticeMaxItems = 20;
 /// anywhere else, and the list is still short. The last rule keeps it off the
 /// screen of someone who only ever uses one computer. [anyFromOtherDevice] is
 /// true when the caller cannot tell, so an unknown device label keeps the
-/// notice away.
+/// notice away. An empty list keeps it away too: that is every brand-new
+/// person on their first screen, and a phone showed them "you may have
+/// started a second vault" before they had saved anything.
 @visibleForTesting
 bool showSecondVaultNotice({
   required bool connected,
@@ -66,6 +68,7 @@ bool showSecondVaultNotice({
     connected &&
     deviceCount == 1 &&
     !anyFromOtherDevice &&
+    itemCount > 0 &&
     itemCount < secondVaultNoticeMaxItems &&
     !dismissed;
 
@@ -225,6 +228,14 @@ class PopupView extends StatefulWidget {
   /// cannot tell.
   final String? thisDeviceLabel;
 
+  /// Phone only: open the "+" composer. When set, the empty list shows the
+  /// phone version, which says how things get in on a phone (sharing or
+  /// writing a note) instead of promising automatic capture it can't do.
+  final VoidCallback? onNewNote;
+
+  /// Phone only: reopen the "how to share to Relic" walkthrough.
+  final VoidCallback? onShareHelp;
+
   const PopupView({
     super.key,
     required this.repo,
@@ -251,6 +262,8 @@ class PopupView extends StatefulWidget {
     this.onAddDevice,
     this.onJoinExistingVault,
     this.thisDeviceLabel,
+    this.onNewNote,
+    this.onShareHelp,
   });
 
   @override
@@ -3433,7 +3446,11 @@ class _PopupViewState extends State<PopupView> {
                                 : _scope == Scope.vault
                                     ? _EmptyVault(
                                         hotkey: widget.repo.keepHotkeyLabel)
-                                    : const _Empty())
+                                    : widget.onNewNote != null
+                                        ? _PhoneEmpty(
+                                            onNewNote: widget.onNewNote!,
+                                            onShareHelp: widget.onShareHelp)
+                                        : const _Empty())
                       : _maybeRefresh(
                           c,
                           ListView.builder(
@@ -3718,6 +3735,79 @@ class _Empty extends StatelessWidget {
                 ],
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The empty list on a phone. A phone can't watch the clipboard, so the
+/// desktop line ("copy anything and it lands here automatically") was wrong
+/// here: phone-only people copied something, saw nothing arrive, and left.
+/// In the 14 days to 2026-09-27, 12 phone-only accounts saved 1 item between
+/// them. This one names the two ways in and puts a button on each.
+class _PhoneEmpty extends StatelessWidget {
+  final VoidCallback onNewNote;
+  final VoidCallback? onShareHelp;
+  const _PhoneEmpty({required this.onNewNote, this.onShareHelp});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = RelicTheme.of(context);
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(Insets.xxxl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 66,
+              height: 66,
+              decoration: BoxDecoration(
+                color: c.panel,
+                borderRadius: BorderRadius.circular(Radii.card),
+                border: Border.all(color: c.border, width: 1),
+                boxShadow: Shadows.card(c),
+              ),
+              alignment: Alignment.center,
+              child: Icon(LucideIcons.share2, size: 28, color: c.textFaintest),
+            ),
+            const SizedBox(height: Insets.xl),
+            Text(
+              'Nothing here yet',
+              style: RelicTheme.headline(size: 17, color: c.text),
+            ),
+            const SizedBox(height: Insets.sm),
+            SizedBox(
+              width: 260,
+              child: Text(
+                'In any app, tap Share and pick Relic. Links, photos, text '
+                'and files all work. Or write a note here.',
+                textAlign: TextAlign.center,
+                style: RelicTheme.sans(
+                  size: 13,
+                  color: c.textMuted,
+                  height: 1.5,
+                ),
+              ),
+            ),
+            const SizedBox(height: Insets.xxl),
+            PrimaryButton(
+              icon: LucideIcons.plus,
+              label: 'Write a note',
+              height: 38,
+              onTap: onNewNote,
+            ),
+            if (onShareHelp != null) ...[
+              const SizedBox(height: Insets.md),
+              GhostButton(
+                icon: LucideIcons.share2,
+                label: 'How to share to Relic',
+                size: 34,
+                onTap: onShareHelp,
+              ),
+            ],
           ],
         ),
       ),
