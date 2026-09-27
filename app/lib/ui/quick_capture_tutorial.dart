@@ -430,7 +430,7 @@ class _QuickCaptureTutorial extends StatelessWidget {
             Text(
               'The simplest way in. In any app, tap Share and pick Relic. Text, '
               'images, PDFs, links, and files all land in your vault, no setup '
-              'required.',
+              'required. To write something yourself, tap the + button.',
               style: RelicTheme.sans(size: 13, color: c.textSecondary, height: 1.5),
             ),
           ],

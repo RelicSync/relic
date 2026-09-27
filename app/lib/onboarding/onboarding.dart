@@ -179,9 +179,29 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
     DeviceId.get().then((id) => _svc = OnboardingService(deviceId: id));
   }
 
+  // Form fields live on the state, not in build: a controller made in build
+  // is a new empty one on every rebuild, so any error message (which calls
+  // setState) wiped what the person had typed.
+  final _cpPhrase = TextEditingController();
+  final _cpConfirm = TextEditingController();
+  late final _cpName = TextEditingController(text: _deviceName);
+  late final _caEmail = TextEditingController(text: _email);
+  late final _caPass = TextEditingController(text: _password);
+  late final _caName = TextEditingController(text: _deviceName);
+
   @override
   void dispose() {
     _pairing?.cancel(); // stop any orphan relay poll when the flow is torn down
+    for (final t in [
+      _cpPhrase,
+      _cpConfirm,
+      _cpName,
+      _caEmail,
+      _caPass,
+      _caName,
+    ]) {
+      t.dispose();
+    }
     _shUrl.dispose();
     _shPass.dispose();
     _shSecret.dispose();
@@ -798,9 +818,9 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
 
   // OAuth create: already signed in via a provider; just set the vault passphrase.
   Widget _oauthCreatePassView(RelicColors c) {
-    final phrase = TextEditingController();
-    final confirm = TextEditingController();
-    final name = TextEditingController(text: _deviceName);
+    final phrase = _cpPhrase;
+    final confirm = _cpConfirm;
+    final name = _cpName;
     return _scroll(key: const ValueKey('oauthcreate'), [
       _header(c, 'Set your vault passphrase',
           '${_email.isEmpty ? 'Signed in' : 'Signed in as $_email'}. Your vault passphrase seals your data. We never see it and cannot reset it. Use a long phrase.'),
@@ -832,9 +852,9 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
   // later, after email confirmation and sign-in (see _signUpAccount, which routes
   // through the same set-passphrase step as OAuth).
   Widget _createForm(RelicColors c) {
-    final email = TextEditingController(text: _email);
-    final pass = TextEditingController(text: _password);
-    final name = TextEditingController(text: _deviceName);
+    final email = _caEmail;
+    final pass = _caPass;
+    final name = _caName;
     return _scroll(key: const ValueKey('create'), [
       _header(c, 'Create your account',
           'Start with just an email and a password. You will set your vault passphrase after you confirm your email.'),
@@ -885,6 +905,9 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         Expanded(
           child: _secondaryBtn(c, 'Copy', () {
             Clipboard.setData(ClipboardData(text: kit));
+            // Copying counts as saving it: many people keep it in a password
+            // manager, and a phone with no file app left them stuck here.
+            setState(() => _kitDownloaded = true);
             ScaffoldMessenger.of(context)
                 .showSnackBar(const SnackBar(content: Text('Recovery kit copied')));
           }),
@@ -894,7 +917,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
       ]),
       if (!_kitDownloaded) ...[
         const SizedBox(height: Insets.md),
-        Text('Download the kit to continue.',
+        Text('Copy or download the kit to continue.',
             style: RelicTheme.sans(size: 12.5, color: c.textMuted, height: 1.45)),
       ],
       const SizedBox(height: Insets.lg),
