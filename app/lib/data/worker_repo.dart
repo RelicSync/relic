@@ -1141,6 +1141,15 @@ class WorkerRepo implements RelicRepo {
   /// [_ensureKey] can still touch the network (legacy device-token mode has no
   /// cached master key), but it falls back to the cached keyparams and now runs
   /// under a deadline, so offline it costs at most [kNetTimeout] once.
+  /// Start minting the access token now, without waiting on it.
+  ///
+  /// The launch binds with an expired token and the first [syncDelta] refreshes
+  /// it, which put the refresh round trip after the cache decrypt instead of
+  /// alongside it. Calling this before [loadLocal] overlaps the two: the
+  /// refresh is in flight while the vault decrypts, and the first pass finds it
+  /// done or joins it. Offline it fails quietly, exactly as the pass would.
+  void warmToken() => unawaited(_maybeRefresh());
+
   Future<void> loadLocal() async {
     await _loadCache();
     BootTrace.mark('cache read');
@@ -1217,6 +1226,7 @@ class WorkerRepo implements RelicRepo {
     // guarantee an auth failure, and make the live-sync doorbell wait out a
     // backoff on every single launch.
     await _maybeRefresh();
+    _traceFirstSync('token ready');
     _ensureSocket();
     if (_mk == null) {
       try {
@@ -1232,50 +1242,15 @@ class WorkerRepo implements RelicRepo {
     await _flushOutbox();
     final before = _cacheStamp();
     try {
-      // account (best-effort)
-      try {
-        final a = await http
-            .get(Uri.parse(_u('/account')), headers: _headers)
-            .timeout(kNetTimeout);
-        if (a.statusCode == 200) {
-          final j = jsonDecode(a.body) as Map<String, dynamic>;
-          _account = AccountInfo(
-            tier: const {'pro': 'Pro', 'max': 'Max'}[j['tier'] as String] ?? 'Free',
-            usedBytes: (j['storage_used'] as num).toInt(),
-            quotaBytes: (j['storage_quota'] as num).toInt(),
-            vaultCount: (j['vault_count'] as num).toInt(),
-            vaultCap: (j['vault_cap'] as num?)?.toInt(),
-            // Optional: an older server, and every self-hosted one, sends
-            // none of these.
-            historyCount: (j['history_count'] as num?)?.toInt() ?? 0,
-            historyCap: (j['history_cap'] as num?)?.toInt(),
-            evictedCount: (j['evicted_count'] as num?)?.toInt() ?? 0,
-            devicesCap: (j['devices_cap'] as num?)?.toInt(),
-          );
-        }
-      } catch (_) {}
-      // The copies behind the free ring, as dates only. Only asked for when
-      // the account says something is waiting; a failed fetch keeps the last
-      // list rather than flickering the ghost rows away.
-      if ((_account?.evictedCount ?? 0) == 0) {
-        _waiting = const [];
-      } else {
-        try {
-          final w = await http
-              .get(Uri.parse(_u('/waiting')), headers: _headers)
-              .timeout(kNetTimeout);
-          if (w.statusCode == 200) {
-            final j = jsonDecode(w.body) as Map<String, dynamic>;
-            _waiting = [
-              for (final it in (j['items'] as List? ?? const []))
-                WaitingCopy(
-                  uid: (it as Map<String, dynamic>)['uid'] as String,
-                  createdAt: (it['created_at'] as num).toInt(),
-                ),
-            ];
-          }
-        } catch (_) {}
-      }
+      // Everything that is not the item pull goes out alongside it. The
+      // account line, the waiting list and the tombstones each used to be a
+      // round trip the list sat through before a new item could appear, and
+      // on a phone radio those round trips were most of the wait between
+      // opening the app and seeing what was copied yesterday. None of them
+      // puts an item on screen, so none of them stands in front of the one
+      // request that does.
+      final sideReads = _pullAccount();
+      final tombstones = _fetchTombstones();
 
       // relics changed since the cursor
       var changed = false;
@@ -1310,48 +1285,35 @@ class WorkerRepo implements RelicRepo {
         }
         // The whole page at once: one hop off the UI isolate opens every
         // envelope, and the index takes the page in slices between frames.
-        if (await _absorbEnvelopes(items)) changed = true;
+        if (await _absorbEnvelopes(items)) {
+          changed = true;
+          // On screen now. The pass used to publish once, at the very end,
+          // so a page that was already decrypted and indexed stayed invisible
+          // through the tombstone and AI round trips that followed it.
+          _publish();
+          _traceFirstSync('items shown');
+        }
         cursor = body['next_cursor'] as String?;
       } while (cursor != null);
       if (maxU - 1 > _cursor) _cursor = maxU - 1;
 
-      // tombstones (deletions from other devices)
-      final tr = await http.get(
-        Uri.parse(_u('/tombstones')).replace(
-          queryParameters: {'since': '$_tombCursor'},
-        ),
-        headers: _headers,
-      ).timeout(kNetTimeout);
-      if (tr.statusCode == 200) {
-        final items = (jsonDecode(tr.body)['items'] as List)
-            .cast<Map<String, dynamic>>();
-        var tmax = _tombCursor;
-        for (final t in items) {
-          final d = (t['deleted_at'] as num).toInt();
-          if (d > tmax) tmax = d;
-          final uid = t['uid'] as String;
-          // The AI record dies with its relic, as it does on the server.
-          _aiEnvByUid.remove(uid);
-          _aiByUid.remove(uid);
-          if (_envByUid.remove(uid) != null) {
-            _items.removeWhere((x) => x.uid == uid);
-            _indexDelete(uid);
-            _outbox.removeWhere((o) => o['uid'] == uid && o['op'] == 'put');
-            changed = true;
-          }
-        }
-        if (tmax - 1 > _tombCursor) _tombCursor = tmax - 1;
+      // tombstones (deletions from other devices), fetched alongside the pull
+      // and applied after it, so a snapshot taken before a delete cannot
+      // bring the row back.
+      final tombs = await tombstones;
+      if (tombs == null) {
+        _sync = const SyncState(SyncKind.offline);
+        return;
       }
+      if (_applyTombstones(tombs)) changed = true;
+      await sideReads;
 
       // AI records last, so an item that arrived in this same pass gets its
       // generated title now rather than a cycle later.
       if (await _pullAiRecords()) changed = true;
 
-      if (changed) {
-        _items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-        _refreshWindow(); // reflect pulled items in the active view
-        _changes.value++; // wake anything holding one of these items
-      }
+      if (changed) _publish();
+      _traceFirstSync('first sync done');
       _sync = SyncState(
         // A queued blob with no queued relic op still means "not fully synced".
         // The count stays the relic-op count: an offline capture queues both,
@@ -1368,6 +1330,111 @@ class WorkerRepo implements RelicRepo {
     } catch (_) {
       _sync = const SyncState(SyncKind.offline);
     }
+  }
+
+  /// Put what the pass has pulled so far on screen: sort, recompute the
+  /// visible window, and wake whatever is listening.
+  void _publish() {
+    _items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    _refreshWindow(); // reflect pulled items in the active view
+    _changes.value++; // wake anything holding one of these items
+  }
+
+  /// Startup marks for the first pass only. Every later pass is a background
+  /// tick, and marking those would grow the About page's timeline forever.
+  bool _firstSyncTraced = false;
+  void _traceFirstSync(String label) {
+    if (_firstSyncTraced) return;
+    if (label == 'first sync done') _firstSyncTraced = true;
+    BootTrace.mark(label);
+  }
+
+  /// The account line and, when the account says something is waiting behind
+  /// the free ring, the dates of those copies. Best effort: a failed fetch
+  /// keeps the last values rather than flickering the ghost rows away.
+  Future<void> _pullAccount() async {
+    try {
+      final a = await http
+          .get(Uri.parse(_u('/account')), headers: _headers)
+          .timeout(kNetTimeout);
+      if (a.statusCode == 200) {
+        final j = jsonDecode(a.body) as Map<String, dynamic>;
+        _account = AccountInfo(
+          tier: const {'pro': 'Pro', 'max': 'Max'}[j['tier'] as String] ?? 'Free',
+          usedBytes: (j['storage_used'] as num).toInt(),
+          quotaBytes: (j['storage_quota'] as num).toInt(),
+          vaultCount: (j['vault_count'] as num).toInt(),
+          vaultCap: (j['vault_cap'] as num?)?.toInt(),
+          // Optional: an older server, and every self-hosted one, sends
+          // none of these.
+          historyCount: (j['history_count'] as num?)?.toInt() ?? 0,
+          historyCap: (j['history_cap'] as num?)?.toInt(),
+          evictedCount: (j['evicted_count'] as num?)?.toInt() ?? 0,
+          devicesCap: (j['devices_cap'] as num?)?.toInt(),
+        );
+      }
+    } catch (_) {}
+    if ((_account?.evictedCount ?? 0) == 0) {
+      _waiting = const [];
+      return;
+    }
+    try {
+      final w = await http
+          .get(Uri.parse(_u('/waiting')), headers: _headers)
+          .timeout(kNetTimeout);
+      if (w.statusCode == 200) {
+        final j = jsonDecode(w.body) as Map<String, dynamic>;
+        _waiting = [
+          for (final it in (j['items'] as List? ?? const []))
+            WaitingCopy(
+              uid: (it as Map<String, dynamic>)['uid'] as String,
+              createdAt: (it['created_at'] as num).toInt(),
+            ),
+        ];
+      }
+    } catch (_) {}
+  }
+
+  /// The tombstones since [_tombCursor], or null when the server could not be
+  /// asked. Never throws: it runs alongside the item pull, and a failure here
+  /// has to wait its turn rather than surface while the pull is mid-page.
+  Future<List<Map<String, dynamic>>?> _fetchTombstones() async {
+    try {
+      final tr = await http.get(
+        Uri.parse(_u('/tombstones')).replace(
+          queryParameters: {'since': '$_tombCursor'},
+        ),
+        headers: _headers,
+      ).timeout(kNetTimeout);
+      if (tr.statusCode != 200) return null;
+      return (jsonDecode(tr.body)['items'] as List)
+          .cast<Map<String, dynamic>>();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Drop the relics these tombstones name, and advance the tombstone cursor.
+  /// Returns whether anything on screen changed.
+  bool _applyTombstones(List<Map<String, dynamic>> items) {
+    var changed = false;
+    var tmax = _tombCursor;
+    for (final t in items) {
+      final d = (t['deleted_at'] as num).toInt();
+      if (d > tmax) tmax = d;
+      final uid = t['uid'] as String;
+      // The AI record dies with its relic, as it does on the server.
+      _aiEnvByUid.remove(uid);
+      _aiByUid.remove(uid);
+      if (_envByUid.remove(uid) != null) {
+        _items.removeWhere((x) => x.uid == uid);
+        _indexDelete(uid);
+        _outbox.removeWhere((o) => o['uid'] == uid && o['op'] == 'put');
+        changed = true;
+      }
+    }
+    if (tmax - 1 > _tombCursor) _tombCursor = tmax - 1;
+    return changed;
   }
 
   /// Everything the cache file holds that a pass can change without touching
