@@ -3117,9 +3117,13 @@ class RelicDb {
 
   // --- vectors (semantic search) ---
 
+  /// Drop every stored embedding (the embedding model changed; see
+  /// LocalDeskRepo._noteVectorModel). The backfill pass rebuilds them.
+  void clearVectors() => _db.execute('DELETE FROM vectors');
+
   /// Replace ALL stored chunk vectors for [uid] atomically. Chunk 0 is the
   /// whole-doc embedding; further entries cover long-document chunks. An empty
-  /// [chunks] is a no-op — clearing vectors happens only via delete.
+  /// [chunks] is a no-op; clearing happens via delete or [clearVectors].
   void upsertVectors(String uid, List<List<double>> chunks) {
     if (chunks.isEmpty) return;
     _db.execute('BEGIN');

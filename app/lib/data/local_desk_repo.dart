@@ -1227,6 +1227,12 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   // Bump [_kPruneGen] whenever relic-sift retires more files; that is what makes
   // an upgrade re-run the sweep instead of skipping it forever.
   int _prunedGen = 0;
+  // The embedding model that built this device's stored vectors (sift's
+  // version string, e.g. `embeddinggemma-300m@int8-mrl256`). See
+  // [_noteVectorModel]. Null until the first vector or query embed reports one.
+  String? _vectorModel;
+  String? _tagModel; // model_version of the loaded tag-expansion table
+  static const String legacyVectorModel = 'embeddinggemma-300m@int8-mrl256';
   // Gen 1: Florence-2 (~246 MB) plus the `dml/` DirectML runtime, both dead
   // once Qwen3.5 took over labeling.
   static const int _kPruneGen = 1;
@@ -1690,6 +1696,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _describeEverything = j['describe_everything'] as bool? ?? false;
         _analysisSpeed = AnalysisSpeed.byName(j['analysis_speed'] as String?);
         _prunedGen = j['models_pruned_gen'] as int? ?? 0;
+        _vectorModel = j['vector_model'] as String?;
         _aiConverged = j['ai_records_converged'] as bool? ?? false;
         _uprightRescanned = j['upright_rescan_done'] as bool? ?? false;
         _aiOcr = j['ai_ocr'] as bool? ?? true;
@@ -1805,6 +1812,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           'describe_everything': _describeEverything,
           'analysis_speed': _analysisSpeed.name,
           'models_pruned_gen': _prunedGen,
+          if (_vectorModel != null) 'vector_model': _vectorModel,
           'ai_records_converged': _aiConverged,
           'upright_rescan_done': _uprightRescanned,
           'ai_ocr': _aiOcr,
@@ -1955,9 +1963,11 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     unawaited(_pruneRetiredModels());
     if (_mlEnrich && _sift != null) {
       _startEnrichWorker();
+      // Load the embed model before the first search. Its answer names the
+      // model, which is what stored vectors must match ([_noteVectorModel]).
       unawaited(
-        _sift!.warmUp(),
-      ); // load the embed model before the first search
+        _sift!.warmUp().then((_) => _noteVectorModel(_sift?.embedModel)),
+      );
       unawaited(_loadTagVectors()); // tag-expansion table (cached on disk)
     }
     // ML-independent: extract text from any backlog documents so they're
@@ -2117,20 +2127,32 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   // near it — an absolute cosine floor plus a spread from the TOP tag, so two
   // genuinely co-relevant sibling tags ("phone" + "number") can both fire
   // instead of vetoing each other.
-  static const double _tagFloor = 0.40; // min cosine to fire a tag
   static const double _tagSpread = 0.06; // max distance below the best tag
   static const int _tagMaxFire = 2; // at most this many tags per query
   static const int _tagCap = 50; // uids per fired tag (recency-ordered)
   static const double _tagWeight = 0.4; // RRF influence of the tag leg
   static const double _ftsWeight = 2.0; // RRF influence of the lexical leg
   static const double _recencyWeight = 0.5; // RRF influence of the recency leg
-  // Min cosine for a document to count as a semantic candidate at all —
-  // without a floor, top-K returns the "150 least-distant relics" for ANY
-  // query, inflating the match count with a garbage tail. Calibrated against
-  // the live Gemma embed model (2026-07): relevant query→doc cosines measured
-  // 0.40–0.74, irrelevant/garbage ≤ 0.37 — 0.38 separated them cleanly.
-  // Recalibrate if the embed model changes (BGE runs a higher, narrower band).
-  static const double _semFloor = 0.38;
+  // Cosine floors per embedding model, because every model spreads its scores
+  // differently (BGE runs a higher, narrower band than Gemma).
+  //   sem: min cosine for a document to count as a semantic candidate at all.
+  //        Without it, top-K returns the "150 least-distant relics" for ANY
+  //        query. Gemma, calibrated 2026-07: relevant query→doc cosines
+  //        measured 0.40–0.74, garbage ≤ 0.37, so 0.38 separates them.
+  //   tag: min cosine for a query to fire a tag in tag expansion.
+  // A new model needs its own row, measured on the eval set, before it ships.
+  // test/model_floors_test.dart fails if the model relic-sift prefers has none.
+  static const Map<String, ({double sem, double tag})> modelFloors = {
+    'embeddinggemma-300m@int8-mrl256': (sem: 0.38, tag: 0.40),
+  };
+  static const ({double sem, double tag}) _fallbackFloors = (sem: 0.38, tag: 0.40);
+
+  /// The floors for [model], or the Gemma values for a model with no row.
+  static ({double sem, double tag}) floorsFor(String? model) =>
+      modelFloors[model] ?? _fallbackFloors;
+
+  double get _semFloor => floorsFor(_vectorModel).sem;
+  double get _tagFloor => floorsFor(_vectorModel).tag;
   static const int _pool = 150; // fts/semantic candidate pool
   static const int _triPool = 50; // trigram pool (recall leg — keep it tight)
 
@@ -2391,6 +2413,51 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     }
   }
 
+  /// Record which embedding model produced the latest vector or query.
+  ///
+  /// A stored vector is only comparable with a query embedded by the same
+  /// model: two models put the same text in unrelated places, often at the
+  /// same dimension, so nothing else would notice a swap. Search would quietly
+  /// rank garbage until every item happened to be re-embedded.
+  ///
+  /// A vault with vectors but no recorded model was built by
+  /// [legacyVectorModel], the only text model shipped before this check
+  /// existed, so this works even if the check and a model swap arrive in the
+  /// same release. An empty vault simply adopts whatever model it first sees.
+  /// After that, a different model drops every stored vector, and
+  /// [_backfillVectors] rebuilds the index in the new space without re-running
+  /// OCR or the labeler. The tag-expansion table is rebuilt too. The model can
+  /// only change between runs (it ships inside the sift binary), so nothing
+  /// embedded this session is from the old one.
+  void _noteVectorModel(String? model) {
+    if (model == null || model.isEmpty) return;
+    if (model != _vectorModel) {
+      final previous = _vectorModel ?? (_vec.isNotEmpty ? legacyVectorModel : null);
+      _vectorModel = model;
+      _savePrefs();
+      if (previous != null && previous != model) {
+        _db?.clearVectors();
+        _vec.clear();
+        _embedSkip.clear();
+        debugPrint('embedding model changed ($previous -> $model): rebuilding vectors');
+        notifyListeners();
+      }
+    }
+    if (_tagModel != null && _tagModel != model && !_tagRefreshing) {
+      _tagRefreshing = true;
+      unawaited(_refreshTagVectors().whenComplete(() => _tagRefreshing = false));
+    }
+  }
+
+  @visibleForTesting
+  void debugNoteVectorModel(String? model) => _noteVectorModel(model);
+
+  @visibleForTesting
+  String? get debugVectorModel => _vectorModel;
+
+  @visibleForTesting
+  int get debugVectorCount => _vec.length;
+
   /// Load the tag-expansion table from the on-disk cache, refreshing it from the
   /// sift binary when the cache is missing or unreadable.
   Future<void> _loadTagVectors() async {
@@ -2398,7 +2465,10 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     try {
       if (f.existsSync()) {
         _parseTagVectors(jsonDecode(f.readAsStringSync()) as Map<String, dynamic>);
-        if (_tagVec.isNotEmpty) return;
+        // A table built by another model is a different space even at the
+        // same dimension, so the dim check in [_tagExpansion] can't catch it.
+        final stale = _vectorModel != null && _tagModel != _vectorModel;
+        if (_tagVec.isNotEmpty && !stale) return;
       }
     } catch (_) {/* fall through to refresh */}
     await _refreshTagVectors();
@@ -2418,6 +2488,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
 
   void _parseTagVectors(Map<String, dynamic> m) {
     _tagVec.clear();
+    _tagModel = m['model_version'] as String?;
     _tagDim = (m['dim'] as num?)?.toInt() ?? 0;
     for (final t in (m['tags'] as List? ?? const [])) {
       final tag = t['tag'] as String?;
@@ -5934,6 +6005,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _embedSkip.add(r.uid);
         continue;
       }
+      _noteVectorModel(res?.textModel);
       final chunks = [vec, ...?res?.textChunkVectors];
       db.upsertVectors(r.uid, chunks);
       _vec[r.uid] = [for (final c in chunks) Float32List.fromList(c)];
@@ -6013,6 +6085,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     // max across an item's chunks, so this needs nothing on the query side.
     var wroteVector = false;
     if (res.textVector != null && res.textVector!.isNotEmpty) {
+      _noteVectorModel(res.textModel);
       final chunks = [res.textVector!, ...?res.textChunkVectors];
       db.upsertVectors(r.uid, chunks);
       _vec[r.uid] = [for (final c in chunks) Float32List.fromList(c)];
