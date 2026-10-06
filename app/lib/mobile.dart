@@ -619,6 +619,9 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
           deviceId: deviceId,
         );
         repo.onSupabaseRefresh = (r) => _Creds.updateRefresh(r.refreshToken ?? '');
+        // The token refresh goes out now, while the cache decrypts behind
+        // it, so the first sync is not a round trip late before it starts.
+        repo.warmToken();
         return repo;
       }
     }
