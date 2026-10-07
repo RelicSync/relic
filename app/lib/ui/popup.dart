@@ -18,6 +18,7 @@ import '../data/text_transforms.dart';
 import '../models/relic.dart';
 import '../platform/store_safe.dart';
 import 'coach_marks.dart';
+import 'sync_nudge.dart';
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
 import '../util/blob_open.dart';
@@ -236,6 +237,11 @@ class PopupView extends StatefulWidget {
   /// Phone only: reopen the "how to share to Relic" walkthrough.
   final VoidCallback? onShareHelp;
 
+  /// Phone only: ask the server to email the desktop download link. When set
+  /// and this phone is the only device on the account, the sync card above
+  /// the list offers it. Throws with a message to show.
+  final Future<void> Function()? onSendDownloadLink;
+
   const PopupView({
     super.key,
     required this.repo,
@@ -264,6 +270,7 @@ class PopupView extends StatefulWidget {
     this.thisDeviceLabel,
     this.onNewNote,
     this.onShareHelp,
+    this.onSendDownloadLink,
   });
 
   @override
@@ -720,6 +727,9 @@ class _PopupViewState extends State<PopupView> {
   /// next thing worth having, and it is one screen away.
   void _maybeShowAddPhoneNudge() {
     if (widget.onAddDevice == null) return;
+    // The sync card above the list is already saying it; a toast on top of
+    // it would be the same ask twice.
+    if (_syncNudgeShowing(widget.deviceCount?.value, mobile: false)) return;
     final repo = widget.repo;
     if (!showAddPhoneNudge(
       desktop: !(Platform.isAndroid || Platform.isIOS),
@@ -760,6 +770,34 @@ class _PopupViewState extends State<PopupView> {
 
   void _dismissSecondVaultNotice() {
     unawaited(widget.repo.markSecondVaultNoticeDismissed());
+    setState(() {});
+  }
+
+  /// Whether the sync card belongs above the list for this device count. The
+  /// phone variant needs a way to send the link and the desktop one a way to
+  /// open pairing; a host that passes neither never shows it.
+  bool _syncNudgeShowing(int? count, {required bool mobile}) {
+    if (mobile
+        ? widget.onSendDownloadLink == null
+        : widget.onAddDevice == null) {
+      return false;
+    }
+    return showSyncNudge(
+      connected: widget.repo.account != null,
+      deviceCount: count,
+      itemCount: widget.repo.all.length,
+      snoozedUntil: widget.repo.syncNudgeSnoozedUntil,
+      now: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      desktop: !mobile,
+    );
+  }
+
+  /// "Not now" on the sync card: away for a fortnight, then back until the
+  /// account has a second device.
+  void _dismissSyncNudge() {
+    final until =
+        DateTime.now().add(syncNudgeSnooze).millisecondsSinceEpoch ~/ 1000;
+    unawaited(widget.repo.snoozeSyncNudge(until));
     setState(() {});
   }
 
@@ -3395,6 +3433,26 @@ class _PopupViewState extends State<PopupView> {
                     builder: (_, paused, _) => paused
                         ? _pausedBanner(c)
                         : const SizedBox.shrink(),
+                  ),
+                // The sync card: an account with one device has not found
+                // the point of Relic yet, so the list says it, on either
+                // side, until a second device joins.
+                if (!mini && widget.deviceCount != null)
+                  ValueListenableBuilder<int?>(
+                    valueListenable: widget.deviceCount!,
+                    builder: (ctx, count, _) {
+                      final mobile = RelicTheme.isMobileOf(ctx);
+                      if (!_syncNudgeShowing(count, mobile: mobile)) {
+                        return const SizedBox.shrink();
+                      }
+                      return SyncNudgeCard(
+                        key: const ValueKey('sync-nudge'),
+                        desktop: !mobile,
+                        onSendDownloadLink: widget.onSendDownloadLink,
+                        onAddDevice: widget.onAddDevice,
+                        onDismiss: _dismissSyncNudge,
+                      );
+                    },
                   ),
                 SearchField(
                   key: _kSearch,

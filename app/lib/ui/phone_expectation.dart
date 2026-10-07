@@ -3,15 +3,16 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../theme/relic_theme.dart';
 import '../theme/tokens.dart';
-import '../widgets/relic_mark.dart';
+import 'sync_nudge.dart' show SyncIllustration;
 
 /// The first thing a phone user sees after their first connect.
 ///
-/// A phone-only account dies inside a day. The reason is plain: people install
-/// Relic on the phone, wait for it to save what they copy, and nothing
-/// happens, because no phone OS lets an app watch the clipboard in the
-/// background. So this screen says it out loud on day one, and offers to email
-/// the desktop link while the person still cares.
+/// A phone-only account dies inside a day. People install Relic on the phone,
+/// wait for it to save what they copy, and nothing happens, because no phone
+/// OS lets an app watch the clipboard in the background. The point of Relic
+/// is the clipboard on every device, and the computer is where the capturing
+/// happens, so this screen shows that on day one and offers to email the
+/// desktop link while the person still cares.
 ///
 /// Shown once (the host keeps the `phone_expectation_seen` flag) and reachable
 /// again from the settings sheet.
@@ -65,7 +66,7 @@ class _PhoneExpectationScreenState extends State<PhoneExpectationScreen> {
       if (!mounted) return;
       setState(() {
         _sending = false;
-        _result = 'Sent. Open it on your computer.';
+        _result = 'Sent. Open it on your computer and sign in with this account.';
         _failed = false;
       });
     } catch (e) {
@@ -90,12 +91,13 @@ class _PhoneExpectationScreenState extends State<PhoneExpectationScreen> {
   @override
   Widget build(BuildContext context) {
     final c = RelicTheme.of(context);
+    final sent = _result != null && !_failed;
     return Scaffold(
       backgroundColor: c.base,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(
-              Insets.xxl, Insets.xxl, Insets.xxl, Insets.lg),
+              Insets.xxl, Insets.xl, Insets.xxl, Insets.lg),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -104,17 +106,19 @@ class _PhoneExpectationScreenState extends State<PhoneExpectationScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const RelicIcon(size: 44),
+                      const SizedBox(height: Insets.md),
+                      const SyncIllustration(),
                       const SizedBox(height: Insets.xxl),
                       Text(
-                        'Relic on a phone works differently',
+                        'Your clipboard, on every device',
                         style: RelicTheme.headline(size: 24, color: c.text),
                       ),
                       const SizedBox(height: Insets.lg),
                       Text(
-                        'On a computer, Relic saves what you copy by itself. '
-                        'On a phone, you share things to it on purpose. '
-                        'Your vault is the same on both.',
+                        'Copy something on your computer and it is on this '
+                        'phone a second later. Share something from this phone '
+                        'and it is waiting on your computer. One vault, every '
+                        'device.',
                         style: RelicTheme.sans(
                             size: 15, color: c.textSecondary, height: 1.55),
                       ),
@@ -144,13 +148,16 @@ class _PhoneExpectationScreenState extends State<PhoneExpectationScreen> {
                   ),
                 ),
               ],
-              // Continue is the main button. Most phone-first people have no
-              // computer to hand, and the gold link button sent them off to
-              // one instead of into the app (2026-09-27 logs).
-              _cta(c, 'Send me the download link',
-                  primary: false, onTap: _sending ? null : _send),
-              const SizedBox(height: Insets.sm),
-              _cta(c, 'Continue', primary: true, onTap: _continue),
+              // The link is the main button: the computer is where Relic
+              // earns its keep, and the card above the list keeps offering
+              // it until a second device joins. Once the mail has gone out,
+              // Continue takes the gold so the person is not sent off twice.
+              if (!sent) ...[
+                _cta(c, 'Send me the download link',
+                    primary: true, onTap: _sending ? null : _send),
+                const SizedBox(height: Insets.sm),
+              ],
+              _cta(c, 'Continue', primary: sent, onTap: _continue),
             ],
           ),
         ),
@@ -207,7 +214,7 @@ class _PhoneExpectationScreenState extends State<PhoneExpectationScreen> {
     );
   }
 
-  /// The quiet half: what the computer adds, so the mail button has a reason
+  /// The quiet half: what each side does, so the mail button has a reason
   /// next to it rather than reading as an ad.
   Widget _computerCard(RelicColors c) => Container(
         padding: const EdgeInsets.all(Insets.lg),
@@ -227,9 +234,22 @@ class _PhoneExpectationScreenState extends State<PhoneExpectationScreen> {
             ]),
             const SizedBox(height: Insets.sm),
             Text(
-              'Everything you copy is saved for you, and you can pull it back '
-              'with a hotkey. The phone is where you read it and share things '
-              'in.',
+              'Relic saves everything you copy by itself, and a hotkey brings '
+              'any of it back.',
+              style: RelicTheme.sans(
+                  size: 13, color: c.textSecondary, height: 1.5),
+            ),
+            const SizedBox(height: Insets.md),
+            Row(children: [
+              Icon(LucideIcons.smartphone, size: 15, color: c.accent),
+              const SizedBox(width: Insets.sm),
+              Text('On this phone',
+                  style: RelicTheme.headline(size: 14, color: c.text)),
+            ]),
+            const SizedBox(height: Insets.sm),
+            Text(
+              'A phone cannot watch the clipboard, so here you share things in '
+              'on purpose, and read everything from everywhere.',
               style: RelicTheme.sans(
                   size: 13, color: c.textSecondary, height: 1.5),
             ),

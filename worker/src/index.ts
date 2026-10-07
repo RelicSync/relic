@@ -18,7 +18,7 @@ import {
 } from "./blob";
 import { readUsage, ringDelta, usageDelta } from "./usage";
 import { type Auth, authenticate, REV_TTL, revKey } from "./auth";
-import { clampLimit, CORS, err, json } from "./http";
+import { clampLimit, CORS, err, json, pageLimitFor } from "./http";
 import { clientIp, rateLimit, withRateLimitHeaders } from "./ratelimit";
 import { deleteAccount, revokeSupabaseSessions } from "./account";
 import { sendDownloadLink } from "./download_link";
@@ -409,8 +409,14 @@ export async function listWaiting(env: Env, auth: Auth): Promise<Response> {
 
 export async function listRelics(url: URL, env: Env, auth: Auth): Promise<Response> {
   const since = Number(url.searchParams.get("since") ?? 0);
-  const limit = clampLimit(url.searchParams.get("limit"));
+  const limit = pageLimitFor(url.searchParams);
   const cursor = url.searchParams.get("cursor");
+  // Newest first, when asked. A device pulling a whole vault (a reconnect, a
+  // new phone) shows each page as it lands, and the page a person is waiting
+  // for is the one with yesterday's copies on it. The cursor walks down
+  // instead of up. A client moves its own `since` only once the walk is over,
+  // so the order changes nothing about what a later pull sees.
+  const desc = url.searchParams.get("order") === "desc";
 
   let sql =
     "SELECT uid, updated_at FROM relic_meta WHERE account_id = ?1 AND updated_at > ?2";
@@ -419,15 +425,23 @@ export async function listRelics(url: URL, env: Env, auth: Auth): Promise<Respon
   // everything, which is what makes an upgrade hand the old copies straight
   // back on the next pull.
   if (TIERS[auth.tier].ring !== null) sql += " AND evicted = 0";
+  // Only what the person saved to the vault. A device pulling a whole vault
+  // asks for these in a walk of their own ahead of everything else, since
+  // they are what someone who just reconnected goes looking for first.
+  if (url.searchParams.get("promoted") === "1") sql += " AND promoted = 1";
   const binds: (string | number)[] = [auth.account, since];
   if (cursor) {
     const sep = cursor.lastIndexOf(":");
     if (sep < 0) return err(400, "invalid_envelope", "bad cursor");
     binds.push(Number(cursor.slice(0, sep)), Number(cursor.slice(0, sep)), cursor.slice(sep + 1));
-    sql += " AND (updated_at > ?3 OR (updated_at = ?4 AND uid > ?5))";
+    sql += desc
+      ? " AND (updated_at < ?3 OR (updated_at = ?4 AND uid < ?5))"
+      : " AND (updated_at > ?3 OR (updated_at = ?4 AND uid > ?5))";
   }
   binds.push(limit);
-  sql += ` ORDER BY updated_at, uid LIMIT ?${binds.length}`;
+  sql += desc
+    ? ` ORDER BY updated_at DESC, uid DESC LIMIT ?${binds.length}`
+    : ` ORDER BY updated_at, uid LIMIT ?${binds.length}`;
 
   const rows = await env.DB.prepare(sql).bind(...binds).all<{ uid: string; updated_at: number }>();
   const items = (

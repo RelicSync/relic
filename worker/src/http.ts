@@ -30,6 +30,22 @@ export const clampLimit = (raw: string | null): number => {
   return Math.min(Math.max(n, 1), 500);
 };
 
+/// The most items one page of `GET /relics` holds for a client that does not
+/// send `order`. Those are the shipped phone builds. They ask for 500 a page
+/// with a ten second budget for the whole request, and on a vault of
+/// thousands of items a page of 500 can take longer than that on a radio.
+/// When it does, their pass dies and starts again from page one on the next
+/// tick, forever: one such phone sat on an empty list for ten minutes. A
+/// hundred keeps every page of theirs well inside the budget. Clients that
+/// send `order` size their own pages and shrink them when one is slow.
+export const LEGACY_PAGE = 100;
+
+/// The page size `GET /relics` uses for this request. See [LEGACY_PAGE].
+export const pageLimitFor = (params: URLSearchParams): number => {
+  const n = clampLimit(params.get("limit"));
+  return params.has("order") ? n : Math.min(n, LEGACY_PAGE);
+};
+
 /// The headers a route carries while it is being retired (docs/api.md
 /// "Versioning and deprecation"): `Deprecation` (RFC 9745) says since when,
 /// `Sunset` (RFC 8594) says the date it stops answering, and a

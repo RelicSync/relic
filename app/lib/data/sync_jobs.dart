@@ -47,12 +47,21 @@ Future<T> offThread<T>(Future<T> Function() job) async {
 }
 
 /// Build the in-memory relic from its envelope and opened payload.
-Relic relicFromEnvelope(Map<String, dynamic> env, Map<String, dynamic> p) =>
+///
+/// [kindFallback] is what a payload with no `kind` becomes. The phone has
+/// always read that as `other` and the desktop as `string`; every payload a
+/// shipped client seals carries a kind, so this only keeps each side exactly
+/// as it was.
+Relic relicFromEnvelope(
+  Map<String, dynamic> env,
+  Map<String, dynamic> p, {
+  String kindFallback = 'other',
+}) =>
     Relic(
       uid: env['uid'] as String,
       createdAt: (env['created_at'] as num).toInt(),
       updatedAt: (env['updated_at'] as num).toInt(),
-      kind: kindFromStr(p['kind'] as String? ?? 'other'),
+      kind: kindFromStr(p['kind'] as String? ?? kindFallback),
       source: sourceFromStr(p['source'] as String? ?? 'api'),
       promoted: env['promoted'] as bool? ?? false,
       byteSize: (env['byte_size'] as num?)?.toInt() ?? 0,
@@ -76,11 +85,17 @@ Relic relicFromEnvelope(Map<String, dynamic> env, Map<String, dynamic> p) =>
 /// The result lines up with [envs] by index; a null means that envelope would
 /// not open under this key (or was malformed), and the caller leaves it out.
 Future<List<Relic?>> openRelicEnvelopes(
-        Uint8List mk, List<Map<String, dynamic>> envs) =>
-    offThread(() => _openRelicEnvelopes(mk, envs));
+  Uint8List mk,
+  List<Map<String, dynamic>> envs, {
+  String kindFallback = 'other',
+}) =>
+    offThread(() => _openRelicEnvelopes(mk, envs, kindFallback));
 
 Future<List<Relic?>> _openRelicEnvelopes(
-    Uint8List mk, List<Map<String, dynamic>> envs) async {
+  Uint8List mk,
+  List<Map<String, dynamic>> envs,
+  String kindFallback,
+) async {
   final out = <Relic?>[];
   for (final env in envs) {
     Map<String, dynamic>? p;
@@ -92,7 +107,7 @@ Future<List<Relic?>> _openRelicEnvelopes(
     Relic? r;
     if (p != null) {
       try {
-        r = relicFromEnvelope(env, p);
+        r = relicFromEnvelope(env, p, kindFallback: kindFallback);
       } catch (_) {
         r = null;
       }

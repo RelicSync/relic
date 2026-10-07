@@ -32,6 +32,8 @@ import 'relic_db.dart';
 import 'repo.dart';
 import 'secure_key_store.dart';
 import 'sift.dart';
+import 'pull_walk.dart';
+import 'sync_jobs.dart';
 import 'sync_socket.dart';
 import 'supabase_auth.dart';
 
@@ -342,6 +344,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   bool _flushing = false;
   bool _flushAgain = false; // a kick that arrived mid-flush; run once more
   bool _pulling = false;
+  /// The pull in progress, kept between cycles so a page that failed is
+  /// asked for again where the walk left off. Null once a pull is over.
+  PullWalk? _walk;
   bool _manualSync = false; // a user-triggered syncNow() is in flight
   // Blob upload progress by relic uid (0..1) while a push is uploading its blob.
   // Drives the determinate "Uploading NN%" row/chip state; cleared on completion.
@@ -494,6 +499,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     final switched = prev != null && prev != identity;
     if (switched) {
       _cursor = 0;
+      _walk = null; // the other account's pages mean nothing here
       _tombCursor = 0;
       _aiCursor = 0;
       _lastSyncAt = 0;
@@ -780,6 +786,17 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   Future<void> markAddPhoneNudgeShown() async {
     if (_addPhoneNudgeShown) return;
     _addPhoneNudgeShown = true;
+    _savePrefs();
+  }
+
+  /// The sync card above the list, put off with "Not now" until this moment
+  /// (seconds since the epoch). Zero means it has never been put off.
+  int _syncNudgeSnoozedUntil = 0;
+  @override
+  int get syncNudgeSnoozedUntil => _syncNudgeSnoozedUntil;
+  @override
+  Future<void> snoozeSyncNudge(int until) async {
+    _syncNudgeSnoozedUntil = until;
     _savePrefs();
   }
 
@@ -1727,6 +1744,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _secondVaultNoticeDismissed =
             j['second_vault_notice_dismissed'] as bool? ?? false;
         _addPhoneNudgeShown = j['add_phone_nudge_shown'] as bool? ?? false;
+        _syncNudgeSnoozedUntil =
+            (j['sync_nudge_snoozed_until'] as num?)?.toInt() ?? 0;
         _demoNudgeShown = j['demo_nudge_dismissed'] as bool? ?? false;
         _captureText = j['capture_text'] as bool? ?? true;
         _captureImages = j['capture_images'] as bool? ?? true;
@@ -1835,6 +1854,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           'keep_hint_shown': _keepHintShown,
           'second_vault_notice_dismissed': _secondVaultNoticeDismissed,
           'add_phone_nudge_shown': _addPhoneNudgeShown,
+          'sync_nudge_snoozed_until': _syncNudgeSnoozedUntil,
           'demo_nudge_dismissed': _demoNudgeShown,
           'capture_text': _captureText,
           'capture_images': _captureImages,
@@ -5640,20 +5660,35 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     if (firstSync) notifyListeners();
     try {
       var changed = false;
-      var maxU = _cursor;
-      String? cursor;
-      do {
-        final q = {
-          'since': '$_cursor',
-          'limit': '500',
-          'cursor': ?cursor,
-        };
-        final resp = await http
-            .get(
-              Uri.parse(_u('/relics')).replace(queryParameters: q),
-              headers: _h,
-            )
-            .timeout(_pageTimeout);
+      // A cold pull (a reconnect, a fresh install) brings the whole vault
+      // down, and each page goes on screen as it lands. Two walks, newest
+      // first: the vault items on their own, since they are what a person
+      // goes looking for first, then everything; the second walk sees the
+      // vault items again and skips them as not news. The walk outlives
+      // the cycle: a page that fails is asked for again next cycle, from
+      // where the walk left off rather than from page one, and smaller if
+      // it was the time (see [PullWalk]). The cursor moves only once the
+      // whole pull is over, so nothing is ever skipped. A server without
+      // the flags pages ascending and hands back everything on the first
+      // walk, which is slower on a cold pull and wrong in no other way.
+      var walk = _walk;
+      if (walk == null || walk.since != _cursor) {
+        walk = _walk = PullWalk(since: _cursor);
+      }
+      while (!walk.done) {
+        final clock = Stopwatch()..start();
+        final http.Response resp;
+        try {
+          resp = await http
+              .get(
+                Uri.parse(_u('/relics')).replace(queryParameters: walk.query()),
+                headers: _h,
+              )
+              .timeout(_pageTimeout);
+        } on TimeoutException {
+          walk.pageTimedOut();
+          rethrow;
+        }
         if (resp.statusCode != 200) {
           appendSyncLog(
             'pull /relics -> ${resp.statusCode} '
@@ -5672,14 +5707,20 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         final body = jsonDecode(resp.body) as Map<String, dynamic>;
         final items = (body['items'] as List).cast<Map<String, dynamic>>();
         for (final env in items) {
-          final u = (env['updated_at'] as num).toInt();
-          if (u > maxU) maxU = u;
-          final r = await _decryptEnv(env);
-          if (r != null && _mergeRemote(r)) changed = true;
+          walk.saw((env['updated_at'] as num).toInt());
         }
-        cursor = body['next_cursor'] as String?;
-      } while (cursor != null);
-      if (maxU - 1 > _cursor) _cursor = maxU - 1;
+        if (await _absorbPage(db, items)) {
+          changed = true;
+          // On screen now. The pull used to repaint once, after the last
+          // page, so a reconnect sat on "Syncing" with an empty list for
+          // as long as the whole vault took to come down.
+          _refreshWindow();
+          notifyListeners();
+        }
+        walk.pageLanded(body['next_cursor'] as String?, clock.elapsed);
+      }
+      _walk = null;
+      if (walk.nextSince > _cursor) _cursor = walk.nextSince;
 
       final tr = await http
           .get(
@@ -5739,37 +5780,65 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     }
   }
 
-  /// Upsert a pulled relic into SQLite if it's new or strictly newer (LWW).
-  bool _mergeRemote(Relic r) {
-    final db = _db!;
-    // Locally deleted with the tombstone still in flight: a pull snapshot
-    // from before the delete must not resurrect the row.
-    if (db.hasPendingDelete(r.uid)) return false;
+  /// Open one pulled page off the UI isolate and write the rows that are
+  /// news in one transaction. Returns whether anything changed.
+  ///
+  /// This used to be one await per envelope, decrypting on the UI isolate,
+  /// then one transaction per row with the index text derived inline. A
+  /// vault of ten thousand items coming down on a reconnect ran that loop
+  /// ten thousand times, with the window frozen for stretches of it. Now
+  /// the page is one hop to another isolate for the decrypt, one more for
+  /// the index text, and one prepared transaction for the rows.
+  Future<bool> _absorbPage(RelicDb db, List<Map<String, dynamic>> envs) async {
+    final mk = _mk;
+    if (mk == null || envs.isEmpty) return false;
+    final opened = await openRelicEnvelopes(mk, envs, kindFallback: 'string');
+    final fresh = <Relic>[];
+    for (var i = 0; i < envs.length; i++) {
+      final r = opened[i];
+      if (r == null) continue;
+      final blobKey = envs[i]['blob_key'] as String?;
+      if (blobKey != null) _uploaded.add(blobKey); // already on the Worker
+      final row = _remoteRow(db, r);
+      if (row != null) fresh.add(row);
+    }
+    if (fresh.isEmpty) return false;
+    var derived = const <String, IndexText>{};
+    try {
+      final rows = await deriveIndexTextOffThread(fresh);
+      derived = {for (final d in rows) d.uid: d};
+    } catch (_) {
+      // upsertMany derives inline for anything missing from the map.
+    }
+    db.upsertMany(fresh, derived: derived);
+    for (final r in fresh) {
+      db.clearSyncRejection(r.uid, 'push');
+    }
+    return true;
+  }
+
+  /// The row a pulled relic should be written as, or null when it is not
+  /// news here: the local copy is as new or newer (LWW), or it was deleted
+  /// here with the tombstone still in flight, and a pull snapshot from
+  /// before the delete must not resurrect it.
+  Relic? _remoteRow(RelicDb db, Relic r) {
+    if (db.hasPendingDelete(r.uid)) return null;
+    final existing = db.updatedAtOf(r.uid);
+    if (existing != null && r.updatedAt <= existing) return null;
     // A peer's payload carries the tags IT knows — machine tags this user
     // explicitly removed (suppressed locally) must not ride back in via LWW.
     // Suppression is stored lowercased; compare case-blind.
     final suppressed = db.suppressedTags(r.uid).toSet();
     if (suppressed.isNotEmpty &&
         r.tags.any((t) => suppressed.contains(t.toLowerCase()))) {
-      r = r.copyWith(
+      return r.copyWith(
         tags: [
           for (final t in r.tags)
             if (!suppressed.contains(t.toLowerCase())) t,
         ],
       );
     }
-    final existing = db.updatedAtOf(r.uid);
-    if (existing == null) {
-      db.upsert(r);
-      db.clearSyncRejection(r.uid, 'push');
-      return true;
-    }
-    if (r.updatedAt > existing) {
-      db.upsert(r);
-      db.clearSyncRejection(r.uid, 'push');
-      return true;
-    }
-    return false;
+    return r;
   }
 
   /// Eagerly download blobs for synced *photo* relics whose bytes aren't local
@@ -6515,35 +6584,6 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       if (rec != null && _applyAiRecord(db, rec)) changed = true;
     }
     return changed;
-  }
-
-  Future<Relic?> _decryptEnv(Map<String, dynamic> env) async {
-    final p = await RelicCrypto.openRelicPayload(_mk!, env);
-    if (p == null) return null;
-    final blobKey = env['blob_key'] as String?;
-    if (blobKey != null) _uploaded.add(blobKey); // already on the Worker
-    return Relic(
-      uid: env['uid'] as String,
-      createdAt: (env['created_at'] as num).toInt(),
-      updatedAt: (env['updated_at'] as num).toInt(),
-      kind: kindFromStr(p['kind'] as String? ?? 'string'),
-      source: sourceFromStr(p['source'] as String? ?? 'api'),
-      promoted: env['promoted'] as bool? ?? false,
-      byteSize: (env['byte_size'] as num?)?.toInt() ?? 0,
-      device: p['device'] as String?,
-      mime: p['mime'] as String?,
-      filename: p['filename'] as String?,
-      blobKey: blobKey,
-      tags: (p['tags'] as List?)?.cast<String>() ?? const [],
-      userTags: (p['user_tags'] as List?)?.cast<String>() ?? const [],
-      title: p['title'] as String?,
-      note: p['note'] as String?,
-      content: p['content'] as String?,
-      preview: p['preview'] as String?,
-      attachments: Attachment.listFrom(p['attachments']),
-      rich: RichBody.fromJson(p['rich']),
-      voice: Relic.voiceFrom(p['voice']),
-    );
   }
 
   Future<void> _fetchAccount() async {

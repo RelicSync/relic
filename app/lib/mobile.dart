@@ -619,6 +619,9 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
           deviceId: deviceId,
         );
         repo.onSupabaseRefresh = (r) => _Creds.updateRefresh(r.refreshToken ?? '');
+        // The token refresh goes out now, while the cache decrypts behind
+        // it, so the first sync is not a round trip late before it starts.
+        repo.warmToken();
         return repo;
       }
     }
@@ -742,11 +745,11 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     // straight after syncDelta, which is the first moment the token is valid.
     _startPolling();
     _flushPending();
-    unawaited(_maybeShowFirstRunScreens());
+    unawaited(_maybeShowFirstRunScreens(repo));
     // Both feed the second-vault notice, and both are quiet until they land:
     // an unknown device count and an unread dismissal flag keep it hidden.
     unawaited(_refreshDeviceCount(repo));
-    unawaited(repo.loadSecondVaultNoticePref().whenComplete(() {
+    unawaited(repo.loadNoticePrefs().whenComplete(() {
       if (mounted) setState(() {});
     }));
   }
@@ -868,8 +871,15 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   /// The one-time first-connect run, in order: what a phone actually does,
   /// then how to get things into it. The expectation screen goes first because
   /// it is the frame the walkthrough hangs on.
-  Future<void> _maybeShowFirstRunScreens() async {
+  ///
+  /// A phone that just created the vault is the only device on the account,
+  /// and the sync card above the list is already asking it for a computer.
+  /// Opening the capture-tile walkthrough on top of that is a third pitch in
+  /// a row, about the wrong thing, so it stays in Settings and the How to
+  /// share sheet for that phone. A phone that joined a vault gets it as before.
+  Future<void> _maybeShowFirstRunScreens(WorkerRepo repo) async {
     await _maybeShowPhoneExpectationOnce();
+    if (repo.vaultJustCreated) return;
     await _maybeShowTutorialOnce();
   }
 
@@ -2352,6 +2362,13 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
         thisDeviceLabel: _deviceName,
         onJoinExistingVault: () =>
             unawaited(_confirmSwitchAccount(returning: true)),
+        // The sync card: a phone that is the only device on its account is
+        // asked for a computer until one joins.
+        onSendDownloadLink: () async {
+          final r = _repo;
+          if (r == null) throw StateError('Connect first, then try again.');
+          await r.sendDownloadLink();
+        },
         // The phone's empty list: a button for each way in.
         onNewNote: () => unawaited(_openCompose()),
         onShareHelp: () {
