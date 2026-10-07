@@ -50,6 +50,9 @@ void main() {
   late Map<String, Object?> first;
   late Map<String, Object?> rest;
   late Completer<void> release;
+  // The page behind the cursor is refused once, the way a dropped request
+  // or a page that outlived its budget looks from the client.
+  late bool restFailOnce;
 
   Future<Map<String, dynamic>> envFor(String uid, String content, int at,
       {bool promoted = false}) async {
@@ -79,6 +82,7 @@ void main() {
     first = {'items': const <Object>[], 'next_cursor': null};
     rest = {'items': const <Object>[], 'next_cursor': null};
     release = Completer<void>();
+    restFailOnce = false;
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     url = 'http://127.0.0.1:${server.port}';
     unawaited(server.forEach((req) async {
@@ -99,6 +103,10 @@ void main() {
           await json(vault);
         } else if (q['cursor'] == null) {
           await json(first);
+        } else if (restFailOnce) {
+          restFailOnce = false;
+          req.response.statusCode = 503;
+          await req.response.close();
         } else {
           await release.future;
           await json(rest);
@@ -197,6 +205,41 @@ void main() {
     expect(uids.indexOf(newest), lessThan(uids.indexOf(saved)));
     expect(uids.indexOf(saved), lessThan(uids.indexOf(oldest)));
     expect(repo.syncBusy, isFalse);
+  });
+
+  test('a cycle that loses a page picks it up next cycle, not page one',
+      () async {
+    if (guarded) {
+      markTestSkipped('RELIC_DATA_DIR sandbox not set — skipping repo test');
+      return;
+    }
+    final tag = DateTime.now().microsecondsSinceEpoch;
+    final newest = 'new-$tag';
+    final oldest = 'old-$tag';
+    first = {
+      'items': [await envFor(newest, 'copied yesterday $tag', 200)],
+      'next_cursor': '200:$newest',
+    };
+    rest = {
+      'items': [await envFor(oldest, 'copied last year $tag', 100)],
+      'next_cursor': null,
+    };
+    restFailOnce = true;
+    release.complete();
+    final repo = await bound();
+    // The first page lands and is on screen; the page behind it is refused.
+    await repo.syncNow();
+    expect(repo.all.any((r) => r.uid == newest), isTrue);
+    expect(repo.all.any((r) => r.uid == oldest), isFalse);
+    final asked = pulls.length;
+    // The next cycle asks for that page alone and the pull completes.
+    pulls.clear();
+    await repo.syncNow();
+    expect(pulls.map((q) => q['cursor']), ['200:$newest']);
+    expect(pulls.single['promoted'], isNull);
+    expect(repo.all.any((r) => r.uid == oldest), isTrue);
+    expect(asked, greaterThanOrEqualTo(2),
+        reason: 'the first cycle got as far as the page behind the cursor');
   });
 
   test('a page the vault already has leaves the window alone', () async {

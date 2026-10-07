@@ -16,6 +16,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:relic_crypto/relic_crypto.dart';
+import 'package:relic_app/data/pull_walk.dart';
 import 'package:relic_app/data/supabase_auth.dart';
 import 'package:relic_app/data/worker_repo.dart';
 import 'package:relic_app/widgets/chrome.dart' show SyncKind;
@@ -42,6 +43,9 @@ void main() {
   late List<Map<String, dynamic>> page;
   late List<Map<String, dynamic>> tombs;
   late bool tombstonesFail;
+  // The next full-walk page is refused once, the way an edge that drops a
+  // request or a page that outlives its budget looks from the client.
+  late bool relicsFailOnce;
 
   Future<Map<String, dynamic>> envFor(String uid, String content) async {
     final sealed = await RelicCrypto.sealRelicPayload(mk, uid, {
@@ -78,6 +82,7 @@ void main() {
     page = [await envFor('fresh', 'copied on the desktop yesterday')];
     tombs = [];
     tombstonesFail = false;
+    relicsFailOnce = false;
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     url = 'http://127.0.0.1:${server.port}';
     unawaited(server.forEach((req) async {
@@ -88,6 +93,15 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 400));
       }
       if (path == '/tombstones' && tombstonesFail) {
+        req.response.statusCode = 503;
+        await req.response.close();
+        answered.add(path);
+        return;
+      }
+      if (path == '/relics' &&
+          relicsFailOnce &&
+          req.uri.queryParameters['promoted'] != '1') {
+        relicsFailOnce = false;
         req.response.statusCode = 503;
         await req.response.close();
         answered.add(path);
@@ -201,6 +215,36 @@ void main() {
     await r.syncDelta();
     expect(pulls.map((q) => q['promoted']), [null]);
     expect(pulls.single['since'], isNot('0'));
+  });
+
+  test('a pass that loses a page picks it up next pass, not page one',
+      () async {
+    // The vault walk lands; the first page of everything is refused. The
+    // pass is offline, but what landed is on screen and the walk is kept.
+    relicsFailOnce = true;
+    final r = await repo();
+    await r.loadLocal();
+    await r.syncDelta();
+    expect(r.sync.kind, SyncKind.offline);
+    expect(r.all.map((x) => x.uid), ['fresh'],
+        reason: 'the vault page that landed stays on screen');
+    expect(pulls.map((q) => q['promoted']), ['1', null]);
+    expect(pulls.first['limit'], '${PullWalk.firstPage}');
+
+    // The next pass asks for the page that failed, and only that: the vault
+    // walk is not run again, and the pull then completes.
+    pulls.clear();
+    await r.syncDelta();
+    expect(pulls.map((q) => q['promoted']), [null]);
+    expect(pulls.single['since'], '0');
+    expect(r.sync.kind, SyncKind.synced);
+
+    // With the pull over, the cursor has moved and the next pass is a plain
+    // one-walk delta.
+    pulls.clear();
+    await r.syncDelta();
+    expect(pulls.single['since'], isNot('0'));
+    expect(pulls.single['promoted'], isNull);
   });
 
   test('a tombstone fetched alongside the pull still removes the item',

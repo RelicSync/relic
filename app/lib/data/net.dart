@@ -17,6 +17,15 @@ library;
 /// hasn't answered in this long, the cached vault is the better answer.
 const Duration kNetTimeout = Duration(seconds: 10);
 
+/// One page of the item pull. The budget covers the whole request, body
+/// included. A page is sized by the walk that asks for it (PullWalk), which
+/// starts small and shrinks the next page when one runs out of time, so this
+/// only has to be long enough for a full page on a slow radio to normally
+/// land, and short enough that a page that never will does not hold the
+/// list for long. The old ten seconds with a fixed page of 500 was neither,
+/// and a phone with a big vault pulled the same pages over and over.
+const Duration kPageTimeout = Duration(seconds: 20);
+
 /// Blob download / upload, where the size isn't known up front. Relics run to
 /// 100 MB (maxItemBytes) and this deadline covers the whole body, not just the
 /// connect, so it has to tolerate a big file on a slow link. Still bounded: a
