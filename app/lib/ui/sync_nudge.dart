@@ -248,26 +248,26 @@ class SyncIllustration extends StatelessWidget {
       );
     }
 
+    // One centred row with the same gap either side of the gem, and the gem
+    // centred on the screens' midline. Giving each screen half the width
+    // put the wide computer close to the gem and the narrow phone far from
+    // it, so the whole thing read as leaning left.
     return SizedBox(
       height: 118,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Expanded(
-            child: Align(
-              alignment: Alignment.bottomCenter,
-              child: screen(
-                  width: 128, height: 88, icon: LucideIcons.monitor, radius: 10),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 30),
-            child: Column(
+      child: Center(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            screen(
+                width: 128, height: 88, icon: LucideIcons.monitor, radius: 10),
+            const SizedBox(width: 22),
+            Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 const RelicIcon(size: 28),
                 const SizedBox(height: 6),
-                Row(children: [
+                Row(mainAxisSize: MainAxisSize.min, children: [
                   for (var i = 0; i < 4; i++)
                     Container(
                       width: 4,
@@ -282,15 +282,11 @@ class SyncIllustration extends StatelessWidget {
                 ]),
               ],
             ),
-          ),
-          Expanded(
-            child: Align(
-              alignment: Alignment.bottomCenter,
-              child: screen(
-                  width: 62, height: 112, icon: LucideIcons.smartphone, radius: 14),
-            ),
-          ),
-        ],
+            const SizedBox(width: 22),
+            screen(
+                width: 62, height: 112, icon: LucideIcons.smartphone, radius: 14),
+          ],
+        ),
       ),
     );
   }
