@@ -23,6 +23,7 @@ import 'file_types.dart';
 import 'heuristic_tags.dart';
 import 'net.dart';
 import 'personal_store.dart';
+import 'pull_walk.dart';
 import 'recovery.dart';
 import 'relic_db.dart';
 import 'repo.dart';
@@ -467,6 +468,9 @@ class WorkerRepo implements RelicRepo {
 
   int _cursor = 0; // max relic updated_at pulled
   int _tombCursor = 0; // max tombstone deleted_at pulled
+  /// The pull in progress, kept between passes so a page that failed is
+  /// asked for again where the walk left off. Null once a pull is over.
+  PullWalk? _walk;
   int _aiCursor = 0; // max AI-record ai_at pulled
 
   // AI records (generated titles + tags) from the account's desktops. This
@@ -1241,6 +1245,7 @@ class WorkerRepo implements RelicRepo {
     await _flushBlobOutbox();
     await _flushOutbox();
     final before = _cacheStamp();
+    var pagesThisPass = 0;
     try {
       // Everything that is not the item pull goes out alongside it. The
       // account line, the waiting list and the tombstones each used to be a
@@ -1254,62 +1259,64 @@ class WorkerRepo implements RelicRepo {
 
       // relics changed since the cursor
       var changed = false;
-      var maxU = _cursor;
       // A cold pull (a reconnect, a new phone) brings the whole vault down,
       // and each page goes on screen as it lands. Two walks, newest first:
       // the vault items on their own, since they are what a person goes
-      // looking for first, then everything. The second walk sees the vault
-      // items again and skips them as not news; the cursor moves only once
-      // it is over, so a kill mid-way starts the whole pull again rather
-      // than losing anything. A server without the flags pages ascending
-      // and hands back everything on the first walk, which is slower on a
-      // cold pull and wrong in no other way.
-      final walks = _cursor == 0 ? const [true, false] : const [false];
-      for (final vaultOnly in walks) {
-        String? cursor;
-        do {
-          final q = {
-            'since': '$_cursor',
-            'limit': '500',
-            'order': 'desc',
-            if (vaultOnly) 'promoted': '1',
-            'cursor': ?cursor,
-          };
-          final r = await http.get(
-            Uri.parse(_u('/relics')).replace(queryParameters: q),
-            headers: _headers,
-          ).timeout(kNetTimeout);
-          if (r.statusCode != 200) {
-            // A revoked session looks exactly like a transient failure from here.
-            // Treating it as one is what leaves every device of the account
-            // showing "offline" after somebody removes a device.
-            if (r.statusCode == 401 && isSessionRevokedBody(r.body)) {
-              _refreshToken = null;
-              sessionRevoked.value = true;
-            }
-            _sync = const SyncState(SyncKind.offline);
-            return;
-          }
-          final body = jsonDecode(r.body) as Map<String, dynamic>;
-          final items = (body['items'] as List).cast<Map<String, dynamic>>();
-          for (final env in items) {
-            final u = (env['updated_at'] as num).toInt();
-            if (u > maxU) maxU = u;
-          }
-          // The whole page at once: one hop off the UI isolate opens every
-          // envelope, and the index takes the page in slices between frames.
-          if (await _absorbEnvelopes(items)) {
-            changed = true;
-            // On screen now. The pass used to publish once, at the very end,
-            // so a page that was already decrypted and indexed stayed invisible
-            // through the tombstone and AI round trips that followed it.
-            _publish();
-            _traceFirstSync('items shown');
-          }
-          cursor = body['next_cursor'] as String?;
-        } while (cursor != null);
+      // looking for first, then everything; the second walk sees the vault
+      // items again and skips them as not news. The walk outlives the pass:
+      // a page that fails is asked for again on the next pass, from where
+      // the walk left off rather than from page one, and smaller if it was
+      // the time (see [PullWalk]). The cursor moves only once the whole pull
+      // is over, so nothing is ever skipped. A server without the flags
+      // pages ascending and hands back everything on the first walk, which
+      // is slower on a cold pull and wrong in no other way.
+      var walk = _walk;
+      if (walk == null || walk.since != _cursor) {
+        walk = _walk = PullWalk(since: _cursor);
       }
-      if (maxU - 1 > _cursor) _cursor = maxU - 1;
+      while (!walk.done) {
+        final clock = Stopwatch()..start();
+        final http.Response r;
+        try {
+          r = await http.get(
+            Uri.parse(_u('/relics')).replace(queryParameters: walk.query()),
+            headers: _headers,
+          ).timeout(kPageTimeout);
+        } on TimeoutException {
+          walk.pageTimedOut();
+          rethrow;
+        }
+        if (r.statusCode != 200) {
+          // A revoked session looks exactly like a transient failure from here.
+          // Treating it as one is what leaves every device of the account
+          // showing "offline" after somebody removes a device.
+          if (r.statusCode == 401 && isSessionRevokedBody(r.body)) {
+            _refreshToken = null;
+            sessionRevoked.value = true;
+          }
+          _sync = const SyncState(SyncKind.offline);
+          return;
+        }
+        final body = jsonDecode(r.body) as Map<String, dynamic>;
+        final items = (body['items'] as List).cast<Map<String, dynamic>>();
+        for (final env in items) {
+          walk.saw((env['updated_at'] as num).toInt());
+        }
+        // The whole page at once: one hop off the UI isolate opens every
+        // envelope, and the index takes the page in slices between frames.
+        if (await _absorbEnvelopes(items)) {
+          changed = true;
+          // On screen now. The pass used to publish once, at the very end,
+          // so a page that was already decrypted and indexed stayed invisible
+          // through the tombstone and AI round trips that followed it.
+          _publish();
+          _traceFirstSync('items shown');
+        }
+        walk.pageLanded(body['next_cursor'] as String?, clock.elapsed);
+        pagesThisPass++;
+      }
+      _walk = null;
+      if (walk.nextSince > _cursor) _cursor = walk.nextSince;
 
       // tombstones (deletions from other devices), fetched alongside the pull
       // and applied after it, so a snapshot taken before a delete cannot
@@ -1348,6 +1355,12 @@ class WorkerRepo implements RelicRepo {
       if (changed || _cacheStamp() != before) await _saveCache();
     } catch (_) {
       _sync = const SyncState(SyncKind.offline);
+      // Pages were getting through and then one did not: the network is up
+      // and that page was the trouble. Go again shortly, from that page,
+      // rather than waiting out the offline poll cadence.
+      if (pagesThisPass > 0 && _walk != null) {
+        unawaited(Future<void>.delayed(const Duration(seconds: 2), syncDelta));
+      }
     }
   }
 
@@ -1963,6 +1976,7 @@ class WorkerRepo implements RelicRepo {
     _blobOutbox.clear();
     _account = null; // cached plan/storage belongs to the account being dropped
     _cursor = 0;
+    _walk = null;
     _tombCursor = 0;
     _aiCursor = 0;
     _keyparams = null;

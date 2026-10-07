@@ -32,6 +32,7 @@ import 'relic_db.dart';
 import 'repo.dart';
 import 'secure_key_store.dart';
 import 'sift.dart';
+import 'pull_walk.dart';
 import 'sync_jobs.dart';
 import 'sync_socket.dart';
 import 'supabase_auth.dart';
@@ -343,6 +344,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   bool _flushing = false;
   bool _flushAgain = false; // a kick that arrived mid-flush; run once more
   bool _pulling = false;
+  /// The pull in progress, kept between cycles so a page that failed is
+  /// asked for again where the walk left off. Null once a pull is over.
+  PullWalk? _walk;
   bool _manualSync = false; // a user-triggered syncNow() is in flight
   // Blob upload progress by relic uid (0..1) while a push is uploading its blob.
   // Drives the determinate "Uploading NN%" row/chip state; cleared on completion.
@@ -495,6 +499,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     final switched = prev != null && prev != identity;
     if (switched) {
       _cursor = 0;
+      _walk = null; // the other account's pages mean nothing here
       _tombCursor = 0;
       _aiCursor = 0;
       _lastSyncAt = 0;
@@ -5570,66 +5575,67 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     if (firstSync) notifyListeners();
     try {
       var changed = false;
-      var maxU = _cursor;
       // A cold pull (a reconnect, a fresh install) brings the whole vault
       // down, and each page goes on screen as it lands. Two walks, newest
       // first: the vault items on their own, since they are what a person
-      // goes looking for first, then everything. The second walk sees the
-      // vault items again and skips them as not news; the cursor moves only
-      // once it is over, so a quit mid-way starts the whole pull again
-      // rather than losing anything. A server without the flags pages
-      // ascending and hands back everything on the first walk, which is
-      // slower on a cold pull and wrong in no other way.
-      final walks = _cursor == 0 ? const [true, false] : const [false];
-      for (final vaultOnly in walks) {
-        String? cursor;
-        do {
-          final q = {
-            'since': '$_cursor',
-            'limit': '500',
-            'order': 'desc',
-            if (vaultOnly) 'promoted': '1',
-            'cursor': ?cursor,
-          };
-          final resp = await http
+      // goes looking for first, then everything; the second walk sees the
+      // vault items again and skips them as not news. The walk outlives
+      // the cycle: a page that fails is asked for again next cycle, from
+      // where the walk left off rather than from page one, and smaller if
+      // it was the time (see [PullWalk]). The cursor moves only once the
+      // whole pull is over, so nothing is ever skipped. A server without
+      // the flags pages ascending and hands back everything on the first
+      // walk, which is slower on a cold pull and wrong in no other way.
+      var walk = _walk;
+      if (walk == null || walk.since != _cursor) {
+        walk = _walk = PullWalk(since: _cursor);
+      }
+      while (!walk.done) {
+        final clock = Stopwatch()..start();
+        final http.Response resp;
+        try {
+          resp = await http
               .get(
-                Uri.parse(_u('/relics')).replace(queryParameters: q),
+                Uri.parse(_u('/relics')).replace(queryParameters: walk.query()),
                 headers: _h,
               )
               .timeout(_pageTimeout);
-          if (resp.statusCode != 200) {
-            appendSyncLog(
-              'pull /relics -> ${resp.statusCode} '
-              '${resp.body.length > 200 ? resp.body.substring(0, 200) : resp.body}',
-            );
-            // Not a flaky network: this token predates a device removal and no
-            // refresh will mint a working one, because the refresh tokens went
-            // with it. Say so instead of sitting on "offline".
-            if (resp.statusCode == 401 && isSessionRevokedBody(resp.body)) {
-              _refreshToken = null;
-              sessionRevoked.value = true;
-            }
-            _online = false;
-            return;
+        } on TimeoutException {
+          walk.pageTimedOut();
+          rethrow;
+        }
+        if (resp.statusCode != 200) {
+          appendSyncLog(
+            'pull /relics -> ${resp.statusCode} '
+            '${resp.body.length > 200 ? resp.body.substring(0, 200) : resp.body}',
+          );
+          // Not a flaky network: this token predates a device removal and no
+          // refresh will mint a working one, because the refresh tokens went
+          // with it. Say so instead of sitting on "offline".
+          if (resp.statusCode == 401 && isSessionRevokedBody(resp.body)) {
+            _refreshToken = null;
+            sessionRevoked.value = true;
           }
-          final body = jsonDecode(resp.body) as Map<String, dynamic>;
-          final items = (body['items'] as List).cast<Map<String, dynamic>>();
-          for (final env in items) {
-            final u = (env['updated_at'] as num).toInt();
-            if (u > maxU) maxU = u;
-          }
-          if (await _absorbPage(db, items)) {
-            changed = true;
-            // On screen now. The pull used to repaint once, after the last
-            // page, so a reconnect sat on "Syncing" with an empty list for
-            // as long as the whole vault took to come down.
-            _refreshWindow();
-            notifyListeners();
-          }
-          cursor = body['next_cursor'] as String?;
-        } while (cursor != null);
+          _online = false;
+          return;
+        }
+        final body = jsonDecode(resp.body) as Map<String, dynamic>;
+        final items = (body['items'] as List).cast<Map<String, dynamic>>();
+        for (final env in items) {
+          walk.saw((env['updated_at'] as num).toInt());
+        }
+        if (await _absorbPage(db, items)) {
+          changed = true;
+          // On screen now. The pull used to repaint once, after the last
+          // page, so a reconnect sat on "Syncing" with an empty list for
+          // as long as the whole vault took to come down.
+          _refreshWindow();
+          notifyListeners();
+        }
+        walk.pageLanded(body['next_cursor'] as String?, clock.elapsed);
       }
-      if (maxU - 1 > _cursor) _cursor = maxU - 1;
+      _walk = null;
+      if (walk.nextSince > _cursor) _cursor = walk.nextSince;
 
       final tr = await http
           .get(
