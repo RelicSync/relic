@@ -51,23 +51,34 @@ pub const BGE: ModelSpec = ModelSpec {
 
 /// EmbeddingGemma-300M int8 (MRL-256) — the upgraded text embedder (validated
 /// in relic-sift-next: recall@1 0.757→0.973 over BGE on a hard retrieval set).
+///
+/// `ft2` is Google's model fine-tuned on copy-and-search pairs (relic-sift-next
+/// `ft/`), written back into the same int8 graph. On held-out pages a short
+/// search finds the right copy in the top 5 at 0.88 vs 0.33, and on the copied
+/// text alone (what the app embeds today) at 0.41-0.51 vs 0.23-0.29. Category
+/// guards unchanged at 100%. The id stays `embeddinggemma-300m` (same
+/// architecture and prompts); the version string is what tells the app its
+/// stored vectors, tag table and head cache belong to a different model.
+///
 /// Weights live in an external-data file referenced *by basename* from the
-/// graph, so the data file MUST be named exactly `model_quantized.onnx_data`
-/// alongside the graph (ORT resolves it relative to the model dir).
+/// graph, so the data file MUST be named exactly `embeddinggemma-300m-ft2.onnx_data`
+/// alongside the graph (ORT resolves it relative to the model dir). It is a new
+/// name on purpose: an install with the stock `model_quantized.onnx_data` must not
+/// count as having this model. The tokenizer is byte-identical to stock and shared.
 pub const GEMMA: ModelSpec = ModelSpec {
     id: "embeddinggemma-300m",
     role: "text-embedding",
-    version: "embeddinggemma-300m@int8-mrl256",
+    version: "embeddinggemma-300m-ft2@int8-mrl256",
     license: "Gemma",
     files: &[
         ModelFile {
-            name: "embeddinggemma-300m.int8.onnx",
-            url: "https://models.relic.space/relic-sift/v1/embeddinggemma-300m.int8.onnx",
+            name: "embeddinggemma-300m-ft2.int8.onnx",
+            url: "https://models.relic.space/relic-sift/v2/embeddinggemma-300m-ft2.int8.onnx",
             min_bytes: 400_000,
         },
         ModelFile {
-            name: "model_quantized.onnx_data",
-            url: "https://models.relic.space/relic-sift/v1/model_quantized.onnx_data",
+            name: "embeddinggemma-300m-ft2.onnx_data",
+            url: "https://models.relic.space/relic-sift/v2/embeddinggemma-300m-ft2.onnx_data",
             min_bytes: 250_000_000,
         },
         ModelFile {
@@ -458,6 +469,16 @@ pub const RETIRED_FILES: &[&str] = &[
     "florence2-tokenizer.json",
 ];
 
+/// Files a newer generation of a live model replaced. Unlike [`RETIRED_FILES`]
+/// they are only dead once the replacement is fully on disk: until then the app
+/// is still downloading it, and the stock files keep search working meanwhile.
+/// Pairs of (replacement, files it supersedes).
+pub const SUPERSEDED: &[(&ModelSpec, &[&str])] = &[
+    // Stock EmbeddingGemma graph + weights, replaced by the ft2 fine-tune.
+    // The tokenizer is shared, so it is not listed.
+    (&GEMMA, &["embeddinggemma-300m.int8.onnx", "model_quantized.onnx_data"]),
+];
+
 /// Subdirectories of the model dir that are retired wholesale. `dml/` held the
 /// DirectML-enabled `onnxruntime.dll` for Florence's vision tower.
 pub const RETIRED_DIRS: &[&str] = &["dml"];
@@ -467,8 +488,9 @@ pub const RETIRED_DIRS: &[&str] = &["dml"];
 pub struct PrunedFile {
     pub name: String,
     pub bytes: u64,
-    /// Why it went: `retired` (nothing can load it) or `redundant` (a live
-    /// fallback that this install will never reach, re-downloadable on demand).
+    /// Why it went: `retired` (nothing can load it), `superseded` (an older
+    /// generation of a model whose replacement is installed) or `redundant` (a
+    /// live fallback that this install will never reach, re-downloadable on demand).
     pub reason: &'static str,
 }
 
@@ -503,6 +525,9 @@ pub fn prune(dir: &std::path::Path, deep: bool, dry_run: bool) -> Vec<PrunedFile
     for name in RETIRED_DIRS {
         take((*name).to_string(), "retired");
     }
+    for name in superseded_files(|spec| is_present(dir, spec)) {
+        take(name.to_string(), "superseded");
+    }
     if deep {
         // Only ever drop the fallback while its replacement is actually usable.
         if is_present(dir, &MOBILECLIP2) {
@@ -522,6 +547,11 @@ pub fn prune(dir: &std::path::Path, deep: bool, dry_run: bool) -> Vec<PrunedFile
         }
     }
     out
+}
+
+/// The [`SUPERSEDED`] files whose replacement `installed` says is on disk.
+fn superseded_files(installed: impl Fn(&ModelSpec) -> bool) -> Vec<&'static str> {
+    SUPERSEDED.iter().filter(|(spec, _)| installed(spec)).flat_map(|(_, files)| files.iter().copied()).collect()
 }
 
 fn dir_bytes(dir: &std::path::Path) -> u64 {
@@ -615,6 +645,11 @@ pub fn download_all(dir: &std::path::Path, quiet: bool) -> Result<(), String> {
             );
         }
         download(dir, &MOBILECLIP2_TEXT, quiet)?;
+    }
+    // The app prunes once per release, usually before a new model has finished
+    // downloading, so the files it supersedes are swept here, the moment it lands.
+    for name in superseded_files(|spec| is_present(dir, spec)) {
+        let _ = fs::remove_file(dir.join(name));
     }
     Ok(())
 }
@@ -805,6 +840,32 @@ mod tests {
 
         assert!(prune(&dir, true, false).is_empty());
         assert!(dir.join("mobileclip2-s2.text.onnx").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Stock Gemma keeps search working while the fine-tune downloads, so it
+    /// only goes once the replacement is installed. (The predicate stands in for
+    /// `is_present`, which would need 300 MB of placeholder weights.)
+    #[test]
+    fn superseded_files_wait_for_their_replacement() {
+        assert!(superseded_files(|_| false).is_empty());
+        let gone = superseded_files(|spec| spec.id == GEMMA.id);
+        assert_eq!(gone, ["embeddinggemma-300m.int8.onnx", "model_quantized.onnx_data"]);
+        // never the shared tokenizer or a file the live spec still names
+        for f in GEMMA.files {
+            assert!(!gone.contains(&f.name), "{} is still in use", f.name);
+        }
+    }
+
+    /// Without the replacement, a default prune must leave stock Gemma alone.
+    #[test]
+    fn prune_keeps_stock_gemma_until_the_fine_tune_is_installed() {
+        let dir = scratch("stock-gemma");
+        write(&dir, "embeddinggemma-300m.int8.onnx", 16);
+        write(&dir, "model_quantized.onnx_data", 16);
+
+        assert!(prune(&dir, false, false).is_empty());
+        assert!(dir.join("model_quantized.onnx_data").exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 

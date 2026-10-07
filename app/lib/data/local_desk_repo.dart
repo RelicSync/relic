@@ -2162,8 +2162,15 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   //   tag: min cosine for a query to fire a tag in tag expansion.
   // A new model needs its own row, measured on the eval set, before it ships.
   // test/model_floors_test.dart fails if the model relic-sift prefers has none.
+  //   ft2 (the copy-and-search fine-tune, 2026-10): set to let through the
+  //        same share of unrelated vault items as Gemma's floors (2.4% of
+  //        query/item pairs; a tag fires on 45% of queries), measured by
+  //        relic-sift-next/ft/calibrate_floors.py. It spreads scores wider,
+  //        unrelated items near 0, so the same strictness sits much lower and
+  //        keeps 87% of true matches where Gemma kept 55%.
   static const Map<String, ({double sem, double tag})> modelFloors = {
     'embeddinggemma-300m@int8-mrl256': (sem: 0.38, tag: 0.40),
+    'embeddinggemma-300m-ft2@int8-mrl256': (sem: 0.22, tag: 0.23),
   };
   static const ({double sem, double tag}) _fallbackFloors = (sem: 0.38, tag: 0.40);
 
