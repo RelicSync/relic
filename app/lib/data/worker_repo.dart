@@ -1255,46 +1255,60 @@ class WorkerRepo implements RelicRepo {
       // relics changed since the cursor
       var changed = false;
       var maxU = _cursor;
-      String? cursor;
-      do {
-        final q = {
-          'since': '$_cursor',
-          'limit': '500',
-          'cursor': ?cursor,
-        };
-        final r = await http.get(
-          Uri.parse(_u('/relics')).replace(queryParameters: q),
-          headers: _headers,
-        ).timeout(kNetTimeout);
-        if (r.statusCode != 200) {
-          // A revoked session looks exactly like a transient failure from here.
-          // Treating it as one is what leaves every device of the account
-          // showing "offline" after somebody removes a device.
-          if (r.statusCode == 401 && isSessionRevokedBody(r.body)) {
-            _refreshToken = null;
-            sessionRevoked.value = true;
+      // A cold pull (a reconnect, a new phone) brings the whole vault down,
+      // and each page goes on screen as it lands. Two walks, newest first:
+      // the vault items on their own, since they are what a person goes
+      // looking for first, then everything. The second walk sees the vault
+      // items again and skips them as not news; the cursor moves only once
+      // it is over, so a kill mid-way starts the whole pull again rather
+      // than losing anything. A server without the flags pages ascending
+      // and hands back everything on the first walk, which is slower on a
+      // cold pull and wrong in no other way.
+      final walks = _cursor == 0 ? const [true, false] : const [false];
+      for (final vaultOnly in walks) {
+        String? cursor;
+        do {
+          final q = {
+            'since': '$_cursor',
+            'limit': '500',
+            'order': 'desc',
+            if (vaultOnly) 'promoted': '1',
+            'cursor': ?cursor,
+          };
+          final r = await http.get(
+            Uri.parse(_u('/relics')).replace(queryParameters: q),
+            headers: _headers,
+          ).timeout(kNetTimeout);
+          if (r.statusCode != 200) {
+            // A revoked session looks exactly like a transient failure from here.
+            // Treating it as one is what leaves every device of the account
+            // showing "offline" after somebody removes a device.
+            if (r.statusCode == 401 && isSessionRevokedBody(r.body)) {
+              _refreshToken = null;
+              sessionRevoked.value = true;
+            }
+            _sync = const SyncState(SyncKind.offline);
+            return;
           }
-          _sync = const SyncState(SyncKind.offline);
-          return;
-        }
-        final body = jsonDecode(r.body) as Map<String, dynamic>;
-        final items = (body['items'] as List).cast<Map<String, dynamic>>();
-        for (final env in items) {
-          final u = (env['updated_at'] as num).toInt();
-          if (u > maxU) maxU = u;
-        }
-        // The whole page at once: one hop off the UI isolate opens every
-        // envelope, and the index takes the page in slices between frames.
-        if (await _absorbEnvelopes(items)) {
-          changed = true;
-          // On screen now. The pass used to publish once, at the very end,
-          // so a page that was already decrypted and indexed stayed invisible
-          // through the tombstone and AI round trips that followed it.
-          _publish();
-          _traceFirstSync('items shown');
-        }
-        cursor = body['next_cursor'] as String?;
-      } while (cursor != null);
+          final body = jsonDecode(r.body) as Map<String, dynamic>;
+          final items = (body['items'] as List).cast<Map<String, dynamic>>();
+          for (final env in items) {
+            final u = (env['updated_at'] as num).toInt();
+            if (u > maxU) maxU = u;
+          }
+          // The whole page at once: one hop off the UI isolate opens every
+          // envelope, and the index takes the page in slices between frames.
+          if (await _absorbEnvelopes(items)) {
+            changed = true;
+            // On screen now. The pass used to publish once, at the very end,
+            // so a page that was already decrypted and indexed stayed invisible
+            // through the tombstone and AI round trips that followed it.
+            _publish();
+            _traceFirstSync('items shown');
+          }
+          cursor = body['next_cursor'] as String?;
+        } while (cursor != null);
+      }
       if (maxU - 1 > _cursor) _cursor = maxU - 1;
 
       // tombstones (deletions from other devices), fetched alongside the pull
@@ -1313,6 +1327,11 @@ class WorkerRepo implements RelicRepo {
       if (await _pullAiRecords()) changed = true;
 
       if (changed) _publish();
+      // A bind with no cache behind it (a reconnect, a new phone) reaches
+      // this point with no search index at all, and nothing else would
+      // build one before the next launch. Build it the way a launch does,
+      // off the UI isolate, now that the vault is here.
+      if (changed && _index == null && !_indexPending) _scheduleIndexBuild();
       _traceFirstSync('first sync done');
       _sync = SyncState(
         // A queued blob with no queued relic op still means "not fully synced".

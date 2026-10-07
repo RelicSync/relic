@@ -69,10 +69,18 @@ Body: EncryptedRelic envelope (docs/wire-format.md). Upsert by `uid`.
   a scheduled reconcile job).
 → `200 { "stale": false }`.
 
-### `GET /relics?since=<ts>&cursor=<c>&limit=<n≤500>`
-Envelopes with `updated_at > since`, ascending, paginated.
+### `GET /relics?since=<ts>&cursor=<c>&limit=<n≤500>&order=<asc|desc>&promoted=1`
+Envelopes with `updated_at > since`, paginated. Ascending by default;
+`order=desc` walks newest first, so a device pulling a whole vault can show
+the most recent page before the rest lands. The cursor follows the order it
+was issued under. `promoted=1` returns only vault items. A server that
+predates either flag ignores it, which a client must accept: it then pages
+ascending, or hands back everything where the vault was asked for.
 → `200 { "items": [...], "next_cursor": "..." | null }`.
-Initial sync: `since=0`, page through. Steady state: `since = <sync_state cursor>`.
+Initial sync: `since=0`. The shipped clients walk the vault items first
+(`promoted=1&order=desc`), then everything (`order=desc`), skipping what
+they already hold, and only then move their cursor. Steady state:
+`since = <sync_state cursor>`.
 
 ### `DELETE /relic/:uid`
 Deletes relic object + referenced blob (from the envelope's plaintext
