@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { deleteRelic, listRelics, listWaiting, putRelic } from "../src/index";
 import { blobR2Key } from "../src/blob";
+import { LEGACY_PAGE, pageLimitFor } from "../src/http";
 import { TIERS } from "../src/tiers";
 import { setupSchema } from "./helpers";
 
@@ -629,6 +630,26 @@ describe("listRelics — cursor pagination", () => {
     // Anything but "1" is the ordinary pull.
     const all = await (await list("promoted=0")).json();
     expect(all.items).toHaveLength(4);
+  });
+
+  it("a client that does not send order gets pages of at most LEGACY_PAGE", () => {
+    // The shipped phone builds: 500 asked, 100 given, so a page always fits
+    // their ten second budget. A smaller ask is honoured as is.
+    expect(pageLimitFor(new URLSearchParams("limit=500"))).toBe(LEGACY_PAGE);
+    expect(pageLimitFor(new URLSearchParams(""))).toBe(LEGACY_PAGE);
+    expect(pageLimitFor(new URLSearchParams("limit=1"))).toBe(1);
+    // A client that sends order sizes its own pages.
+    expect(pageLimitFor(new URLSearchParams("limit=500&order=desc"))).toBe(500);
+    expect(pageLimitFor(new URLSearchParams("limit=25&order=desc"))).toBe(25);
+  });
+
+  it("a legacy page that is cut short still hands back a cursor that continues", async () => {
+    await seedFour();
+    // limit=2 is under the cap either way; the cap only ever lowers the limit,
+    // and next_cursor is computed against the limit actually used.
+    const p1 = await (await list("limit=2")).json();
+    expect(p1.items).toHaveLength(2);
+    expect(p1.next_cursor).toBe("20:b");
   });
 
   it("order=desc still honours since, and anything else means ascending", async () => {

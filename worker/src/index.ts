@@ -18,7 +18,7 @@ import {
 } from "./blob";
 import { readUsage, ringDelta, usageDelta } from "./usage";
 import { type Auth, authenticate, REV_TTL, revKey } from "./auth";
-import { clampLimit, CORS, err, json } from "./http";
+import { clampLimit, CORS, err, json, pageLimitFor } from "./http";
 import { clientIp, rateLimit, withRateLimitHeaders } from "./ratelimit";
 import { deleteAccount, revokeSupabaseSessions } from "./account";
 import { sendDownloadLink } from "./download_link";
@@ -409,7 +409,7 @@ export async function listWaiting(env: Env, auth: Auth): Promise<Response> {
 
 export async function listRelics(url: URL, env: Env, auth: Auth): Promise<Response> {
   const since = Number(url.searchParams.get("since") ?? 0);
-  const limit = clampLimit(url.searchParams.get("limit"));
+  const limit = pageLimitFor(url.searchParams);
   const cursor = url.searchParams.get("cursor");
   // Newest first, when asked. A device pulling a whole vault (a reconnect, a
   // new phone) shows each page as it lands, and the page a person is waiting
