@@ -789,6 +789,17 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     _savePrefs();
   }
 
+  /// The sync card above the list, put off with "Not now" until this moment
+  /// (seconds since the epoch). Zero means it has never been put off.
+  int _syncNudgeSnoozedUntil = 0;
+  @override
+  int get syncNudgeSnoozedUntil => _syncNudgeSnoozedUntil;
+  @override
+  Future<void> snoozeSyncNudge(int until) async {
+    _syncNudgeSnoozedUntil = until;
+    _savePrefs();
+  }
+
   @override
   String? get keepHotkeyLabel => _hkPromote.display;
 
@@ -1726,6 +1737,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _secondVaultNoticeDismissed =
             j['second_vault_notice_dismissed'] as bool? ?? false;
         _addPhoneNudgeShown = j['add_phone_nudge_shown'] as bool? ?? false;
+        _syncNudgeSnoozedUntil =
+            (j['sync_nudge_snoozed_until'] as num?)?.toInt() ?? 0;
         _demoNudgeShown = j['demo_nudge_dismissed'] as bool? ?? false;
         _captureText = j['capture_text'] as bool? ?? true;
         _captureImages = j['capture_images'] as bool? ?? true;
@@ -1833,6 +1846,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           'keep_hint_shown': _keepHintShown,
           'second_vault_notice_dismissed': _secondVaultNoticeDismissed,
           'add_phone_nudge_shown': _addPhoneNudgeShown,
+          'sync_nudge_snoozed_until': _syncNudgeSnoozedUntil,
           'demo_nudge_dismissed': _demoNudgeShown,
           'capture_text': _captureText,
           'capture_images': _captureImages,

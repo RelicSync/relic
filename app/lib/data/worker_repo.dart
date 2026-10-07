@@ -909,15 +909,22 @@ class WorkerRepo implements RelicRepo {
     } catch (_) {/* no key store (tests): the session still hides it */}
   }
 
-  /// Read the dismissed flag from the phone's key store. The host calls this
-  /// once on connect; until it lands the notice stays hidden.
-  Future<void> loadSecondVaultNoticePref() async {
+  /// Read the notice prefs from the phone's key store: the second-vault
+  /// dismissal and the sync card's snooze. The host calls this once on
+  /// connect; until it lands both stay hidden.
+  Future<void> loadNoticePrefs() async {
+    const s = FlutterSecureStorage();
     try {
       _secondVaultDismissed =
-          (await const FlutterSecureStorage().read(key: _kSecondVaultDismissed)) ==
-              '1';
+          (await s.read(key: _kSecondVaultDismissed)) == '1';
     } catch (_) {
       _secondVaultDismissed = true; // can't read it: say nothing
+    }
+    try {
+      _syncNudgeSnoozedUntil =
+          int.tryParse(await s.read(key: _kSyncNudgeSnoozed) ?? '') ?? 0;
+    } catch (_) {
+      _syncNudgeSnoozedUntil = 1 << 62; // can't read it: say nothing
     }
   }
 
@@ -925,6 +932,22 @@ class WorkerRepo implements RelicRepo {
   bool get addPhoneNudgeShown => true;
   @override
   Future<void> markAddPhoneNudgeShown() async {}
+
+  /// The sync card's snooze, far future until [loadNoticePrefs] has read it,
+  /// for the same reason the dismissal flag starts true: a phone that put
+  /// the card off must never see it flash on a relaunch.
+  int _syncNudgeSnoozedUntil = 1 << 62;
+  static const _kSyncNudgeSnoozed = 'sync_nudge_snoozed_until';
+  @override
+  int get syncNudgeSnoozedUntil => _syncNudgeSnoozedUntil;
+  @override
+  Future<void> snoozeSyncNudge(int until) async {
+    _syncNudgeSnoozedUntil = until;
+    try {
+      await const FlutterSecureStorage()
+          .write(key: _kSyncNudgeSnoozed, value: '$until');
+    } catch (_) {/* no key store (tests): the session still hides it */}
+  }
   @override
   String? get keepHotkeyLabel => null;
 

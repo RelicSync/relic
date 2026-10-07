@@ -318,6 +318,14 @@ abstract class RelicRepo {
   bool get addPhoneNudgeShown => true;
   Future<void> markAddPhoneNudgeShown() async {}
 
+  /// The sync card above the list ("Relic is built for syncing with your
+  /// computer" on a phone, "Get your clipboard on your phone" on a desktop)
+  /// stays off the screen until this moment, in seconds since the epoch.
+  /// Default far future = never show; the real repos persist it and start
+  /// from zero.
+  int get syncNudgeSnoozedUntil => 1 << 62;
+  Future<void> snoozeSyncNudge(int until) async {}
+
   /// The keep-the-last-thing hotkey as a person would read it ("Ctrl + Shift
   /// + W"), for the screens that teach it. Null where there is no such hotkey.
   String? get keepHotkeyLabel => null;
@@ -770,6 +778,10 @@ class MemoryRepo implements RelicRepo {
   bool get addPhoneNudgeShown => true;
   @override
   Future<void> markAddPhoneNudgeShown() async {}
+  @override
+  int get syncNudgeSnoozedUntil => 1 << 62;
+  @override
+  Future<void> snoozeSyncNudge(int until) async {}
   @override
   String? get keepHotkeyLabel => null;
   @override

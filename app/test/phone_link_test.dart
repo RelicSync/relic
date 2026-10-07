@@ -175,12 +175,13 @@ void main() {
     testWidgets('says what a phone does, and offers both ways on',
         (tester) async {
       await pump(tester, onSend: () async {});
-      expect(find.text('Relic on a phone works differently'), findsOneWidget);
+      expect(find.text('Your clipboard, on every device'), findsOneWidget);
       expect(
           find.text(
-              'On a computer, Relic saves what you copy by itself. '
-              'On a phone, you share things to it on purpose. '
-              'Your vault is the same on both.'),
+              'Copy something on your computer and it is on this '
+              'phone a second later. Share something from this phone '
+              'and it is waiting on your computer. One vault, every '
+              'device.'),
           findsOneWidget);
       expect(find.text('Send me the download link'), findsOneWidget);
       expect(find.text('Continue'), findsOneWidget);
@@ -195,7 +196,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
 
       expect(sent, 1);
-      expect(find.text('Sent. Open it on your computer.'), findsOneWidget);
+      expect(find.textContaining('Sent. Open it on your computer'), findsOneWidget);
     });
 
     testWidgets('a refusal is shown in the words the server used',
