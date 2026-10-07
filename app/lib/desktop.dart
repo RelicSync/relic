@@ -51,6 +51,7 @@ import 'onboarding/desktop_onboarding.dart';
 import 'ui/actionable_notification.dart';
 import 'ui/popup.dart';
 import 'ui/settings.dart';
+import 'ui/search_tuning_panel.dart';
 import 'ui/voice_offer.dart';
 import 'platform/popup_placement.dart';
 import 'platform/rich_formats.dart';
@@ -209,6 +210,7 @@ class _RealAppState extends State<RealApp>
   // Set only by the second-vault notice; every other entry clears it.
   bool _onboardStartReturning = false;
   bool _settingsOpen = false;
+  bool _tuningOpen = false; // dev search tuning strip (RELIC_SEARCH_TUNING=1)
   bool _voiceSettingsRequested = false;
 
   /// Non-null when this copy of Relic is running from the disk image (or the
@@ -1438,6 +1440,14 @@ class _RealAppState extends State<RealApp>
   /// tray. This is the catch-all so no surface can ever get "stuck open" —
   /// it fires even when an inner field has focus, since key events bubble up.
   KeyEventResult _onAppKey(FocusNode node, KeyEvent e) {
+    if (e is KeyDownEvent &&
+        e.logicalKey == LogicalKeyboardKey.f9 &&
+        HardwareKeyboard.instance.isControlPressed &&
+        HardwareKeyboard.instance.isShiftPressed &&
+        widget.repo.searchTuning.enabled) {
+      _setTuningOpen(!_tuningOpen);
+      return KeyEventResult.handled;
+    }
     if (e is! KeyDownEvent || e.logicalKey != LogicalKeyboardKey.escape) {
       return KeyEventResult.ignored;
     }
@@ -1464,6 +1474,12 @@ class _RealAppState extends State<RealApp>
     }
     _hide();
     return KeyEventResult.handled;
+  }
+
+  void _setTuningOpen(bool open) {
+    setState(() => _tuningOpen = open);
+    _sizeWindow(_popupDims.width,
+        _popupDims.height + (open ? SearchTuningPanel.height : 0));
   }
 
   /// Each surface has its own footprint; the popup window must grow for the
@@ -2482,12 +2498,25 @@ class _RealAppState extends State<RealApp>
         if (widget.repo.isDemo && !widget.repo.demoNudgeDismissed) {
           banners.add(_demoNudgeBanner());
         }
-        final body = banners.isEmpty
+        final listed = banners.isEmpty
             ? popup
             : Column(
                 children: [
                   ...banners,
                   Expanded(child: popup),
+                ],
+              );
+        final body = !_tuningOpen
+            ? listed
+            : Column(
+                children: [
+                  Expanded(child: listed),
+                  SearchTuningPanel(
+                    tuning: widget.repo.searchTuning,
+                    shipped: () => widget.repo.searchTuningShipped,
+                    model: widget.repo.vectorModel,
+                    onClose: () => _setTuningOpen(false),
+                  ),
                 ],
               );
         if (!_voice.offerPending) return body;

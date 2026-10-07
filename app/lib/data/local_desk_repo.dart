@@ -29,6 +29,7 @@ import 'heuristic_tags.dart';
 import 'hotkeys.dart';
 import 'exif_orientation.dart';
 import 'relic_db.dart';
+import 'search_tuning.dart';
 import 'repo.dart';
 import 'secure_key_store.dart';
 import 'sift.dart';
@@ -1927,6 +1928,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   @override
   Future<void> load() async {
     _loadPrefs();
+    searchTuning.load(File(_p('search_tuning.json')));
+    if (searchTuning.enabled) searchTuning.addListener(_retune);
     // Cache the running version once for the X-Relic-App-Version header (and
     // fail soft in tests, where the platform channel is absent).
     try {
@@ -2178,8 +2181,40 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   static ({double sem, double tag}) floorsFor(String? model) =>
       modelFloors[model] ?? _fallbackFloors;
 
-  double get _semFloor => floorsFor(_vectorModel).sem;
-  double get _tagFloor => floorsFor(_vectorModel).tag;
+  double get _semFloor =>
+      searchTuning.value('semFloor', floorsFor(_vectorModel).sem);
+  double get _tagFloor =>
+      searchTuning.value('tagFloor', floorsFor(_vectorModel).tag);
+
+  /// Live ranking overrides (dev only, `RELIC_SEARCH_TUNING=1`). Every knob
+  /// falls back to the shipped value above, so with tuning off this is inert.
+  final SearchTuning searchTuning = SearchTuning();
+
+  /// The shipped value of every [SearchTuning] knob for the current model:
+  /// where the panel's sliders start and what Reset returns to.
+  Map<String, double> get searchTuningShipped => {
+        'fts': _ftsWeight,
+        'tri': 1.0,
+        'sem': 1.0,
+        'tag': _tagWeight,
+        'tagIntent': RelicDb.kTagIntentWeight,
+        'recency': _recencyWeight,
+        'kept': RelicDb.kKeptBoostFactor,
+        'semFloor': floorsFor(_vectorModel).sem,
+        'tagFloor': floorsFor(_vectorModel).tag,
+        'tagSpread': _tagSpread,
+        'rrfK': 60,
+      };
+
+  /// The embedding model behind the stored vectors (for the tuning panel).
+  String? get vectorModel => _vectorModel;
+
+  /// Re-rank the active search after a tuning change.
+  void _retune() {
+    if (_query.trim().isEmpty) return;
+    unawaited(setQuery(_query, _scope,
+        sort: _sort, createdAfter: _createdAfter, createdBefore: _createdBefore));
+  }
   static const int _pool = 150; // fts/semantic candidate pool
   static const int _triPool = 50; // trigram pool (recall leg — keep it tight)
 
@@ -2243,18 +2278,20 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     // (All scope only — in Vault scope everything is kept); the personal
     // factors (usage frecency, query-pick memory, summon-context prior)
     // climb in both scopes — a cornerstone is a cornerstone in the vault too.
+    final t = searchTuning;
     final ranked = RelicDb.rrfFuse(
       [fts, tri, sem, tagExp, tagIntent, recency],
-      weights: const [
-        _ftsWeight,
-        1.0,
-        1.0,
-        _tagWeight,
-        RelicDb.kTagIntentWeight,
-        _recencyWeight,
+      k: t.value('rrfK', 60).round(),
+      weights: [
+        t.value('fts', _ftsWeight),
+        t.value('tri', 1.0),
+        t.value('sem', 1.0),
+        t.value('tag', _tagWeight),
+        t.value('tagIntent', RelicDb.kTagIntentWeight),
+        t.value('recency', _recencyWeight),
       ],
       boostUids: scope == Scope.vault ? null : db.promotedUids(),
-      boostFactor: RelicDb.kKeptBoostFactor,
+      boostFactor: t.value('kept', RelicDb.kKeptBoostFactor),
       factors: _personalRank
           ? db.rankFactors(union, query: s, app: _summonApp, now: _now)
           : null,
@@ -2340,7 +2377,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     final seen = <String>{};
     for (var i = 0; i < scored.length && i < _tagMaxFire; i++) {
       final c = scored[i].value;
-      if (c < _tagFloor || (top - c) > _tagSpread) break; // sorted desc
+      if (c < _tagFloor || (top - c) > searchTuning.value('tagSpread', _tagSpread)) {
+        break; // sorted desc
+      }
       for (final uid in db.uidsWithTag(scored[i].key,
           vaultOnly: vaultOnly, limit: _tagCap)) {
         if (seen.add(uid)) out.add(uid);
