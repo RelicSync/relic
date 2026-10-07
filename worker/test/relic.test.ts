@@ -598,6 +598,47 @@ describe("listRelics — cursor pagination", () => {
     expect(r.next_cursor).toBe("10:a");
   });
 
+  it("walks newest first with order=desc, cursor and tiebreak included", async () => {
+    await seedFour();
+    const p1 = await (await list("limit=2&order=desc")).json();
+    expect(p1.items.map((r: { uid: string }) => r.uid)).toEqual(["d", "c"]);
+    expect(p1.next_cursor).toBe("20:c");
+
+    const p2 = await (await list(`limit=2&order=desc&cursor=${encodeURIComponent(p1.next_cursor)}`)).json();
+    expect(p2.items.map((r: { uid: string }) => r.uid)).toEqual(["b", "a"]);
+    expect(p2.next_cursor).toBe("10:a");
+
+    const p3 = await (await list(`limit=2&order=desc&cursor=${encodeURIComponent(p2.next_cursor)}`)).json();
+    expect(p3.items).toEqual([]);
+    expect(p3.next_cursor).toBeNull();
+  });
+
+  it("promoted=1 hands back only the vault items, in the order asked for", async () => {
+    await put(PRO, "a", { updated_at: 10 });
+    await put(PRO, "b", { updated_at: 20, promoted: true });
+    await put(PRO, "c", { updated_at: 20 });
+    await put(PRO, "d", { updated_at: 30, promoted: true });
+    const v = await (await list("promoted=1&order=desc")).json();
+    expect(v.items.map((x: { uid: string }) => x.uid)).toEqual(["d", "b"]);
+    expect(v.next_cursor).toBeNull();
+    // A page boundary inside the vault walk continues within the vault.
+    const p1 = await (await list("promoted=1&order=desc&limit=1")).json();
+    expect(p1.items.map((x: { uid: string }) => x.uid)).toEqual(["d"]);
+    const p2 = await (await list(`promoted=1&order=desc&limit=1&cursor=${encodeURIComponent(p1.next_cursor)}`)).json();
+    expect(p2.items.map((x: { uid: string }) => x.uid)).toEqual(["b"]);
+    // Anything but "1" is the ordinary pull.
+    const all = await (await list("promoted=0")).json();
+    expect(all.items).toHaveLength(4);
+  });
+
+  it("order=desc still honours since, and anything else means ascending", async () => {
+    await seedFour();
+    const d = await (await list("since=10&order=desc")).json();
+    expect(d.items.map((x: { uid: string }) => x.uid)).toEqual(["d", "c", "b"]);
+    const a = await (await list("since=10&order=sideways")).json();
+    expect(a.items.map((x: { uid: string }) => x.uid)).toEqual(["b", "c", "d"]);
+  });
+
   it("omits rows whose R2 envelope is missing (documents current behavior)", async () => {
     await put(PRO, "x", { updated_at: 5 });
     // Drop just the envelope, leaving the relic_meta row behind.

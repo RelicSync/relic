@@ -33,6 +33,8 @@ void main() {
   late String url;
   // Every path the server has been asked for, in arrival order.
   late List<String> arrivals;
+  // The query of every item pull, in arrival order.
+  late List<Map<String, String>> pulls;
   // Paths the server has finished answering, in completion order.
   late List<String> answered;
   // Paths that are made to answer slowly, as a phone radio would.
@@ -70,6 +72,7 @@ void main() {
       (call) async => tmp.path,
     );
     arrivals = [];
+    pulls = [];
     answered = [];
     slow = {};
     page = [await envFor('fresh', 'copied on the desktop yesterday')];
@@ -80,6 +83,7 @@ void main() {
     unawaited(server.forEach((req) async {
       final path = req.uri.path;
       arrivals.add(path);
+      if (path == '/relics') pulls.add(req.uri.queryParameters);
       if (slow.contains(path)) {
         await Future<void>.delayed(const Duration(milliseconds: 400));
       }
@@ -177,6 +181,26 @@ void main() {
         reason: 'AI records still come after the items they decorate');
     expect(r.all.map((x) => x.uid), ['fresh']);
     expect(r.sync.kind, SyncKind.synced);
+  });
+
+  test('a cold pull walks the vault first, then everything, newest first',
+      () async {
+    final r = await repo();
+    await r.loadLocal();
+    await r.syncDelta();
+    // Nothing cached: the vault walk, then the full walk. The server here
+    // answers both with the same page, and the second sees it as not news.
+    expect(pulls.map((q) => q['promoted']), ['1', null]);
+    expect(pulls.map((q) => q['order']), ['desc', 'desc']);
+    expect(pulls.map((q) => q['since']), ['0', '0']);
+    expect(r.all.map((x) => x.uid), ['fresh']);
+    expect(r.sync.kind, SyncKind.synced);
+
+    // With a cursor there is only the one walk.
+    pulls.clear();
+    await r.syncDelta();
+    expect(pulls.map((q) => q['promoted']), [null]);
+    expect(pulls.single['since'], isNot('0'));
   });
 
   test('a tombstone fetched alongside the pull still removes the item',

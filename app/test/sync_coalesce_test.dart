@@ -37,6 +37,16 @@ void main() {
     url = 'http://127.0.0.1:${server.port}';
     unawaited(server.forEach((req) async {
       final path = req.uri.path;
+      // A cold pull walks the vault items first and then everything; only the
+      // full walk is counted, so one pass is still one pull here.
+      if (path == '/relics' && req.uri.queryParameters['promoted'] == '1') {
+        req.response
+          ..statusCode = 200
+          ..headers.contentType = ContentType.json
+          ..write(jsonEncode({'items': <Object>[], 'next_cursor': null}));
+        await req.response.close();
+        return;
+      }
       if (path == '/relics') {
         relicPulls++;
         if (failNextRelicPull) {
