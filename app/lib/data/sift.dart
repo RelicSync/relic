@@ -123,6 +123,11 @@ class SiftSidecar {
 
   bool _modelsReady = false;
   bool get modelsReady => _modelsReady;
+  bool _labelerReady = false;
+
+  /// Whether the optional titler (Qwen3.5 labeler) is on disk, as of the last
+  /// [checkModels].
+  bool get labelerReady => _labelerReady;
 
   /// Whether item descriptions are enabled at all (the user's setting).
   ///
@@ -174,6 +179,11 @@ class SiftSidecar {
       // `models status` prints "MISSING" for any absent core model; optional
       // ones print "optional", so a clean core set has no "MISSING".
       _modelsReady = r.exitCode == 0 && !'${r.stdout}'.contains('MISSING');
+      // The labeler is the one optional row ("(labeling) ... present").
+      _labelerReady = r.exitCode == 0 &&
+          '${r.stdout}'
+              .split('\n')
+              .any((l) => l.contains('(labeling)') && l.contains(' present '));
     } catch (_) {
       _modelsReady = false;
     }

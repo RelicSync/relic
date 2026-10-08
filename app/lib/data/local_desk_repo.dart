@@ -1230,16 +1230,21 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   // --- on-device ML (sift) ---
   SiftSidecar? _sift;
   bool _mlEnrich = true;
-  // Generated titles + topic tags, for photos AND text. Defaults OFF
-  // (docs/ai-labeling-audit-2026-07.md): it is a ~666 MB download and ~0.8 s
-  // per item even through the resident classifier. Existing users keep
-  // whatever they set — the pref key stays `rich_captions`, which is what this
-  // was called when it only did images.
-  bool _describeItems = false;
-  // Widen labeling from vault-only to the whole stream. Off by default: the
-  // stream is where the volume is, so this spends ~0.8 s of generative work on
-  // every throwaway copy, and most of them are never looked at again.
-  bool _describeEverything = false;
+  // Generated titles + topic tags, for photos AND text. ON by default since
+  // the t3 titler (2026-10): a title written from where a copy came from is
+  // the strongest search signal we have (title-only search finds the item at
+  // 0.74 vs 0.40), so every item gets one. It costs a ~666 MB download and
+  // about a second of background work per new item. The pref key stays
+  // `rich_captions`, which is what this was called when it only did images.
+  bool _describeItems = true;
+  // Label the whole stream, not just the vault. On by default with the above;
+  // it only applies to NEW items (nothing re-labels an existing vault).
+  bool _describeEverything = true;
+  // Whether this install has had titles switched on for everything once. Every
+  // older install saved both switches as off, so on the update they are turned
+  // on once (anyone can turn them back off), and never again after.
+  bool _describeAllOn = true;
+  bool _describeTurnedOn = false;
   // How much CPU the background passes may take. See [AnalysisSpeed].
   AnalysisSpeed _analysisSpeed = AnalysisSpeed.balanced;
   // Which generation of retired-model cleanup this install has already run.
@@ -1724,8 +1729,15 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         // summoned it, not by a preference. Old files keep the key; it is
         // ignored and drops out on the next save.)
         _mlEnrich = j['ml_enrich'] as bool? ?? true;
-        _describeItems = j['rich_captions'] as bool? ?? false;
-        _describeEverything = j['describe_everything'] as bool? ?? false;
+        _describeItems = j['rich_captions'] as bool? ?? true;
+        _describeEverything = j['describe_everything'] as bool? ?? true;
+        _describeAllOn = j['describe_all_on'] as bool? ?? false;
+        if (!_describeAllOn) {
+          _describeItems = true;
+          _describeEverything = true;
+          _describeAllOn = true;
+          _describeTurnedOn = true; // saved once load finishes
+        }
         _analysisSpeed = AnalysisSpeed.byName(j['analysis_speed'] as String?);
         _prunedGen = j['models_pruned_gen'] as int? ?? 0;
         _vectorModel = j['vector_model'] as String?;
@@ -1845,6 +1857,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           'ml_enrich': _mlEnrich,
           'rich_captions': _describeItems,
           'describe_everything': _describeEverything,
+          'describe_all_on': _describeAllOn,
           'analysis_speed': _analysisSpeed.name,
           'models_pruned_gen': _prunedGen,
           if (_vectorModel != null) 'vector_model': _vectorModel,
@@ -1944,6 +1957,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   @override
   Future<void> load() async {
     _loadPrefs();
+    if (_describeTurnedOn) _savePrefs();
     searchTuning.load(File(_p('search_tuning.json')));
     if (searchTuning.enabled) searchTuning.addListener(_retune);
     // Cache the running version once for the X-Relic-App-Version header (and
@@ -5976,9 +5990,12 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     final unfinished = <String>{};
     try {
       // First cycle (and after each download) we re-check model readiness.
-      if (!sift.modelsReady && !_downloadingModels) {
+      if (!_downloadingModels &&
+          (!sift.modelsReady || (_describeItems && !sift.labelerReady))) {
         await sift.checkModels();
-        if (!sift.modelsReady) {
+        // The titler is optional to the core set, so a missing one never made
+        // the models "not ready"; with titles on it has to be fetched too.
+        if (!sift.modelsReady || (_describeItems && !sift.labelerReady)) {
           _downloadingModels = true;
           notifyListeners();
           // background fetch; a later cycle upgrades Stage-A → full ML
