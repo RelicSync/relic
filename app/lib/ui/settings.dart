@@ -3427,6 +3427,13 @@ class _SettingsViewState extends State<SettingsView>
                         style: RelicTheme.mono(size: 10, color: c.accentMuted),
                       ),
                     ],
+                    if (repo.mlEnrich && repo.searchBacklog > 0) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        'updating search for ${_fmtCount(repo.searchBacklog)} items…',
+                        style: RelicTheme.mono(size: 10, color: c.accentMuted),
+                      ),
+                    ],
                   ],
                 ),
               ),

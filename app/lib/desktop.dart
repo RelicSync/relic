@@ -2529,6 +2529,12 @@ class _RealAppState extends State<RealApp>
         if (widget.repo.isDemo && !widget.repo.demoNudgeDismissed) {
           banners.add(_demoNudgeBanner());
         }
+        // A whole-vault search rebuild (a new embedding model) takes a while;
+        // meaning-based results are partial until it finishes, so say so.
+        // Small backlogs are just new copies being indexed, not worth a banner.
+        if (widget.repo.searchBacklog >= 200) {
+          banners.add(_searchRebuildBanner(widget.repo.searchBacklog));
+        }
         final listed = banners.isEmpty
             ? popup
             : Column(
@@ -2713,6 +2719,44 @@ class _RealAppState extends State<RealApp>
 
   /// One-time demo nudge shown after "Try the demo" seeding. Dismissal persists
   /// (repo prefs), so it never nags twice; the button opens onboarding.
+  Widget _searchRebuildBanner(int left) {
+    final c = _useDark ? RelicColors.dark : RelicColors.light;
+    final n = left.toString().replaceAllMapped(
+        RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+    return Material(
+      color: c.panel,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: c.border, width: 1)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            Insets.lg,
+            Insets.md,
+            Insets.lg,
+            Insets.md,
+          ),
+          child: Row(
+            children: [
+              Icon(LucideIcons.refreshCw, color: c.accent, size: 16),
+              const SizedBox(width: Insets.md),
+              Expanded(
+                child: Text(
+                  'Improving search: $n items left. Results get better as it finishes.',
+                  style: RelicTheme.sans(
+                    size: 12.5,
+                    color: c.text,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _demoNudgeBanner() {
     final c = _useDark ? RelicColors.dark : RelicColors.light;
     return Material(

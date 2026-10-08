@@ -1958,6 +1958,17 @@ class RelicDb {
       .map(_toRelic)
       .toList();
 
+  /// How many relics [needingVectors] would still return (all of them, not a
+  /// page): the "updating search" progress after an embedding model change.
+  int countNeedingVectors(int level) => (_db.select(
+        '''SELECT COUNT(*) AS n FROM relics r
+            WHERE r.enrich_level >= ? AND r.held_by IS NULL
+              AND COALESCE(TRIM(r.content), '') <> ''
+              AND NOT EXISTS (SELECT 1 FROM vectors v WHERE v.uid = r.uid)''',
+        [level],
+      ).first['n'] as num)
+          .toInt();
+
   /// How many relics still sit below [level] — the settings "tagging N
   /// items…" progress line. Full-table scan (enrich_level is unindexed);
   /// fine at the enrich worker's 6 s cadence.

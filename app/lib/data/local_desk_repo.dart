@@ -1345,6 +1345,15 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   bool get removingModels => _removingModels;
   int get enrichBacklog => _enrichBacklog;
 
+  /// Items whose search vector is still to be (re)built: after a new
+  /// embedding model, the whole vault. Items that can never get one are not
+  /// counted. Drives the "updating search" line and banner.
+  int get searchBacklog => _searchBacklog;
+  int _searchBacklog = 0;
+  // Model download backoff (see the enrich cycle).
+  int _downloadFails = 0;
+  DateTime _downloadRetryAt = DateTime.fromMillisecondsSinceEpoch(0);
+
   Future<String?> _modelsDir() async =>
       _modelsDirCache ??= await _sift?.modelsPath();
 
@@ -5991,6 +6000,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     try {
       // First cycle (and after each download) we re-check model readiness.
       if (!_downloadingModels &&
+          !DateTime.now().isBefore(_downloadRetryAt) &&
           (!sift.modelsReady || (_describeItems && !sift.labelerReady))) {
         await sift.checkModels();
         // The titler is optional to the core set, so a missing one never made
@@ -6002,6 +6012,14 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           unawaited(
             sift.downloadModels(label: _describeItems).then((_) {
               _downloadingModels = false;
+              // Offline or a failed fetch: back off (1, 2, 4 … 60 min) instead
+              // of starting a ~1 GB download again every 6 s cycle.
+              final ok = sift.modelsReady && (!_describeItems || sift.labelerReady);
+              _downloadFails = ok ? 0 : _downloadFails + 1;
+              _downloadRetryAt = ok
+                  ? DateTime.fromMillisecondsSinceEpoch(0)
+                  : DateTime.now().add(Duration(
+                      minutes: (1 << (_downloadFails - 1).clamp(0, 6)).clamp(1, 60)));
               notifyListeners();
             }),
           );
@@ -6057,6 +6075,13 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       // 24 per 6 s cycle: an embed-only pass is ~0.1 s an item, and after a
       // model change it has the whole vault to redo (~25 min for 6,700 items).
       if (sift.modelsReady && await _backfillVectors(sift, 24)) changed = true;
+      final searchLeft = (sift.modelsReady && _aiEmbeddings)
+          ? (db.countNeedingVectors(_levelMl) - _embedSkip.length).clamp(0, 1 << 30)
+          : 0;
+      if (searchLeft != _searchBacklog) {
+        _searchBacklog = searchLeft;
+        changed = true;
+      }
       if (changed) {
         _refreshWindow();
         notifyListeners();
