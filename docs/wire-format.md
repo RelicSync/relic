@@ -111,6 +111,44 @@ authoritative and `uid` is tamper-bound via AAD. (`updated_at`/`promoted` are
 Worker-readable by design; a malicious server rewriting them is within the
 threat model's accepted metadata surface.)
 
+## AI record (sealed)
+
+What the on-device models produced for one relic, synced as a document of its
+own (`PUT /ai/:uid`, see `docs/api.md`) so a background tagging pass never
+looks like a user edit. The envelope is `{ v: 1, uid, ai_at, level, n, ct }`;
+`ct` AEAD-decrypts (key = MK, AAD = `relic.ai.v1:<uid>`) to:
+
+```json
+{
+  "title": "Roofing quote",
+  "tags": ["invoice"],
+  "text": "<OCR or document text, at most 24 KiB>",
+  "att": "<text read out of the attachments; '' means ran and found nothing>",
+  "vec": {
+    "m": "embeddinggemma-300m-ft2@int8-mrl256",
+    "d": 256,
+    "q": "i8",
+    "s": [0.0123, 0.0117],
+    "c": ["<b64 int8 bytes>", "<b64 int8 bytes>"]
+  }
+}
+```
+
+Every field is optional. `vec` carries the search vectors the producing device
+computed, so a device with no model (a phone, the web vault) can search the
+item by meaning. `m` is the model version string that made them, and it
+decides comparability: a reader only compares vectors whose `m` matches its
+own query encoder, and ignores the rest. `d` is the dimension, `q: "i8"` the
+quantisation. Each entry of `c` is one chunk, `d` signed bytes in base64;
+`value = int8 * s[i]`, and the reader re-normalises the chunk before a dot
+product. Chunk 0 is the whole item; further chunks cover a long document.
+At most 16 chunks.
+
+The whole sealed payload stays inside the server's 48 KiB `ct` cap. When a
+record is over budget the producer drops `att` first, then `text`, then `vec`;
+the title and tags always travel. Vectors from a different model than the
+reader's are not an error: the item is then found by its words only.
+
 ## Blob objects
 
 `POST /blob?id=<id>` body and R2 object `users/<account>/blob/<id>`: raw bytes,

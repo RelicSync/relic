@@ -6075,6 +6075,12 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       // 24 per 6 s cycle: an embed-only pass is ~0.1 s an item, and after a
       // model change it has the whole vault to redo (~25 min for 6,700 items).
       if (sift.modelsReady && await _backfillVectors(sift, 24)) changed = true;
+      // The backfill re-queues records it put vectors on; same reasoning as
+      // above, a phone searching by meaning is waiting on them.
+      if (_aiRecordsOwed) {
+        _aiRecordsOwed = false;
+        _kickSync();
+      }
       final searchLeft = (sift.modelsReady && _aiEmbeddings)
           ? (db.countNeedingVectors(_levelMl) - _embedSkip.length).clamp(0, 1 << 30)
           : 0;
@@ -6197,6 +6203,12 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     for (final r in db.needingVectors(_levelMl, fetch)) {
       if (_disposed || done >= limit) break;
       if (_embedSkip.contains(r.uid)) continue;
+      // The device that ran the models may have sent its vectors along with
+      // the title. Same model: take them and skip the embedding.
+      if (_importAiVectors(db, db.aiRecord(r.uid))) {
+        changed = true;
+        continue;
+      }
       done++;
       final doc = embedDocFor(r);
       if (doc.isEmpty) {
@@ -6217,9 +6229,68 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       final chunks = [vec, ...?res?.textChunkVectors];
       db.upsertVectors(r.uid, chunks);
       _vec[r.uid] = [for (final c in chunks) Float32List.fromList(c)];
+      _attachVectors(db, r.uid, chunks, res?.textModel);
       changed = true;
     }
     return changed;
+  }
+
+  /// Put the vectors this device just computed on the item's AI record, so a
+  /// device with no model (a phone) can search the item by meaning. Whether
+  /// the record goes back out is decided in [RelicDb.attachAiVectors]: only a
+  /// record this device owns is re-published.
+  void _attachVectors(
+      RelicDb db, String uid, List<List<double>> chunks, String? model) {
+    if (model == null || model.isEmpty || chunks.isEmpty) return;
+    final queued = db.attachAiVectors(
+      uid,
+      AiVectors.quantize(model, chunks),
+      deviceId: _deviceId,
+      now: _now,
+      publish: syncEnabled,
+    );
+    if (queued) _aiRecordsOwed = true;
+  }
+
+  /// Take the vectors a record carries into this device's semantic index, if
+  /// they are from the model this device searches with. Returns whether they
+  /// landed.
+  ///
+  /// Only a model match counts: two models put the same text in unrelated
+  /// places, and a vector from the wrong one would rank garbage. Vectors this
+  /// device computed itself are kept over a peer's copy, which went through
+  /// int8 on the wire. With embeddings off the user has opted out of the
+  /// semantic leg, and an index they asked not to have is not built from a
+  /// peer's work either.
+  bool _importAiVectors(RelicDb db, AiRecord? rec) {
+    if (rec == null) return false;
+    final chunks = importableVectors(
+      rec.vec,
+      model: _vectorModel,
+      embeddings: _aiEmbeddings,
+      haveLocal: _vec.containsKey(rec.uid),
+    );
+    if (chunks == null) return false;
+    db.upsertVectors(rec.uid, chunks);
+    _vec[rec.uid] = chunks;
+    return true;
+  }
+
+  /// The rule behind [_importAiVectors], on its own so it can be pinned: the
+  /// chunks of [vec] as unit-length floats when they are worth taking, else
+  /// null. [model] is the model this device searches with (null until it has
+  /// been seen, in which case nothing is comparable yet).
+  @visibleForTesting
+  static List<Float32List>? importableVectors(
+    AiVectors? vec, {
+    required String? model,
+    required bool embeddings,
+    required bool haveLocal,
+  }) {
+    if (vec == null || vec.chunks.isEmpty) return null;
+    if (!embeddings || haveLocal) return null;
+    if (model == null || vec.model != model) return null;
+    return [for (var i = 0; i < vec.chunks.length; i++) vec.chunk(i)];
   }
 
   Future<bool> _enrichOne(SiftSidecar sift, Relic r, int level) async {
@@ -6296,12 +6367,18 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     // same thing it meant in every previously-indexed vault. Search takes the
     // max across an item's chunks, so this needs nothing on the query side.
     var wroteVector = false;
+    AiVectors? aiVec;
     if (res.textVector != null && res.textVector!.isNotEmpty) {
       _noteVectorModel(res.textModel);
       final chunks = [res.textVector!, ...?res.textChunkVectors];
       db.upsertVectors(r.uid, chunks);
       _vec[r.uid] = [for (final c in chunks) Float32List.fromList(c)];
       wroteVector = true;
+      // The same vectors ride the AI record below, so a device with no model
+      // of its own can still search this item by meaning.
+      if (res.textModel case final m? when m.isNotEmpty) {
+        aiVec = AiVectors.quantize(m, chunks);
+      }
     }
 
     // Machine tags the user explicitly removed stay removed.
@@ -6430,6 +6507,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       // nowhere else, because OCR output lands in the relic's content column
       // and that column only travels on a user edit.
       text: ocrText.isEmpty ? null : ocrText,
+      vec: aiVec,
     );
     // An empty record would still claim its uid under earliest-wins and then
     // lock every other device out of producing a real one.
@@ -6712,10 +6790,13 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         content: merged.content,
       ));
     }
+    // The vectors the producing device sent along, so a second desktop does
+    // not re-embed what the first already did.
+    final vecChanged = _importAiVectors(db, rec);
     // The point of the whole exercise: this device now considers the item done
     // and will not run the models on it.
     db.raiseEnrichLevel(rec.uid, rec.level);
-    return changed || attChanged;
+    return changed || attChanged || vecChanged;
   }
 
   /// Apply records whose relic has since arrived (or which predate a level bump

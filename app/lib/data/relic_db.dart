@@ -188,14 +188,15 @@ class RelicDb {
         pushed   INTEGER NOT NULL DEFAULT 0
       );
     ''');
-    // The text columns arrived after the table did. No user_version bump: the
-    // table is young enough that the only databases without them are
-    // development ones, and an added nullable column needs no backfill.
+    // The text columns arrived after the table did, and `vec` (the record's
+    // search vectors as JSON, see AiVectors.toJson) after those. No
+    // user_version bump: an added nullable column needs no backfill, and the
+    // check is cheap enough to run on every open.
     final aiCols = db
         .select('PRAGMA table_info(ai_records)')
         .map((r) => r['name'] as String)
         .toSet();
-    for (final c in ['ai_text', 'att_text']) {
+    for (final c in ['ai_text', 'att_text', 'vec']) {
       if (!aiCols.contains(c)) {
         db.execute('ALTER TABLE ai_records ADD COLUMN $c TEXT');
       }
@@ -1766,7 +1767,19 @@ class RelicDb {
     tags: _jsonList(r['tags']),
     text: r['ai_text'] as String?,
     att: r['att_text'] as String?,
+    vec: _vecFromColumn(r['vec']),
   );
+
+  /// The `vec` column back into [AiVectors]. Anything unreadable is null, so a
+  /// damaged column costs the item its vectors and nothing else.
+  static AiVectors? _vecFromColumn(Object? v) {
+    if (v is! String || v.isEmpty) return null;
+    try {
+      return AiVectors.fromJson(jsonDecode(v));
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// Store [rec] if it beats what's already here, and return whether it landed.
   ///
@@ -1794,15 +1807,20 @@ class RelicDb {
             tags: rec.tags.isNotEmpty ? rec.tags : stored.tags,
             text: rec.text ?? stored.text,
             att: rec.att ?? stored.att,
+            // Vectors from a different model stay too: this device only
+            // reads vectors from its own model, and a peer that does read them
+            // would rather have the old ones than none.
+            vec: rec.vec ?? stored.vec,
           );
     _db.execute(
       '''INSERT INTO ai_records
-           (uid, ai_at, ai_level, ai_by, title, tags, ai_text, att_text, pushed)
-         VALUES (?,?,?,?,?,?,?,?,?)
+           (uid, ai_at, ai_level, ai_by, title, tags, ai_text, att_text, vec,
+            pushed)
+         VALUES (?,?,?,?,?,?,?,?,?,?)
          ON CONFLICT(uid) DO UPDATE SET
            ai_at=excluded.ai_at, ai_level=excluded.ai_level, ai_by=excluded.ai_by,
            title=excluded.title, tags=excluded.tags, ai_text=excluded.ai_text,
-           att_text=excluded.att_text, pushed=excluded.pushed''',
+           att_text=excluded.att_text, vec=excluded.vec, pushed=excluded.pushed''',
       [
         merged.uid,
         merged.at,
@@ -1815,10 +1833,76 @@ class RelicDb {
         // would grow the vault file for nothing.
         aiTextForWire(merged.text),
         merged.att == null ? null : (aiTextForWire(merged.att) ?? ''),
+        _vecToColumn(merged.vec),
         needsPush ? 0 : 1,
       ],
     );
     return true;
+  }
+
+  static String? _vecToColumn(AiVectors? vec) =>
+      vec == null || vec.chunks.isEmpty ? null : jsonEncode(vec.toJson());
+
+  /// Attach the search vectors this device computed for [uid] to the AI
+  /// record it holds for the item. Returns whether the record is now owed to
+  /// the server because of it.
+  ///
+  /// The ownership rule, chosen against `aiResultWins` above and its mirror
+  /// in worker/src/ai.ts:
+  ///
+  ///   * This device OWNS the record (`by` is this device): the vectors join
+  ///     it and, when [publish] is set, the record is re-queued. The server
+  ///     takes it as an amendment (same device, same or later `ai_at`), and
+  ///     the title and tags it carries are this device's own, so nothing is
+  ///     overwritten that another device wrote.
+  ///   * A PEER owns the record: the vectors are kept here only. The server
+  ///     stamps every push with the pushing device's id, so re-publishing a
+  ///     peer's record with our vectors would either lose the tie-break and
+  ///     be refused, or win it and move the record's ownership to a device
+  ///     that holds less of the answer (the peer's later attachment text would
+  ///     then be refused as stale). The peer publishes its own vectors when it
+  ///     embeds the item.
+  ///   * NO record exists: a vectors-only record is created, at the item's
+  ///     current enrich level and never above it, the same as attachment text.
+  ///     It wins its uid under earliest-wins, which is acceptable: the item
+  ///     is only in the vector queue once the models have run on it, so there
+  ///     is no title still to come that it could lock out.
+  ///
+  /// A record with no `by` is nobody's, so it is never re-pushed; a device
+  /// without an id of its own owns nothing either.
+  bool attachAiVectors(
+    String uid,
+    AiVectors vec, {
+    required String? deviceId,
+    required int now,
+    required bool publish,
+  }) {
+    if (vec.chunks.isEmpty) return false;
+    final stored = aiRecord(uid);
+    if (stored == null) {
+      // The relic may have been deleted while the embedding ran; a record for
+      // a uid that no longer exists would only wait for a relic that never
+      // comes.
+      final level = enrichLevelOf(uid);
+      if (level == null) return false;
+      putAiRecord(
+        AiRecord(uid: uid, at: now, level: level, by: deviceId, vec: vec),
+        needsPush: publish,
+      );
+      return publish;
+    }
+    final owner = deviceId != null && stored.by == deviceId;
+    final requeue = owner && publish;
+    // A plain column write rather than putAiRecord: a peer's record must keep
+    // its pushed = 1, and our own record must keep pushed = 0 if it is still
+    // waiting to go out for other reasons.
+    _db.execute(
+      '''UPDATE ai_records
+            SET vec = ?, pushed = CASE WHEN ? THEN 0 ELSE pushed END
+          WHERE uid = ?''',
+      [_vecToColumn(vec), requeue ? 1 : 0, uid],
+    );
+    return requeue;
   }
 
   /// Publish what this device has ALREADY generated, as AI records.
