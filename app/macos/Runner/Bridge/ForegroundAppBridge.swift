@@ -121,10 +121,18 @@ enum ForegroundAppBridge {
   private static func copyContext() -> [String: String]? {
     let system = AXUIElementCreateSystemWide()
     AXUIElementSetMessagingTimeout(system, 0.25)
-    guard let focused = axElement(system, kAXFocusedUIElementAttribute) else { return nil }
+    guard let focused = axElement(system, kAXFocusedUIElementAttribute) else {
+      // Chromium apps (Chrome, Electron) answer the focused element only once
+      // an assistive client has switched their accessibility on, which Relic
+      // never does. Their window titles are still readable, so keep those.
+      guard let title = frontmostWindowTitle(), !title.isEmpty else { return nil }
+      return ["title": title]
+    }
     var out: [String: String] = [:]
     if let window = axElement(focused, kAXWindowAttribute),
        let title = axString(window, kAXTitleAttribute), !title.isEmpty {
+      out["title"] = title
+    } else if let title = frontmostWindowTitle(), !title.isEmpty {
       out["title"] = title
     }
     let role = axString(focused, kAXRoleAttribute) ?? ""
@@ -150,6 +158,18 @@ enum ForegroundAppBridge {
       element = axElement(el, kAXParentAttribute)
     }
     return out.isEmpty ? nil : out
+  }
+
+  /// The frontmost app's focused (else main) window title, read through the
+  /// app element rather than the focused element.
+  private static func frontmostWindowTitle() -> String? {
+    guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+    let appElement = AXUIElementCreateApplication(app.processIdentifier)
+    AXUIElementSetMessagingTimeout(appElement, 0.25)
+    let window = axElement(appElement, kAXFocusedWindowAttribute)
+      ?? axElement(appElement, kAXMainWindowAttribute)
+    guard let window else { return nil }
+    return axString(window, kAXTitleAttribute)
   }
 
   /// Up to 1,500 characters either side of [element]'s selected range.
