@@ -3124,6 +3124,11 @@ class RelicDb {
     // ephemeral and its terms-at-rest are hashed, so the counters can't live
     // in here); absent → behavior unchanged.
     Map<String, double> Function(List<String> union)? factorsFor,
+    // A ranked semantic candidate list the caller computed outside SQLite
+    // (the phone's cosine leg over vectors that arrived inside AI records).
+    // Fused at the desktop's weight for its own semantic leg. Already scope
+    // and date filtered by the caller. Absent or empty: ranking unchanged.
+    List<String>? sem,
   }) {
     final s = search.trim();
     if (s.isEmpty) return null;
@@ -3135,15 +3140,17 @@ class RelicDb {
         createdAfter: createdAfter, createdBefore: createdBefore);
     final tagIntent = tagIntentCandidates(s, scope, 50,
         createdAfter: createdAfter, createdBefore: createdBefore);
-    final union = <String>{...fts, ...tri, ...tagIntent}.toList();
+    final semLeg = sem ?? const <String>[];
+    final union = <String>{...fts, ...tri, ...semLeg, ...tagIntent}.toList();
     final recency = byRecency(union);
     // Lexical leg carries double weight so an exact/concise match stays on top;
     // trigram adds recall; tag-intent puts items that ARE the named type above
     // items that merely say its word; recency is a light tiebreak; kept items
     // win near-ties via the score factor; often-touched / often-picked-for-
     // these-terms items climb via the personal factors. Mirrors the desktop
-    // weights (minus the ML semantic/tag legs and the summon context, which
-    // only desktop has).
+    // weights (minus the tag-expansion leg and the summon context, which only
+    // desktop has). The semantic leg is the caller's to supply: on a phone it
+    // comes from vectors a desktop sent inside AI records.
     var factors = rankFactors(union,
         query: s, now: now ?? DateTime.now().millisecondsSinceEpoch ~/ 1000);
     final extra = factorsFor?.call(union);
@@ -3156,8 +3163,8 @@ class RelicDb {
           (_, f) => f > kPersonalBoostCap ? kPersonalBoostCap : f);
     }
     final ranked = rrfFuse(
-      [fts, tri, tagIntent, recency],
-      weights: const [2.0, 1.0, kTagIntentWeight, 0.5],
+      [fts, tri, semLeg, tagIntent, recency],
+      weights: const [2.0, 1.0, 1.0, kTagIntentWeight, 0.5],
       boostUids: scope == Scope.vault ? null : promotedUids(),
       boostFactor: kKeptBoostFactor,
       factors: factors,
