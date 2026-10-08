@@ -2702,8 +2702,9 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
 }
 
 /// The one line that hands the phone's query encoder to the repo, or takes it
-/// back with null. The repo side is landing on a sibling branch.
-///
-// TODO(sem/model): once worker_repo.dart has the field, this body becomes
-// `repo.queryEncoder = encoder;` and the search leg lights up.
-void _wireQueryEncoder(WorkerRepo repo, QueryEncoder? encoder) {}
+/// back with null. Setting it re-reads every stored vector against the
+/// encoder's space and re-runs the active search; null leaves the lexical
+/// legs on their own.
+void _wireQueryEncoder(WorkerRepo repo, QueryEncoder? encoder) {
+  repo.queryEncoder = encoder;
+}
