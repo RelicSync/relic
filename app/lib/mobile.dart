@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -15,14 +16,18 @@ import 'data/api.dart';
 import 'data/boot_trace.dart';
 import 'data/device_directory.dart';
 import 'data/help_urls.dart';
+import 'data/model_download.dart';
 import 'data/oauth_flow.dart';
+import 'data/onnx_query_encoder.dart';
 import 'data/pairing_link.dart';
+import 'data/query_encoder.dart';
 import 'data/repo.dart';
 import 'data/review_prompt.dart';
 import 'data/save_prefs.dart';
 import 'data/secure_key_store.dart';
 import 'data/share_dedup.dart';
 import 'data/supabase_auth.dart';
+import 'data/wifi_watch.dart';
 import 'data/worker_repo.dart';
 import 'onboarding/add_device.dart';
 import 'onboarding/onboarding.dart';
@@ -228,6 +233,15 @@ class _Creds {
       (await _s.read(key: _kPersonalRank)) != '0'; // default on
   static Future<void> setPersonalRank(bool v) =>
       _s.write(key: _kPersonalRank, value: v ? '1' : '0');
+
+  // Search by meaning: the user chose to download the model. Off by default;
+  // the files on disk say whether it is usable, this says whether it is
+  // wanted (so a download cut short by a restart picks up again).
+  static const _kSemanticSearch = 'relic.search.semantic';
+  static Future<bool> semanticSearch() async =>
+      (await _s.read(key: _kSemanticSearch)) == '1';
+  static Future<void> setSemanticSearch(bool v) =>
+      _s.write(key: _kSemanticSearch, value: v ? '1' : '0');
 }
 
 /// How the app picks light vs dark.
@@ -281,6 +295,14 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   bool _maskSecrets = true;
   bool _pasteRich = true;
   bool _personalRank = true;
+
+  // Search by meaning (the on-phone query model). The pref is what the user
+  // asked for; the manager knows what is on disk; the encoder is handed to
+  // the repo once the files are there.
+  bool _semanticSearch = false;
+  ModelDownloadManager? _semModel;
+  OnnxQueryEncoder? _semEncoder;
+  WifiWatch? _wifi;
 
   /// Where "Save to device" writes, and which choices this device supports
   /// (Downloads needs Android 10+ — see [SavePrefs.options]).
@@ -427,7 +449,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   Future<void> _loadPrefs() async {
     // All independent, so read them concurrently — in series this was seven
     // more Keystore round trips racing the launch screen.
-    final (dev, av, ms, ap, pr, prt, sm, so) = await (
+    final (dev, av, ms, ap, pr, prt, sm, so, sem) = await (
       _Creds.deviceName(),
       _Creds.autoVault(),
       _Creds.maskSecrets(),
@@ -436,6 +458,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
       _Creds.pasteRichText(),
       SavePrefs.mode(),
       SavePrefs.options(),
+      _Creds.semanticSearch(),
     ).wait;
     BootTrace.mark('prefs read');
     if (!mounted) return;
@@ -448,7 +471,11 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
       _pasteRich = prt;
       _saveMode = sm;
       _saveOptions = so;
+      _semanticSearch = sem;
     });
+    // Wanted but not finished (the app was closed mid-download): pick the
+    // download up again, on Wi-Fi only. Ready files just attach.
+    if (sem) unawaited(_semanticResume());
     final repo = _repo;
     if (repo != null) {
       repo.deviceLabel = _deviceName;
@@ -474,6 +501,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     __repo?.changes.removeListener(_onRepoChanged);
     __repo?.sessionRevoked.removeListener(_onRepoChanged);
     _deviceCount.dispose();
+    _semModel?.dispose();
     super.dispose();
   }
 
@@ -732,6 +760,9 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     repo.personalRank = _personalRank;
     repo.pasteRichText = _pasteRich;
     repo.onUserCapture = _onUserCapture;
+    if (_semanticSearch && (_semModel?.state.value.isReady ?? false)) {
+      _attachQueryEncoder(repo);
+    }
     // Searching during the first seconds of a launch is answered by the
     // degraded matcher while the real index builds; this repaints with the
     // proper ranking the moment it lands.
@@ -1666,6 +1697,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
                     _pasteRichTile(colors, setSheet),
                     _settingLabel(colors, 'SEARCH'),
                     _personalRankTile(colors, setSheet),
+                    _semanticTile(colors, setSheet),
                     if (_personalRank)
                       _sheetItem(colors, LucideIcons.eraser,
                           'Clear learned ranking', () {
@@ -2158,6 +2190,201 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
         },
       );
 
+  // ---- Search by meaning --------------------------------------------------
+  //
+  // The phone runs the desktop's query model (about 330 MB, Wi-Fi only,
+  // opt-in). The row below shows one of three things: off with a one-line
+  // pitch and a Turn on action, downloading with progress, or on with a
+  // Turn off action that unloads the model and deletes the files.
+
+  Future<ModelDownloadManager>? _semManagerFuture;
+
+  /// The download manager, made on first use and kept for the app's life.
+  Future<ModelDownloadManager> _semanticManager() =>
+      _semManagerFuture ??= () async {
+        final support = await getApplicationSupportDirectory();
+        final wifi = _wifi ??= WifiWatch();
+        final m = ModelDownloadManager(
+          dir: Directory('${support.path}${Platform.pathSeparator}models'),
+          bundle: semanticModelFt2,
+          isWifi: wifi.isWifi,
+          wifiChanges: wifi.changes,
+        );
+        await m.refresh();
+        m.state.addListener(_onSemanticState);
+        _semModel = m;
+        return m;
+      }();
+
+  void _onSemanticState() {
+    final m = _semModel;
+    if (m == null) return;
+    if (m.state.value.isReady && _semanticSearch) {
+      final repo = _repo;
+      if (repo != null) _attachQueryEncoder(repo);
+    }
+    if (mounted) setState(() {});
+  }
+
+  /// At boot with the pref on: attach when the files are there, otherwise
+  /// carry on with the download (it resumes from the partial files).
+  Future<void> _semanticResume() async {
+    final m = await _semanticManager();
+    if (m.state.value.isReady) {
+      final repo = _repo;
+      if (repo != null) _attachQueryEncoder(repo);
+    } else {
+      unawaited(m.start());
+    }
+  }
+
+  void _attachQueryEncoder(WorkerRepo repo) {
+    final m = _semModel;
+    if (m == null) return;
+    final enc = _semEncoder ??=
+        OnnxQueryEncoder(OnnxEncoderSpec.ft2(m.dir.path));
+    enc.recheckFiles();
+    _wireQueryEncoder(repo, enc);
+  }
+
+  void _detachQueryEncoder() {
+    final repo = _repo;
+    if (repo != null) _wireQueryEncoder(repo, null);
+    final enc = _semEncoder;
+    _semEncoder = null;
+    if (enc != null) unawaited(enc.unload());
+  }
+
+  Widget _semanticTile(RelicColors c, StateSetter setSheet) {
+    final m = _semModel;
+    if (m == null) {
+      // Made on the first open; the sheet repaints once it exists.
+      unawaited(_semanticManager().then((_) => setSheet(() {})));
+      return _semanticRow(c, ModelDownloadState.absent);
+    }
+    return ValueListenableBuilder<ModelDownloadState>(
+      valueListenable: m.state,
+      builder: (_, s, _) => _semanticRow(c, s),
+    );
+  }
+
+  Widget _semanticRow(RelicColors c, ModelDownloadState s) {
+    final String blurb;
+    final String action;
+    final VoidCallback onAction;
+    switch (s.phase) {
+      case ModelDownloadPhase.ready:
+        blurb = 'On. Finds things by what they mean, not just the words.';
+        action = 'Turn off';
+        onAction = _semanticTurnOff;
+      case ModelDownloadPhase.downloading:
+        blurb = s.waitingForWifi
+            ? 'Waiting for Wi-Fi'
+            : 'Downloading, ${(s.fraction * 100).round()}%';
+        action = 'Cancel';
+        onAction = _semanticTurnOff;
+      case ModelDownloadPhase.absent:
+      case ModelDownloadPhase.failed:
+        blurb = 'Finds things by what they mean, not just the words. '
+            'Downloads 330 MB over Wi-Fi.';
+        action = 'Turn on';
+        onAction = _semanticTurnOn;
+    }
+    final reason = s.phase == ModelDownloadPhase.failed ? s.reason : null;
+    return ListTile(
+      leading: Icon(LucideIcons.brain, color: c.accent, size: 20),
+      title: Text('Search by meaning',
+          style: RelicTheme.sans(size: 15, color: c.text)),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(blurb, style: RelicTheme.sans(size: 11.5, color: c.textMuted)),
+          if (reason != null)
+            Text(reason, style: RelicTheme.sans(size: 11.5, color: c.danger)),
+          if (s.isDownloading)
+            Padding(
+              padding: const EdgeInsets.only(top: 6, right: 8),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(Radii.pill),
+                child: LinearProgressIndicator(
+                  value: s.fraction,
+                  minHeight: 4,
+                  color: c.accent,
+                  backgroundColor: c.border,
+                ),
+              ),
+            ),
+        ],
+      ),
+      trailing: TextButton(
+        onPressed: onAction,
+        child: Text(action,
+            style: RelicTheme.sans(
+                size: 13, weight: FontWeight.w600, color: c.accent)),
+      ),
+    );
+  }
+
+  Future<void> _semanticTurnOn() async {
+    final ctx = _navKey.currentContext;
+    if (ctx == null) return;
+    final colors = _dark ? RelicColors.dark : RelicColors.light;
+    final ok = await showDialog<bool>(
+      context: ctx,
+      builder: (dctx) => RelicTheme(
+        colors: colors,
+        isMobile: true,
+        child: AlertDialog(
+          backgroundColor: colors.panel,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(Radii.card),
+            side: BorderSide(color: colors.borderStrong),
+          ),
+          title: Text('Download 330 MB?',
+              style: RelicTheme.headline(size: 17, color: colors.text)),
+          content: Text(
+            'Relic downloads its search model over Wi-Fi only and keeps it '
+            'on this phone. Your searches stay on the phone too. You can '
+            'turn it off later to free the space.',
+            style: RelicTheme.sans(
+                size: 13.5, color: colors.textSecondary, height: 1.5),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dctx, false),
+              child: Text('Cancel',
+                  style: RelicTheme.sans(
+                      size: 13.5, color: colors.textSecondary)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dctx, true),
+              child: Text('Download',
+                  style: RelicTheme.sans(
+                      size: 13.5,
+                      weight: FontWeight.w600,
+                      color: colors.accent)),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+    _semanticSearch = true;
+    unawaited(_Creds.setSemanticSearch(true));
+    final m = await _semanticManager();
+    unawaited(m.start());
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _semanticTurnOff() async {
+    _semanticSearch = false;
+    unawaited(_Creds.setSemanticSearch(false));
+    _detachQueryEncoder();
+    final m = _semModel;
+    if (m != null) await m.delete();
+    if (mounted) setState(() {});
+  }
+
   /// Where "Save to device" writes. Vertical rows rather than the appearance
   /// chip strip: the labels are too long to sit side by side on a phone, and
   /// each mode needs a line of explanation.
@@ -2473,3 +2700,10 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     ));
   }
 }
+
+/// The one line that hands the phone's query encoder to the repo, or takes it
+/// back with null. The repo side is landing on a sibling branch.
+///
+// TODO(sem/model): once worker_repo.dart has the field, this body becomes
+// `repo.queryEncoder = encoder;` and the search leg lights up.
+void _wireQueryEncoder(WorkerRepo repo, QueryEncoder? encoder) {}
