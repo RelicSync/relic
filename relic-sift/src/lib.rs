@@ -19,6 +19,7 @@
 //! assert_eq!(record.category.primary, "api_key");
 //! ```
 
+pub mod context;
 pub mod embed;
 pub mod eval;
 pub mod extract;
@@ -39,6 +40,7 @@ pub mod tags;
 pub mod taxonomy;
 pub mod user_rules;
 
+pub use context::CopyContext;
 pub use embed::Embedder;
 pub use labeler::{Label, Labeler};
 pub use pipeline::{Sift, SiftConfig};

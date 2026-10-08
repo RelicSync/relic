@@ -27,6 +27,9 @@ enum ForegroundAppBridge {
       case "caretScreenPoint":
         result(caretScreenPoint())
 
+      case "copyContext":
+        result(copyContext())
+
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -100,6 +103,122 @@ enum ForegroundAppBridge {
           rect != .zero
     else { return nil }
     return rect
+  }
+
+  /// Where the current copy came from, read through the Accessibility API
+  /// while the source app still owns the focus (Dart: copy_context.dart).
+  /// Answers raw pieces and lets Dart decide whether the selection is really
+  /// the copied text:
+  ///   title     the focused window's title
+  ///   selected  the focused text's current selection
+  ///   before / after   up to 1,500 characters either side of it, when the
+  ///             element exposes plain-text ranges (native text views, most
+  ///             editors)
+  ///   value     the element's whole text (capped), when ranges are missing,
+  ///             so Dart can split it around a unique copy
+  /// Secure text fields answer the title only. Needs the AX grant Relic
+  /// already holds for paste; untrusted, everything fails and this is nil.
+  private static func copyContext() -> [String: String]? {
+    let system = AXUIElementCreateSystemWide()
+    AXUIElementSetMessagingTimeout(system, 0.25)
+    guard let focused = axElement(system, kAXFocusedUIElementAttribute) else {
+      // Chromium apps (Chrome, Electron) answer the focused element only once
+      // an assistive client has switched their accessibility on, which Relic
+      // never does. Their window titles are still readable, so keep those.
+      guard let title = frontmostWindowTitle(), !title.isEmpty else { return nil }
+      return ["title": title]
+    }
+    var out: [String: String] = [:]
+    if let window = axElement(focused, kAXWindowAttribute),
+       let title = axString(window, kAXTitleAttribute), !title.isEmpty {
+      out["title"] = title
+    } else if let title = frontmostWindowTitle(), !title.isEmpty {
+      out["title"] = title
+    }
+    let role = axString(focused, kAXRoleAttribute) ?? ""
+    let subrole = axString(focused, kAXSubroleAttribute) ?? ""
+    if role == "AXSecureTextField" || subrole == "AXSecureTextField" {
+      return out.isEmpty ? nil : out
+    }
+    // The focused element is often a link or a run inside the text that owns
+    // the selection, so look a few ancestors up.
+    var element: AXUIElement? = focused
+    for _ in 0..<5 {
+      guard let el = element else { break }
+      if let selected = axString(el, kAXSelectedTextAttribute), !selected.isEmpty {
+        out["selected"] = selected
+        if let around = textAround(el) {
+          out["before"] = around.before
+          out["after"] = around.after
+        } else if let value = axString(el, kAXValueAttribute) {
+          out["value"] = String(value.prefix(200_000))
+        }
+        break
+      }
+      element = axElement(el, kAXParentAttribute)
+    }
+    return out.isEmpty ? nil : out
+  }
+
+  /// The frontmost app's focused (else main) window title, read through the
+  /// app element rather than the focused element.
+  private static func frontmostWindowTitle() -> String? {
+    guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+    let appElement = AXUIElementCreateApplication(app.processIdentifier)
+    AXUIElementSetMessagingTimeout(appElement, 0.25)
+    let window = axElement(appElement, kAXFocusedWindowAttribute)
+      ?? axElement(appElement, kAXMainWindowAttribute)
+    guard let window else { return nil }
+    return axString(window, kAXTitleAttribute)
+  }
+
+  /// Up to 1,500 characters either side of [element]'s selected range.
+  private static func textAround(_ element: AXUIElement) -> (before: String, after: String)? {
+    var rangeRef: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(
+            element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success,
+          let rangeAny = rangeRef,
+          CFGetTypeID(rangeAny) == AXValueGetTypeID()
+    else { return nil }
+    var range = CFRange()
+    guard AXValueGetValue(rangeAny as! AXValue, .cfRange, &range) else { return nil }
+    var countRef: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(
+            element, kAXNumberOfCharactersAttribute as CFString, &countRef) == .success,
+          let total = countRef as? Int
+    else { return nil }
+    let start = max(0, range.location - 1500)
+    let end = range.location + range.length
+    let before = stringForRange(element, location: start, length: range.location - start) ?? ""
+    let after = stringForRange(element, location: end, length: max(0, min(1500, total - end))) ?? ""
+    return (before, after)
+  }
+
+  private static func stringForRange(_ element: AXUIElement, location: Int, length: Int) -> String? {
+    guard length > 0 else { return "" }
+    var range = CFRange(location: location, length: length)
+    guard let rangeValue = AXValueCreate(.cfRange, &range) else { return nil }
+    var out: CFTypeRef?
+    guard AXUIElementCopyParameterizedAttributeValue(
+            element, kAXStringForRangeParameterizedAttribute as CFString,
+            rangeValue, &out) == .success
+    else { return nil }
+    return out as? String
+  }
+
+  private static func axElement(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
+    var ref: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &ref) == .success,
+          let any = ref, CFGetTypeID(any) == AXUIElementGetTypeID()
+    else { return nil }
+    return (any as! AXUIElement)
+  }
+
+  private static func axString(_ element: AXUIElement, _ attribute: String) -> String? {
+    var ref: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &ref) == .success
+    else { return nil }
+    return ref as? String
   }
 
   /// `{bundleId, name}` for an app, or nil when it has no bundle id (the id is

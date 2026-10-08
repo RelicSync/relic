@@ -101,7 +101,13 @@ final _prefixedToken = RegExp(
   r'|\bxox[baprs]-[A-Za-z0-9-]{10,}\b'
   r'|\bAIza[0-9A-Za-z_-]{35}\b'
   r'|\bglpat-[\w-]{20,}\b'
-  r'|\bnpm_[A-Za-z0-9]{36}\b',
+  r'|\bnpm_[A-Za-z0-9]{36}\b'
+  // OpenAI (sk-proj-/sk-svcacct-/sk-admin-, and the legacy sk-… whose body
+  // carries the T3BlbkFJ marker) and Anthropic (sk-ant-). Project keys use
+  // `_` and `-` in the body, which a bare alphanumeric class never matched.
+  r'|\bsk-(proj|svcacct|admin)-[A-Za-z0-9_-]{40,}'
+  r'|\bsk-[A-Za-z0-9_-]{20,}T3BlbkFJ[A-Za-z0-9_-]{20,}'
+  r'|\bsk-ant-[A-Za-z0-9_-]{20,}',
 );
 // Content shapes (may span lines).
 final _mdMarkers = RegExp(

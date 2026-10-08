@@ -191,6 +191,30 @@ WmClass? foregroundWmClass() {
   }
 }
 
+/// The active window's title (`_NET_WM_NAME`, else `WM_NAME`), or null.
+/// Same X round trips and failure modes as [foregroundWmClass].
+String? foregroundWindowTitle() {
+  if (!Platform.isLinux || _waylandSession) return null;
+  final lib = _x11();
+  if (lib == null) return null;
+  try {
+    final dpy = _openDisplay(lib);
+    if (dpy == nullptr) return null;
+    try {
+      final active = _getProp(lib, dpy, _rootWindow(lib, dpy),
+          _atom(lib, dpy, '_NET_ACTIVE_WINDOW'))?.words;
+      if (active == null || active.isEmpty || active[0] == 0) return null;
+      final t = _titleOf(lib, dpy, active[0], _atom(lib, dpy, '_NET_WM_NAME'))
+          .trim();
+      return t.isEmpty ? null : t;
+    } finally {
+      _closeDisplay(lib, dpy);
+    }
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Every managed top-level window per `_NET_CLIENT_LIST`, with WM_CLASS and
 /// a best-effort title. Empty on Wayland / no X / errors. The facade derives
 /// keys, filters noise and dedupes — same split as the macOS backend.

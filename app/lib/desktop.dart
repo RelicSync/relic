@@ -51,6 +51,9 @@ import 'onboarding/desktop_onboarding.dart';
 import 'ui/actionable_notification.dart';
 import 'ui/popup.dart';
 import 'ui/settings.dart';
+import 'models/copy_context.dart';
+import 'platform/copy_context.dart';
+import 'ui/search_tuning_panel.dart';
 import 'ui/voice_offer.dart';
 import 'platform/popup_placement.dart';
 import 'platform/rich_formats.dart';
@@ -209,6 +212,7 @@ class _RealAppState extends State<RealApp>
   // Set only by the second-vault notice; every other entry clears it.
   bool _onboardStartReturning = false;
   bool _settingsOpen = false;
+  bool _tuningOpen = false; // dev search tuning strip (RELIC_SEARCH_TUNING=1)
   bool _voiceSettingsRequested = false;
 
   /// Non-null when this copy of Relic is running from the disk image (or the
@@ -1438,6 +1442,14 @@ class _RealAppState extends State<RealApp>
   /// tray. This is the catch-all so no surface can ever get "stuck open" —
   /// it fires even when an inner field has focus, since key events bubble up.
   KeyEventResult _onAppKey(FocusNode node, KeyEvent e) {
+    if (e is KeyDownEvent &&
+        e.logicalKey == LogicalKeyboardKey.f9 &&
+        HardwareKeyboard.instance.isControlPressed &&
+        HardwareKeyboard.instance.isShiftPressed &&
+        widget.repo.searchTuning.enabled) {
+      _setTuningOpen(!_tuningOpen);
+      return KeyEventResult.handled;
+    }
     if (e is! KeyDownEvent || e.logicalKey != LogicalKeyboardKey.escape) {
       return KeyEventResult.ignored;
     }
@@ -1464,6 +1476,12 @@ class _RealAppState extends State<RealApp>
     }
     _hide();
     return KeyEventResult.handled;
+  }
+
+  void _setTuningOpen(bool open) {
+    setState(() => _tuningOpen = open);
+    _sizeWindow(_popupDims.width,
+        _popupDims.height + (open ? SearchTuningPanel.height : 0));
   }
 
   /// Each surface has its own footprint; the popup window must grow for the
@@ -1598,6 +1616,33 @@ class _RealAppState extends State<RealApp>
   /// take hundreds of milliseconds on a large selection. Each flavor gets its
   /// own short timeout and a failure costs only that flavor — the plain
   /// capture always lands.
+  /// Where [plain] was copied from: the page link a browser put on the
+  /// clipboard, plus the window title and nearby words (copy_context.dart).
+  /// Read only when copy context is on; bounded, and null when there is
+  /// nothing. The repo decides whether to keep it (never for a secret).
+  Future<CopyContext?> _readCopyContext(
+    ClipboardReader reader,
+    String plain,
+  ) async {
+    final repo = widget.repo;
+    if (!repo.aiContext || plain.trim().isEmpty) return null;
+    String? url;
+    try {
+      if (reader.canProvide(kRelicSourceUrl)) {
+        url = await reader
+            .readValue(kRelicSourceUrl)
+            .timeout(const Duration(milliseconds: 300), onTimeout: () => null);
+      }
+    } catch (_) {
+      url = null;
+    }
+    final around = await readCopyContext(plain);
+    final c = (around ?? const CopyContext()).withUrl(url);
+    // Lengths only: the text itself can be private.
+    debugPrint('copy context: $c');
+    return c.isEmpty ? null : c;
+  }
+
   Future<({String? html, Uint8List? rtf})> _readRichFlavors(
     ClipboardReader reader,
     String plain,
@@ -1860,11 +1905,13 @@ class _RealAppState extends State<RealApp>
           final text = await reader.readValue(Formats.plainText);
           if (text != null && !_isRecentlyHintedSecret(text)) {
             final rich = await _readRichFlavors(reader, text);
+            final context = await _readCopyContext(reader, text);
             repo.captureText(
               text,
               sourceApp: srcApp,
               html: rich.html,
               rtf: rich.rtf,
+              context: context,
             );
           }
         }
@@ -2482,12 +2529,31 @@ class _RealAppState extends State<RealApp>
         if (widget.repo.isDemo && !widget.repo.demoNudgeDismissed) {
           banners.add(_demoNudgeBanner());
         }
-        final body = banners.isEmpty
+        // A whole-vault search rebuild (a new embedding model) takes a while;
+        // meaning-based results are partial until it finishes, so say so.
+        // Small backlogs are just new copies being indexed, not worth a banner.
+        if (widget.repo.searchBacklog >= 200) {
+          banners.add(_searchRebuildBanner(widget.repo.searchBacklog));
+        }
+        final listed = banners.isEmpty
             ? popup
             : Column(
                 children: [
                   ...banners,
                   Expanded(child: popup),
+                ],
+              );
+        final body = !_tuningOpen
+            ? listed
+            : Column(
+                children: [
+                  Expanded(child: listed),
+                  SearchTuningPanel(
+                    tuning: widget.repo.searchTuning,
+                    shipped: () => widget.repo.searchTuningShipped,
+                    model: widget.repo.vectorModel,
+                    onClose: () => _setTuningOpen(false),
+                  ),
                 ],
               );
         if (!_voice.offerPending) return body;
@@ -2653,6 +2719,44 @@ class _RealAppState extends State<RealApp>
 
   /// One-time demo nudge shown after "Try the demo" seeding. Dismissal persists
   /// (repo prefs), so it never nags twice; the button opens onboarding.
+  Widget _searchRebuildBanner(int left) {
+    final c = _useDark ? RelicColors.dark : RelicColors.light;
+    final n = left.toString().replaceAllMapped(
+        RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+    return Material(
+      color: c.panel,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: c.border, width: 1)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            Insets.lg,
+            Insets.md,
+            Insets.lg,
+            Insets.md,
+          ),
+          child: Row(
+            children: [
+              Icon(LucideIcons.refreshCw, color: c.accent, size: 16),
+              const SizedBox(width: Insets.md),
+              Expanded(
+                child: Text(
+                  'Improving search: $n items left. Results get better as it finishes.',
+                  style: RelicTheme.sans(
+                    size: 12.5,
+                    color: c.text,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _demoNudgeBanner() {
     final c = _useDark ? RelicColors.dark : RelicColors.light;
     return Material(

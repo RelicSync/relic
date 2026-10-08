@@ -51,23 +51,34 @@ pub const BGE: ModelSpec = ModelSpec {
 
 /// EmbeddingGemma-300M int8 (MRL-256) — the upgraded text embedder (validated
 /// in relic-sift-next: recall@1 0.757→0.973 over BGE on a hard retrieval set).
+///
+/// `ft2` is Google's model fine-tuned on copy-and-search pairs (relic-sift-next
+/// `ft/`), written back into the same int8 graph. On held-out pages a short
+/// search finds the right copy in the top 5 at 0.88 vs 0.33, and on the copied
+/// text alone (what the app embeds today) at 0.41-0.51 vs 0.23-0.29. Category
+/// guards unchanged at 100%. The id stays `embeddinggemma-300m` (same
+/// architecture and prompts); the version string is what tells the app its
+/// stored vectors, tag table and head cache belong to a different model.
+///
 /// Weights live in an external-data file referenced *by basename* from the
-/// graph, so the data file MUST be named exactly `model_quantized.onnx_data`
-/// alongside the graph (ORT resolves it relative to the model dir).
+/// graph, so the data file MUST be named exactly `embeddinggemma-300m-ft2.onnx_data`
+/// alongside the graph (ORT resolves it relative to the model dir). It is a new
+/// name on purpose: an install with the stock `model_quantized.onnx_data` must not
+/// count as having this model. The tokenizer is byte-identical to stock and shared.
 pub const GEMMA: ModelSpec = ModelSpec {
     id: "embeddinggemma-300m",
     role: "text-embedding",
-    version: "embeddinggemma-300m@int8-mrl256",
+    version: "embeddinggemma-300m-ft2@int8-mrl256",
     license: "Gemma",
     files: &[
         ModelFile {
-            name: "embeddinggemma-300m.int8.onnx",
-            url: "https://models.relic.space/relic-sift/v1/embeddinggemma-300m.int8.onnx",
+            name: "embeddinggemma-300m-ft2.int8.onnx",
+            url: "https://models.relic.space/relic-sift/v2/embeddinggemma-300m-ft2.int8.onnx",
             min_bytes: 400_000,
         },
         ModelFile {
-            name: "model_quantized.onnx_data",
-            url: "https://models.relic.space/relic-sift/v1/model_quantized.onnx_data",
+            name: "embeddinggemma-300m-ft2.onnx_data",
+            url: "https://models.relic.space/relic-sift/v2/embeddinggemma-300m-ft2.onnx_data",
             min_bytes: 250_000_000,
         },
         ModelFile {
@@ -267,30 +278,38 @@ pub fn ocr_v6_present(dir: &std::path::Path) -> bool {
 /// 416 MiB decoder weights exceed what `wrangler r2 object put` will accept.
 ///
 /// NOT in `ALL`: ~666 MB, downloaded on demand the first time labeling is used.
+///
+/// `t3` is the language model fine-tuned to title a copy from the words around
+/// it (relic-sift-next `ft/`, TITLER-EXPORT.md): same graphs, re-quantized
+/// weights, so the decoder and embedding files carry new names (their data
+/// files are named inside the graphs) and the stock ones are SUPERSEDED. The
+/// vision tower and tokenizer are unchanged and shared. On held-out copies a
+/// search finds the item by its title alone at 0.74 vs 0.40 for stock (ideal
+/// titles: 0.81), and it invents fewer product names than stock.
 pub const QWEN35: ModelSpec = ModelSpec {
     id: "qwen3.5-0.8b",
     role: "vision-language (labeling)",
-    version: "qwen3.5-0.8b@q4f16",
+    version: "qwen3.5-0.8b-t3@q4f16",
     license: "Apache-2.0",
     files: &[
         ModelFile {
-            name: "qwen35-decoder-merged.q4f16.onnx",
-            url: "https://models.relic.space/relic-sift/v1/qwen35-decoder-merged.q4f16.onnx",
+            name: "qwen35-labeler-t3.decoder.q4f16.onnx",
+            url: "https://models.relic.space/relic-sift/v2/qwen35-labeler-t3.decoder.q4f16.onnx",
             min_bytes: 1_000_000,
         },
         ModelFile {
-            name: "decoder_model_merged_q4f16.onnx_data",
-            url: "https://models.relic.space/relic-sift/v1/decoder_model_merged_q4f16.onnx_data",
+            name: "qwen35-labeler-t3.decoder.q4f16.onnx_data",
+            url: "https://models.relic.space/relic-sift/v2/qwen35-labeler-t3.decoder.q4f16.onnx_data",
             min_bytes: 430_000_000,
         },
         ModelFile {
-            name: "qwen35-embed-tokens.q4f16.onnx",
-            url: "https://models.relic.space/relic-sift/v1/qwen35-embed-tokens.q4f16.onnx",
+            name: "qwen35-labeler-t3.embed-tokens.q4f16.onnx",
+            url: "https://models.relic.space/relic-sift/v2/qwen35-labeler-t3.embed-tokens.q4f16.onnx",
             min_bytes: 1_000,
         },
         ModelFile {
-            name: "embed_tokens_q4f16.onnx_data",
-            url: "https://models.relic.space/relic-sift/v1/embed_tokens_q4f16.onnx_data",
+            name: "qwen35-labeler-t3.embed-tokens.q4f16.onnx_data",
+            url: "https://models.relic.space/relic-sift/v2/qwen35-labeler-t3.embed-tokens.q4f16.onnx_data",
             min_bytes: 145_000_000,
         },
         ModelFile {
@@ -458,6 +477,27 @@ pub const RETIRED_FILES: &[&str] = &[
     "florence2-tokenizer.json",
 ];
 
+/// Files a newer generation of a live model replaced. Unlike [`RETIRED_FILES`]
+/// they are only dead once the replacement is fully on disk: until then the app
+/// is still downloading it, and the stock files keep search working meanwhile.
+/// Pairs of (replacement, files it supersedes).
+pub const SUPERSEDED: &[(&ModelSpec, &[&str])] = &[
+    // Stock EmbeddingGemma graph + weights, replaced by the ft2 fine-tune.
+    // The tokenizer is shared, so it is not listed.
+    (&GEMMA, &["embeddinggemma-300m.int8.onnx", "model_quantized.onnx_data"]),
+    // Stock Qwen3.5 decoder + embedding, replaced by the t3 titler. The
+    // vision tower and tokenizer are shared, so they are not listed.
+    (
+        &QWEN35,
+        &[
+            "qwen35-decoder-merged.q4f16.onnx",
+            "decoder_model_merged_q4f16.onnx_data",
+            "qwen35-embed-tokens.q4f16.onnx",
+            "embed_tokens_q4f16.onnx_data",
+        ],
+    ),
+];
+
 /// Subdirectories of the model dir that are retired wholesale. `dml/` held the
 /// DirectML-enabled `onnxruntime.dll` for Florence's vision tower.
 pub const RETIRED_DIRS: &[&str] = &["dml"];
@@ -467,8 +507,9 @@ pub const RETIRED_DIRS: &[&str] = &["dml"];
 pub struct PrunedFile {
     pub name: String,
     pub bytes: u64,
-    /// Why it went: `retired` (nothing can load it) or `redundant` (a live
-    /// fallback that this install will never reach, re-downloadable on demand).
+    /// Why it went: `retired` (nothing can load it), `superseded` (an older
+    /// generation of a model whose replacement is installed) or `redundant` (a
+    /// live fallback that this install will never reach, re-downloadable on demand).
     pub reason: &'static str,
 }
 
@@ -503,6 +544,9 @@ pub fn prune(dir: &std::path::Path, deep: bool, dry_run: bool) -> Vec<PrunedFile
     for name in RETIRED_DIRS {
         take((*name).to_string(), "retired");
     }
+    for name in superseded_files(|spec| is_present(dir, spec)) {
+        take(name.to_string(), "superseded");
+    }
     if deep {
         // Only ever drop the fallback while its replacement is actually usable.
         if is_present(dir, &MOBILECLIP2) {
@@ -522,6 +566,11 @@ pub fn prune(dir: &std::path::Path, deep: bool, dry_run: bool) -> Vec<PrunedFile
         }
     }
     out
+}
+
+/// The [`SUPERSEDED`] files whose replacement `installed` says is on disk.
+fn superseded_files(installed: impl Fn(&ModelSpec) -> bool) -> Vec<&'static str> {
+    SUPERSEDED.iter().filter(|(spec, _)| installed(spec)).flat_map(|(_, files)| files.iter().copied()).collect()
 }
 
 fn dir_bytes(dir: &std::path::Path) -> u64 {
@@ -616,6 +665,11 @@ pub fn download_all(dir: &std::path::Path, quiet: bool) -> Result<(), String> {
         }
         download(dir, &MOBILECLIP2_TEXT, quiet)?;
     }
+    // The app prunes once per release, usually before a new model has finished
+    // downloading, so the files it supersedes are swept here, the moment it lands.
+    for name in superseded_files(|spec| is_present(dir, spec)) {
+        let _ = fs::remove_file(dir.join(name));
+    }
     Ok(())
 }
 
@@ -624,7 +678,11 @@ pub fn download_all(dir: &std::path::Path, quiet: bool) -> Result<(), String> {
 /// stays small.
 pub fn download_labeler(dir: &std::path::Path, quiet: bool) -> Result<(), String> {
     download_runtime(dir, quiet)?;
-    download(dir, &QWEN35, quiet)
+    download(dir, &QWEN35, quiet)?;
+    for name in superseded_files(|spec| is_present(dir, spec)) {
+        let _ = fs::remove_file(dir.join(name));
+    }
+    Ok(())
 }
 
 /// Status of the optional labeler (not part of the default `ALL`, so it never
@@ -805,6 +863,35 @@ mod tests {
 
         assert!(prune(&dir, true, false).is_empty());
         assert!(dir.join("mobileclip2-s2.text.onnx").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Stock Gemma keeps search working while the fine-tune downloads, so it
+    /// only goes once the replacement is installed. (The predicate stands in for
+    /// `is_present`, which would need 300 MB of placeholder weights.)
+    #[test]
+    fn superseded_files_wait_for_their_replacement() {
+        assert!(superseded_files(|_| false).is_empty());
+        let gone = superseded_files(|spec| spec.id == GEMMA.id);
+        assert_eq!(gone, ["embeddinggemma-300m.int8.onnx", "model_quantized.onnx_data"]);
+        // never a shared file or one the live spec still names
+        for spec in [&GEMMA, &QWEN35] {
+            let gone = superseded_files(|s| s.id == spec.id);
+            for f in spec.files {
+                assert!(!gone.contains(&f.name), "{} is still in use", f.name);
+            }
+        }
+    }
+
+    /// Without the replacement, a default prune must leave stock Gemma alone.
+    #[test]
+    fn prune_keeps_stock_gemma_until_the_fine_tune_is_installed() {
+        let dir = scratch("stock-gemma");
+        write(&dir, "embeddinggemma-300m.int8.onnx", 16);
+        write(&dir, "model_quantized.onnx_data", 16);
+
+        assert!(prune(&dir, false, false).is_empty());
+        assert!(dir.join("model_quantized.onnx_data").exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 

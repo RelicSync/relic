@@ -1,5 +1,7 @@
 import 'package:flutter/services.dart';
 
+import '../../../models/copy_context.dart';
+
 /// macOS backend of platform/foreground_app.dart and platform/running_apps.dart:
 /// a thin client over the `relic/frontmost` MethodChannel implemented by
 /// macos/Runner/Bridge/ForegroundAppBridge.swift (NSWorkspace). No special
@@ -48,6 +50,33 @@ Future<List<double>?> caretScreenPoint() async {
   try {
     final p = await _ch.invokeListMethod<double>('caretScreenPoint');
     return (p != null && p.length == 2) ? p : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Where the current copy came from (ForegroundAppBridge.swift copyContext):
+/// the window title, and the words around the selection when it really is
+/// [copied]. Null without the AX grant or when nothing is readable.
+Future<CopyContext?> copyContext(String copied) async {
+  try {
+    final m = await _ch.invokeMapMethod<String, String>('copyContext');
+    if (m == null) return null;
+    final title = m['title'];
+    final selected = m['selected'];
+    CopyContext? around;
+    if (selected != null && CopyContext.sameSelection(selected, copied)) {
+      if (m.containsKey('before') || m.containsKey('after')) {
+        around = CopyContext(before: m['before'] ?? '', after: m['after'] ?? '');
+      } else if (m['value'] case final v?) {
+        around = CopyContext.splitAround(v, copied);
+      }
+    }
+    return CopyContext(
+      title: title,
+      before: around?.before ?? '',
+      after: around?.after ?? '',
+    );
   } catch (_) {
     return null;
   }

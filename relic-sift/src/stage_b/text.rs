@@ -215,6 +215,14 @@ impl TextClassifier {
         Ok(self.embed_docs_store(&[text])?.remove(0))
     }
 
+    /// Document-side embeddings of `(title, text)` pairs in the store's space.
+    pub fn embed_docs_titled(&mut self, pairs: &[(&str, &str)]) -> Result<Vec<Vec<f32>>, String> {
+        match &mut self.search {
+            Some(s) => s.embed_docs_titled(pairs),
+            None => self.head.embed_docs_titled(pairs),
+        }
+    }
+
     /// Per-chunk embeddings for a long document; empty when it fits one window.
     pub fn embed_chunks(&mut self, text: &str) -> Result<Vec<Vec<f32>>, String> {
         let chunks = chunk_text(text);

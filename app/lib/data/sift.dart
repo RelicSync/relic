@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../models/copy_context.dart';
+
 /// One relic's classification, parsed from a `sift` ClassificationRecord
 /// (schema `sift/0.1`, see relic-sift/src/record.rs).
 class SiftResult {
@@ -22,6 +24,8 @@ class SiftResult {
   // Per-chunk embeddings for long documents (same space as [textVector],
   // which stays the whole-doc/head vector). Null/empty for short texts.
   final List<List<double>>? textChunkVectors;
+  // The model that produced [textVector] (sift's version string).
+  final String? textModel;
 
   SiftResult({
     required this.category,
@@ -35,6 +39,7 @@ class SiftResult {
     this.caption,
     this.textVector,
     this.textChunkVectors,
+    this.textModel,
   });
 
   factory SiftResult.fromJson(Map<String, dynamic> j) {
@@ -57,6 +62,7 @@ class SiftResult {
       preview: j['preview'] as String? ?? '',
       textVector: vec,
       textChunkVectors: chunks,
+      textModel: emb?['model'] as String?,
     );
   }
 }
@@ -117,6 +123,11 @@ class SiftSidecar {
 
   bool _modelsReady = false;
   bool get modelsReady => _modelsReady;
+  bool _labelerReady = false;
+
+  /// Whether the optional titler (Qwen3.5 labeler) is on disk, as of the last
+  /// [checkModels].
+  bool get labelerReady => _labelerReady;
 
   /// Whether item descriptions are enabled at all (the user's setting).
   ///
@@ -168,6 +179,11 @@ class SiftSidecar {
       // `models status` prints "MISSING" for any absent core model; optional
       // ones print "optional", so a clean core set has no "MISSING".
       _modelsReady = r.exitCode == 0 && !'${r.stdout}'.contains('MISSING');
+      // The labeler is the one optional row ("(labeling) ... present").
+      _labelerReady = r.exitCode == 0 &&
+          '${r.stdout}'
+              .split('\n')
+              .any((l) => l.contains('(labeling)') && l.contains(' present '));
     } catch (_) {
       _modelsReady = false;
     }
@@ -278,14 +294,21 @@ class SiftSidecar {
     }
   }
 
+  /// [context] is where the text was copied from (device-only); the resident
+  /// server uses it to title the copy in place and add search chunks. The
+  /// one-shot fallback has no channel for it and simply goes without.
   Future<SiftResult?> classifyText(String text,
-          {required bool ml, bool label = false, bool embeddings = true}) =>
+          {required bool ml,
+          bool label = false,
+          bool embeddings = true,
+          CopyContext? context}) =>
       _classify(
           text: text,
           kind: 'string',
           ml: ml,
           label: label,
-          embeddings: embeddings);
+          embeddings: embeddings,
+          context: context);
 
   Future<SiftResult?> classifyPath(String path,
           {required bool ml,
@@ -479,6 +502,7 @@ class SiftSidecar {
     bool ocr = true,
     bool imageTags = true,
     bool embeddings = true,
+    CopyContext? context,
   }) async {
     // The process flag says the labeler may run at all; the per-request field
     // says whether THIS item earns one. Keeping them apart is what stops the
@@ -511,6 +535,8 @@ class SiftSidecar {
       'label': label,
       'path': ?path,
       if (path == null) 'text': text ?? '',
+      if (path == null && context != null && !context.isEmpty)
+        'context': context.toJson(),
     });
     if (served != null) return served;
 
@@ -554,6 +580,9 @@ class SiftSidecar {
   Future<void> _embedLock = Future.value();
   final Map<String, List<double>> _embedCache = {}; // small LRU of query → vector
   final List<String> _embedOrder = [];
+
+  /// The model the query embedder named in its last answer.
+  String? embedModel;
 
   /// Load the embed model ahead of the first real search (kills first-query lag).
   Future<void> warmUp() async {
@@ -662,6 +691,7 @@ class SiftSidecar {
       final line = await c.future.timeout(const Duration(seconds: 30));
       final j = jsonDecode(line) as Map<String, dynamic>;
       final v = (j['vector'] as List).map((e) => (e as num).toDouble()).toList();
+      embedModel = j['model'] as String? ?? embedModel;
       _embedCache[q] = v; // cache (bounded LRU)
       _embedOrder.add(q);
       if (_embedOrder.length > 32) _embedCache.remove(_embedOrder.removeAt(0));

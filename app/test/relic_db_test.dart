@@ -756,7 +756,7 @@ void main() {
     // The chain runs to the CURRENT latest version (v8-v10 reconcile stale
     // detector tags on the way, v11 splits the named FTS column, v12 repairs
     // byte_size on formatted rows).
-    expect(check.select('PRAGMA user_version').first.values.first, 12);
+    expect(check.select('PRAGMA user_version').first.values.first, 13);
   });
 
   test('v8 migration strips stale value-shape tags, keeps real ones', () async {

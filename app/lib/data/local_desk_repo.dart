@@ -9,6 +9,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 import 'package:uuid/uuid.dart';
 
+import '../models/copy_context.dart';
 import '../models/relic.dart';
 import 'voice_capture.dart';
 import '../models/rich_body.dart';
@@ -29,6 +30,7 @@ import 'heuristic_tags.dart';
 import 'hotkeys.dart';
 import 'exif_orientation.dart';
 import 'relic_db.dart';
+import 'search_tuning.dart';
 import 'repo.dart';
 import 'secure_key_store.dart';
 import 'sift.dart';
@@ -1228,22 +1230,33 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   // --- on-device ML (sift) ---
   SiftSidecar? _sift;
   bool _mlEnrich = true;
-  // Generated titles + topic tags, for photos AND text. Defaults OFF
-  // (docs/ai-labeling-audit-2026-07.md): it is a ~666 MB download and ~0.8 s
-  // per item even through the resident classifier. Existing users keep
-  // whatever they set — the pref key stays `rich_captions`, which is what this
-  // was called when it only did images.
-  bool _describeItems = false;
-  // Widen labeling from vault-only to the whole stream. Off by default: the
-  // stream is where the volume is, so this spends ~0.8 s of generative work on
-  // every throwaway copy, and most of them are never looked at again.
-  bool _describeEverything = false;
+  // Generated titles + topic tags, for photos AND text. ON by default since
+  // the t3 titler (2026-10): a title written from where a copy came from is
+  // the strongest search signal we have (title-only search finds the item at
+  // 0.74 vs 0.40), so every item gets one. It costs a ~666 MB download and
+  // about a second of background work per new item. The pref key stays
+  // `rich_captions`, which is what this was called when it only did images.
+  bool _describeItems = true;
+  // Label the whole stream, not just the vault. On by default with the above;
+  // it only applies to NEW items (nothing re-labels an existing vault).
+  bool _describeEverything = true;
+  // Whether this install has had titles switched on for everything once. Every
+  // older install saved both switches as off, so on the update they are turned
+  // on once (anyone can turn them back off), and never again after.
+  bool _describeAllOn = true;
+  bool _describeTurnedOn = false;
   // How much CPU the background passes may take. See [AnalysisSpeed].
   AnalysisSpeed _analysisSpeed = AnalysisSpeed.balanced;
   // Which generation of retired-model cleanup this install has already run.
   // Bump [_kPruneGen] whenever relic-sift retires more files; that is what makes
   // an upgrade re-run the sweep instead of skipping it forever.
   int _prunedGen = 0;
+  // The embedding model that built this device's stored vectors (sift's
+  // version string, e.g. `embeddinggemma-300m@int8-mrl256`). See
+  // [_noteVectorModel]. Null until the first vector or query embed reports one.
+  String? _vectorModel;
+  String? _tagModel; // model_version of the loaded tag-expansion table
+  static const String legacyVectorModel = 'embeddinggemma-300m@int8-mrl256';
   // Gen 1: Florence-2 (~246 MB) plus the `dml/` DirectML runtime, both dead
   // once Qwen3.5 took over labeling.
   static const int _kPruneGen = 1;
@@ -1252,6 +1265,10 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   bool _aiOcr = true;
   bool _aiImageTags = true;
   bool _aiEmbeddings = true;
+  // Copy context: read the window title, page link and nearby words when
+  // something is copied, keep them on this device only, and use them for the
+  // item's title and search vectors. On by default; secrets never get one.
+  bool _aiContext = true;
   // Personalized ranking: learn from picks (usage frecency, query-pick
   // memory, summon-context prior) and apply the learned factors in search.
   // All signals are local-only; one switch governs both learning and use.
@@ -1323,9 +1340,19 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   bool get aiOcr => _aiOcr;
   bool get aiImageTags => _aiImageTags;
   bool get aiEmbeddings => _aiEmbeddings;
+  bool get aiContext => _aiContext;
   bool get downloadingModels => _downloadingModels;
   bool get removingModels => _removingModels;
   int get enrichBacklog => _enrichBacklog;
+
+  /// Items whose search vector is still to be (re)built: after a new
+  /// embedding model, the whole vault. Items that can never get one are not
+  /// counted. Drives the "updating search" line and banner.
+  int get searchBacklog => _searchBacklog;
+  int _searchBacklog = 0;
+  // Model download backoff (see the enrich cycle).
+  int _downloadFails = 0;
+  DateTime _downloadRetryAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   Future<String?> _modelsDir() async =>
       _modelsDirCache ??= await _sift?.modelsPath();
@@ -1484,6 +1511,14 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
 
   void setAiEmbeddings(bool on) {
     _aiEmbeddings = on;
+    _savePrefs();
+    notifyListeners();
+  }
+
+  /// Turning copy context off also forgets every context already stored.
+  void setAiContext(bool on) {
+    _aiContext = on;
+    if (!on) _db?.clearCopyContext();
     _savePrefs();
     notifyListeners();
   }
@@ -1703,15 +1738,24 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         // summoned it, not by a preference. Old files keep the key; it is
         // ignored and drops out on the next save.)
         _mlEnrich = j['ml_enrich'] as bool? ?? true;
-        _describeItems = j['rich_captions'] as bool? ?? false;
-        _describeEverything = j['describe_everything'] as bool? ?? false;
+        _describeItems = j['rich_captions'] as bool? ?? true;
+        _describeEverything = j['describe_everything'] as bool? ?? true;
+        _describeAllOn = j['describe_all_on'] as bool? ?? false;
+        if (!_describeAllOn) {
+          _describeItems = true;
+          _describeEverything = true;
+          _describeAllOn = true;
+          _describeTurnedOn = true; // saved once load finishes
+        }
         _analysisSpeed = AnalysisSpeed.byName(j['analysis_speed'] as String?);
         _prunedGen = j['models_pruned_gen'] as int? ?? 0;
+        _vectorModel = j['vector_model'] as String?;
         _aiConverged = j['ai_records_converged'] as bool? ?? false;
         _uprightRescanned = j['upright_rescan_done'] as bool? ?? false;
         _aiOcr = j['ai_ocr'] as bool? ?? true;
         _aiImageTags = j['ai_image_tags'] as bool? ?? true;
         _aiEmbeddings = j['ai_embeddings'] as bool? ?? true;
+        _aiContext = j['ai_context'] as bool? ?? true;
         _personalRank = j['personal_rank'] as bool? ?? true;
         _multiCombine = j['feature_multi_combine'] as bool? ?? false;
         _snippets = j['feature_snippets'] as bool? ?? false;
@@ -1822,13 +1866,16 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           'ml_enrich': _mlEnrich,
           'rich_captions': _describeItems,
           'describe_everything': _describeEverything,
+          'describe_all_on': _describeAllOn,
           'analysis_speed': _analysisSpeed.name,
           'models_pruned_gen': _prunedGen,
+          if (_vectorModel != null) 'vector_model': _vectorModel,
           'ai_records_converged': _aiConverged,
           'upright_rescan_done': _uprightRescanned,
           'ai_ocr': _aiOcr,
           'ai_image_tags': _aiImageTags,
           'ai_embeddings': _aiEmbeddings,
+          'ai_context': _aiContext,
           'personal_rank': _personalRank,
           'feature_multi_combine': _multiCombine,
           'feature_snippets': _snippets,
@@ -1919,6 +1966,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   @override
   Future<void> load() async {
     _loadPrefs();
+    if (_describeTurnedOn) _savePrefs();
+    searchTuning.load(File(_p('search_tuning.json')));
+    if (searchTuning.enabled) searchTuning.addListener(_retune);
     // Cache the running version once for the X-Relic-App-Version header (and
     // fail soft in tests, where the platform channel is absent).
     try {
@@ -1975,9 +2025,11 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     unawaited(_pruneRetiredModels());
     if (_mlEnrich && _sift != null) {
       _startEnrichWorker();
+      // Load the embed model before the first search. Its answer names the
+      // model, which is what stored vectors must match ([_noteVectorModel]).
       unawaited(
-        _sift!.warmUp(),
-      ); // load the embed model before the first search
+        _sift!.warmUp().then((_) => _noteVectorModel(_sift?.embedModel)),
+      );
       unawaited(_loadTagVectors()); // tag-expansion table (cached on disk)
     }
     // ML-independent: extract text from any backlog documents so they're
@@ -2137,20 +2189,71 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   // near it — an absolute cosine floor plus a spread from the TOP tag, so two
   // genuinely co-relevant sibling tags ("phone" + "number") can both fire
   // instead of vetoing each other.
-  static const double _tagFloor = 0.40; // min cosine to fire a tag
   static const double _tagSpread = 0.06; // max distance below the best tag
   static const int _tagMaxFire = 2; // at most this many tags per query
   static const int _tagCap = 50; // uids per fired tag (recency-ordered)
   static const double _tagWeight = 0.4; // RRF influence of the tag leg
   static const double _ftsWeight = 2.0; // RRF influence of the lexical leg
   static const double _recencyWeight = 0.5; // RRF influence of the recency leg
-  // Min cosine for a document to count as a semantic candidate at all —
-  // without a floor, top-K returns the "150 least-distant relics" for ANY
-  // query, inflating the match count with a garbage tail. Calibrated against
-  // the live Gemma embed model (2026-07): relevant query→doc cosines measured
-  // 0.40–0.74, irrelevant/garbage ≤ 0.37 — 0.38 separated them cleanly.
-  // Recalibrate if the embed model changes (BGE runs a higher, narrower band).
-  static const double _semFloor = 0.38;
+  // Cosine floors per embedding model, because every model spreads its scores
+  // differently (BGE runs a higher, narrower band than Gemma).
+  //   sem: min cosine for a document to count as a semantic candidate at all.
+  //        Without it, top-K returns the "150 least-distant relics" for ANY
+  //        query. Gemma, calibrated 2026-07: relevant query→doc cosines
+  //        measured 0.40–0.74, garbage ≤ 0.37, so 0.38 separates them.
+  //   tag: min cosine for a query to fire a tag in tag expansion.
+  // A new model needs its own row, measured on the eval set, before it ships.
+  // test/model_floors_test.dart fails if the model relic-sift prefers has none.
+  //   ft2 (the copy-and-search fine-tune, 2026-10): set to let through the
+  //        same share of unrelated vault items as Gemma's floors (2.4% of
+  //        query/item pairs; a tag fires on 45% of queries), measured by
+  //        relic-sift-next/ft/calibrate_floors.py. It spreads scores wider,
+  //        unrelated items near 0, so the same strictness sits much lower and
+  //        keeps 87% of true matches where Gemma kept 55%.
+  static const Map<String, ({double sem, double tag})> modelFloors = {
+    'embeddinggemma-300m@int8-mrl256': (sem: 0.38, tag: 0.40),
+    'embeddinggemma-300m-ft2@int8-mrl256': (sem: 0.22, tag: 0.23),
+  };
+  static const ({double sem, double tag}) _fallbackFloors = (sem: 0.38, tag: 0.40);
+
+  /// The floors for [model], or the Gemma values for a model with no row.
+  static ({double sem, double tag}) floorsFor(String? model) =>
+      modelFloors[model] ?? _fallbackFloors;
+
+  double get _semFloor =>
+      searchTuning.value('semFloor', floorsFor(_vectorModel).sem);
+  double get _tagFloor =>
+      searchTuning.value('tagFloor', floorsFor(_vectorModel).tag);
+
+  /// Live ranking overrides (dev only, `RELIC_SEARCH_TUNING=1`). Every knob
+  /// falls back to the shipped value above, so with tuning off this is inert.
+  final SearchTuning searchTuning = SearchTuning();
+
+  /// The shipped value of every [SearchTuning] knob for the current model:
+  /// where the panel's sliders start and what Reset returns to.
+  Map<String, double> get searchTuningShipped => {
+        'fts': _ftsWeight,
+        'tri': 1.0,
+        'sem': 1.0,
+        'tag': _tagWeight,
+        'tagIntent': RelicDb.kTagIntentWeight,
+        'recency': _recencyWeight,
+        'kept': RelicDb.kKeptBoostFactor,
+        'semFloor': floorsFor(_vectorModel).sem,
+        'tagFloor': floorsFor(_vectorModel).tag,
+        'tagSpread': _tagSpread,
+        'rrfK': 60,
+      };
+
+  /// The embedding model behind the stored vectors (for the tuning panel).
+  String? get vectorModel => _vectorModel;
+
+  /// Re-rank the active search after a tuning change.
+  void _retune() {
+    if (_query.trim().isEmpty) return;
+    unawaited(setQuery(_query, _scope,
+        sort: _sort, createdAfter: _createdAfter, createdBefore: _createdBefore));
+  }
   static const int _pool = 150; // fts/semantic candidate pool
   static const int _triPool = 50; // trigram pool (recall leg — keep it tight)
 
@@ -2214,18 +2317,20 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     // (All scope only — in Vault scope everything is kept); the personal
     // factors (usage frecency, query-pick memory, summon-context prior)
     // climb in both scopes — a cornerstone is a cornerstone in the vault too.
+    final t = searchTuning;
     final ranked = RelicDb.rrfFuse(
       [fts, tri, sem, tagExp, tagIntent, recency],
-      weights: const [
-        _ftsWeight,
-        1.0,
-        1.0,
-        _tagWeight,
-        RelicDb.kTagIntentWeight,
-        _recencyWeight,
+      k: t.value('rrfK', 60).round(),
+      weights: [
+        t.value('fts', _ftsWeight),
+        t.value('tri', 1.0),
+        t.value('sem', 1.0),
+        t.value('tag', _tagWeight),
+        t.value('tagIntent', RelicDb.kTagIntentWeight),
+        t.value('recency', _recencyWeight),
       ],
       boostUids: scope == Scope.vault ? null : db.promotedUids(),
-      boostFactor: RelicDb.kKeptBoostFactor,
+      boostFactor: t.value('kept', RelicDb.kKeptBoostFactor),
       factors: _personalRank
           ? db.rankFactors(union, query: s, app: _summonApp, now: _now)
           : null,
@@ -2311,7 +2416,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     final seen = <String>{};
     for (var i = 0; i < scored.length && i < _tagMaxFire; i++) {
       final c = scored[i].value;
-      if (c < _tagFloor || (top - c) > _tagSpread) break; // sorted desc
+      if (c < _tagFloor || (top - c) > searchTuning.value('tagSpread', _tagSpread)) {
+        break; // sorted desc
+      }
       for (final uid in db.uidsWithTag(scored[i].key,
           vaultOnly: vaultOnly, limit: _tagCap)) {
         if (seen.add(uid)) out.add(uid);
@@ -2411,6 +2518,54 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     }
   }
 
+  /// Record which embedding model produced the latest vector or query.
+  ///
+  /// A stored vector is only comparable with a query embedded by the same
+  /// model: two models put the same text in unrelated places, often at the
+  /// same dimension, so nothing else would notice a swap. Search would quietly
+  /// rank garbage until every item happened to be re-embedded.
+  ///
+  /// A vault with vectors but no recorded model was built by
+  /// [legacyVectorModel], the only text model shipped before this check
+  /// existed, so this works even if the check and a model swap arrive in the
+  /// same release. An empty vault simply adopts whatever model it first sees.
+  /// After that, a different model drops every stored vector, and
+  /// [_backfillVectors] rebuilds the index in the new space without re-running
+  /// OCR or the labeler. The tag-expansion table is rebuilt too. The model can
+  /// only change between runs (it ships inside the sift binary), so nothing
+  /// embedded this session is from the old one.
+  void _noteVectorModel(String? model) {
+    if (model == null || model.isEmpty) return;
+    if (model != _vectorModel) {
+      final previous = _vectorModel ?? (_vec.isNotEmpty ? legacyVectorModel : null);
+      _vectorModel = model;
+      _savePrefs();
+      if (previous != null && previous != model) {
+        _db?.clearVectors();
+        _vec.clear();
+        _embedSkip.clear();
+        debugPrint('embedding model changed ($previous -> $model): rebuilding vectors');
+        notifyListeners();
+      }
+    }
+    if (_tagModel != null && _tagModel != model && !_tagRefreshing) {
+      _tagRefreshing = true;
+      unawaited(_refreshTagVectors().whenComplete(() => _tagRefreshing = false));
+    }
+  }
+
+  @visibleForTesting
+  void debugNoteVectorModel(String? model) => _noteVectorModel(model);
+
+  @visibleForTesting
+  String? get debugVectorModel => _vectorModel;
+
+  @visibleForTesting
+  CopyContext? debugCopyContextOf(String uid) => _db?.copyContextOf(uid);
+
+  @visibleForTesting
+  int get debugVectorCount => _vec.length;
+
   /// Load the tag-expansion table from the on-disk cache, refreshing it from the
   /// sift binary when the cache is missing or unreadable.
   Future<void> _loadTagVectors() async {
@@ -2418,7 +2573,10 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     try {
       if (f.existsSync()) {
         _parseTagVectors(jsonDecode(f.readAsStringSync()) as Map<String, dynamic>);
-        if (_tagVec.isNotEmpty) return;
+        // A table built by another model is a different space even at the
+        // same dimension, so the dim check in [_tagExpansion] can't catch it.
+        final stale = _vectorModel != null && _tagModel != _vectorModel;
+        if (_tagVec.isNotEmpty && !stale) return;
       }
     } catch (_) {/* fall through to refresh */}
     await _refreshTagVectors();
@@ -2438,6 +2596,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
 
   void _parseTagVectors(Map<String, dynamic> m) {
     _tagVec.clear();
+    _tagModel = m['model_version'] as String?;
     _tagDim = (m['dim'] as num?)?.toInt() ?? 0;
     for (final t in (m['tags'] as List? ?? const [])) {
       final tag = t['tag'] as String?;
@@ -2676,6 +2835,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     String? sourceApp,
     String? html,
     Uint8List? rtf,
+    CopyContext? context,
   }) {
     final t = text.trimRight();
     if (t.trim().isEmpty) return false;
@@ -2708,6 +2868,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         db.recordUse(existing, _now); // a re-copy is a use (frecency)
       }
       final touched = db.getByUid(existing);
+      if (touched != null && !touched.isSecret && db.copyContextOf(existing) == null) {
+        _keepContext(db, existing, context);
+      }
       _refreshWindow();
       notifyListeners();
       if (touched != null) _kickSync();
@@ -2738,11 +2901,30 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       rich: keep,
     );
     db.upsert(r, queuePush: syncEnabled);
+    if (!r.isSecret) _keepContext(db, r.uid, context);
     _enforceRetention();
     _refreshWindow();
     notifyListeners();
     _kickSync();
     return true;
+  }
+
+  /// Store where [uid] was copied from, when the setting allows. Device-only
+  /// (see RelicDb.setCopyContext); callers never pass one for a secret.
+  void _keepContext(RelicDb db, String uid, CopyContext? context) {
+    if (!_aiContext || context == null || context.isEmpty) return;
+    db.setCopyContext(uid, context.trimmed(), _now);
+  }
+
+  /// The stored copy context for [r], if it may be used: the setting is on,
+  /// the item is text and is not (or has not since become) a secret.
+  CopyContext? _contextFor(RelicDb db, Relic r) {
+    if (!_aiContext || r.kind != Kind.string) return null;
+    if (r.isSecret) {
+      db.deleteCopyContext(r.uid);
+      return null;
+    }
+    return db.copyContextOf(r.uid);
   }
 
   /// Create a relic by hand (the "+" composer): a text body, optional title,
@@ -5817,15 +5999,27 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     final unfinished = <String>{};
     try {
       // First cycle (and after each download) we re-check model readiness.
-      if (!sift.modelsReady && !_downloadingModels) {
+      if (!_downloadingModels &&
+          !DateTime.now().isBefore(_downloadRetryAt) &&
+          (!sift.modelsReady || (_describeItems && !sift.labelerReady))) {
         await sift.checkModels();
-        if (!sift.modelsReady) {
+        // The titler is optional to the core set, so a missing one never made
+        // the models "not ready"; with titles on it has to be fetched too.
+        if (!sift.modelsReady || (_describeItems && !sift.labelerReady)) {
           _downloadingModels = true;
           notifyListeners();
           // background fetch; a later cycle upgrades Stage-A → full ML
           unawaited(
             sift.downloadModels(label: _describeItems).then((_) {
               _downloadingModels = false;
+              // Offline or a failed fetch: back off (1, 2, 4 … 60 min) instead
+              // of starting a ~1 GB download again every 6 s cycle.
+              final ok = sift.modelsReady && (!_describeItems || sift.labelerReady);
+              _downloadFails = ok ? 0 : _downloadFails + 1;
+              _downloadRetryAt = ok
+                  ? DateTime.fromMillisecondsSinceEpoch(0)
+                  : DateTime.now().add(Duration(
+                      minutes: (1 << (_downloadFails - 1).clamp(0, 6)).clamp(1, 60)));
               notifyListeners();
             }),
           );
@@ -5878,7 +6072,16 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       // Embed anything a peer generated for us. Deliberately after the batch:
       // generating is the scarce work, indexing is the cheap work, and the
       // cheap work must never delay the scarce work.
-      if (sift.modelsReady && await _backfillVectors(sift, 8)) changed = true;
+      // 24 per 6 s cycle: an embed-only pass is ~0.1 s an item, and after a
+      // model change it has the whole vault to redo (~25 min for 6,700 items).
+      if (sift.modelsReady && await _backfillVectors(sift, 24)) changed = true;
+      final searchLeft = (sift.modelsReady && _aiEmbeddings)
+          ? (db.countNeedingVectors(_levelMl) - _embedSkip.length).clamp(0, 1 << 30)
+          : 0;
+      if (searchLeft != _searchBacklog) {
+        _searchBacklog = searchLeft;
+        changed = true;
+      }
       if (changed) {
         _refreshWindow();
         notifyListeners();
@@ -5986,9 +6189,15 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     // to ignore the result.
     if (db == null || !_aiEmbeddings) return false;
     var changed = false;
-    for (final r in db.needingVectors(_levelMl, limit)) {
-      if (_disposed) break;
+    // Items that can never get a vector (a bare "722889", "No.") stay at the
+    // head of the newest-first list forever. Ask past them, or a whole-vault
+    // rebuild (a new embedding model) stalls behind the first `limit` of them.
+    final fetch = (limit + _embedSkip.length).clamp(limit, 5000);
+    var done = 0;
+    for (final r in db.needingVectors(_levelMl, fetch)) {
+      if (_disposed || done >= limit) break;
       if (_embedSkip.contains(r.uid)) continue;
+      done++;
       final doc = embedDocFor(r);
       if (doc.isEmpty) {
         _embedSkip.add(r.uid);
@@ -5997,12 +6206,14 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       // label: false is the point of the whole pass. The caption and the tags
       // already exist and travelled here; re-running the labeler would spend
       // minutes to produce a second, different answer to a settled question.
-      final res = await sift.classifyText(doc, ml: true, label: false);
+      final res = await sift.classifyText(doc,
+          ml: true, label: false, context: _contextFor(db, r));
       final vec = res?.textVector;
       if (vec == null || vec.isEmpty) {
         _embedSkip.add(r.uid);
         continue;
       }
+      _noteVectorModel(res?.textModel);
       final chunks = [vec, ...?res?.textChunkVectors];
       db.upsertVectors(r.uid, chunks);
       _vec[r.uid] = [for (final c in chunks) Float32List.fromList(c)];
@@ -6041,6 +6252,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           promoted: r.promoted,
         ),
         embeddings: _aiEmbeddings,
+        context: _contextFor(db, r),
       );
     } else if (r.kind == Kind.photo || r.kind == Kind.file) {
       final ok = await ensureBlob(r);
@@ -6073,6 +6285,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     // an undead row racing its own tombstone).
     final cur = db.getByUid(r.uid);
     if (cur == null) return false;
+    // A copy the classifier recognizes as a secret keeps no context. (sift
+    // already ignored it for this item; this drops the stored row.)
+    if (res.relicTags.contains('secret')) db.deleteCopyContext(r.uid);
 
     // Persist the document embedding(s) for semantic / hybrid search: the
     // whole-doc vector first, then the extra chunks. Those cover long
@@ -6082,6 +6297,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     // max across an item's chunks, so this needs nothing on the query side.
     var wroteVector = false;
     if (res.textVector != null && res.textVector!.isNotEmpty) {
+      _noteVectorModel(res.textModel);
       final chunks = [res.textVector!, ...?res.textChunkVectors];
       db.upsertVectors(r.uid, chunks);
       _vec[r.uid] = [for (final c in chunks) Float32List.fromList(c)];

@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:sqlite3/sqlite3.dart';
 
+import '../models/copy_context.dart';
 import '../models/relic.dart';
 import '../models/rich_body.dart';
 import '../widgets/chrome.dart';
@@ -277,6 +278,22 @@ class RelicDb {
       'CREATE INDEX IF NOT EXISTS reminders_due '
       'ON reminders (fired, remind_at);',
     );
+    // Where a copy came from: the window title, the page link and the words
+    // around the selection, read at copy time (platform/copy_context.dart).
+    // DEVICE-ONLY by design: it can hold text the user never copied (other
+    // people's messages, other values on the page), so no wire column list,
+    // pending op, export or backup ever reads this table. It only feeds this
+    // device's labeler and search vectors, and dies with its relic.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS copy_context (
+        uid TEXT PRIMARY KEY,
+        title TEXT,
+        url TEXT,
+        before_text TEXT NOT NULL DEFAULT '',
+        after_text TEXT NOT NULL DEFAULT '',
+        captured_at INTEGER NOT NULL
+      );
+    ''');
     // (The old raw-SQL trigram backfill lived here; the uv<7 migration's
     // _reindexAll now rebuilds relics_tri through _triText — folded, no JSON
     // tag arrays — so a separate backfill would only write an inconsistent
@@ -783,6 +800,44 @@ class RelicDb {
         return;
       }
     }
+    if (uv < 13) {
+      // v13: OpenAI project keys (sk-proj-…) and Anthropic keys (sk-ant-…)
+      // were never recognized as secrets, so they sat unmasked in vaults.
+      // Re-run the detector over text items and mark the ones it now flags:
+      // masked from here on, formatting and any copy context dropped (a
+      // secret keeps neither), and pushed so every device masks it too.
+      db.execute('BEGIN');
+      try {
+        var changed = false;
+        for (final row in db.select(
+          "SELECT uid, tags, content FROM relics "
+          "WHERE kind = 'string' AND content LIKE '%sk-%'",
+        )) {
+          final tags = _jsonList(row['tags']);
+          if (tags.contains('secret')) continue;
+          final text = (row['content'] as String?) ?? '';
+          if (!detectTags(text).contains('secret')) continue;
+          db.execute('UPDATE relics SET tags = ?, rich = NULL WHERE uid = ?', [
+            jsonEncode([...tags, 'secret']),
+            row['uid'],
+          ]);
+          db.execute('DELETE FROM copy_context WHERE uid = ?', [row['uid']]);
+          db.execute(
+            "INSERT INTO pending_ops (uid, op, queued_at) "
+            "VALUES (?, 'push', strftime('%s','now')) "
+            'ON CONFLICT(uid, op) DO UPDATE SET queued_at = excluded.queued_at',
+            [row['uid']],
+          );
+          changed = true;
+        }
+        if (changed) _reindexAll(db);
+        db.execute('PRAGMA user_version = 13');
+        db.execute('COMMIT');
+      } catch (_) {
+        db.execute('ROLLBACK');
+        return;
+      }
+    }
   }
 
   static void _ensureColumn(Database db, String col, String decl) {
@@ -1196,6 +1251,7 @@ class RelicDb {
         'DELETE FROM vectors WHERE uid IN ($history)',
         'DELETE FROM ai_records WHERE uid IN ($history)',
         'DELETE FROM query_memory WHERE uid IN ($history)',
+        'DELETE FROM copy_context WHERE uid IN ($history)',
         "DELETE FROM context_memory WHERE kind = 'uid' AND key IN ($history)",
         'DELETE FROM relics WHERE promoted = 0 AND held_by IS NULL',
       ]) {
@@ -1354,6 +1410,34 @@ class RelicDb {
     }
   }
 
+  /// Store where [uid] was copied from (device-only; see the table's CREATE).
+  void setCopyContext(String uid, CopyContext c, int at) => _db.execute(
+        'INSERT INTO copy_context (uid, title, url, before_text, after_text, captured_at) '
+        'VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(uid) DO UPDATE SET '
+        'title = excluded.title, url = excluded.url, before_text = excluded.before_text, '
+        'after_text = excluded.after_text, captured_at = excluded.captured_at',
+        [uid, c.title, c.url, c.before, c.after, at],
+      );
+
+  CopyContext? copyContextOf(String uid) {
+    final rows = _db.select(
+        'SELECT title, url, before_text, after_text FROM copy_context WHERE uid = ?', [uid]);
+    if (rows.isEmpty) return null;
+    final r = rows.first;
+    return CopyContext(
+      title: r['title'] as String?,
+      url: r['url'] as String?,
+      before: r['before_text'] as String? ?? '',
+      after: r['after_text'] as String? ?? '',
+    );
+  }
+
+  void deleteCopyContext(String uid) =>
+      _db.execute('DELETE FROM copy_context WHERE uid = ?', [uid]);
+
+  /// Drop every stored copy context (the setting was turned off).
+  void clearCopyContext() => _db.execute('DELETE FROM copy_context');
+
   /// Forget everything personalized ranking has learned on this device:
   /// both memory tables plus the usage-frecency columns.
   void clearPersonalMemory() {
@@ -1374,6 +1458,7 @@ class RelicDb {
   /// this item — they stay and age out via decay.
   void _deletePersonalRowsInTxn(String uid) {
     _db.execute('DELETE FROM query_memory WHERE uid = ?', [uid]);
+    _db.execute('DELETE FROM copy_context WHERE uid = ?', [uid]);
     _db.execute(
         "DELETE FROM context_memory WHERE kind = 'uid' AND key = ?", [uid]);
   }
@@ -1910,6 +1995,17 @@ class RelicDb {
       )
       .map(_toRelic)
       .toList();
+
+  /// How many relics [needingVectors] would still return (all of them, not a
+  /// page): the "updating search" progress after an embedding model change.
+  int countNeedingVectors(int level) => (_db.select(
+        '''SELECT COUNT(*) AS n FROM relics r
+            WHERE r.enrich_level >= ? AND r.held_by IS NULL
+              AND COALESCE(TRIM(r.content), '') <> ''
+              AND NOT EXISTS (SELECT 1 FROM vectors v WHERE v.uid = r.uid)''',
+        [level],
+      ).first['n'] as num)
+          .toInt();
 
   /// How many relics still sit below [level] — the settings "tagging N
   /// items…" progress line. Full-table scan (enrich_level is unindexed);
@@ -3117,9 +3213,13 @@ class RelicDb {
 
   // --- vectors (semantic search) ---
 
+  /// Drop every stored embedding (the embedding model changed; see
+  /// LocalDeskRepo._noteVectorModel). The backfill pass rebuilds them.
+  void clearVectors() => _db.execute('DELETE FROM vectors');
+
   /// Replace ALL stored chunk vectors for [uid] atomically. Chunk 0 is the
   /// whole-doc embedding; further entries cover long-document chunks. An empty
-  /// [chunks] is a no-op — clearing vectors happens only via delete.
+  /// [chunks] is a no-op; clearing happens via delete or [clearVectors].
   void upsertVectors(String uid, List<List<double>> chunks) {
     if (chunks.isEmpty) return;
     _db.execute('BEGIN');

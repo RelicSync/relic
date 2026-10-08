@@ -135,16 +135,7 @@ impl PpOcr {
             }
         }
         let kept = lines.len();
-        // Reading order: top-to-bottom, then left-to-right within a line band.
-        lines.sort_by(|a, b| {
-            if (a.0 - b.0).abs() <= (REC_HEIGHT as i32 / 2) {
-                a.1.cmp(&b.1)
-            } else {
-                a.0.cmp(&b.0)
-            }
-        });
-        let text = lines.iter().map(|l| l.2.as_str()).collect::<Vec<_>>().join("
-");
+        let text = reading_order(lines, REC_HEIGHT as i32 / 2).join("\n");
         let word_count = text.split_whitespace().count();
         let coverage = (covered / img_area.max(1.0)).clamp(0.0, 1.0);
         let conf = if conf_w > 0.0 { conf_sum / conf_w } else { 0.0 };
@@ -438,4 +429,59 @@ fn components(bin: &[bool], h: usize, w: usize) -> Vec<(usize, usize, usize, usi
         }
     }
     boxes.into_values().collect()
+}
+
+/// Reading order for recognised line boxes `(y, x, text)`: top to bottom, then
+/// left to right within a band of lines whose tops sit within `band_tol` of
+/// the band's first line.
+///
+/// Two passes on purpose. The obvious single comparator ("same band if the
+/// tops are within the tolerance, else by y") is not a total order: A can sit
+/// within the tolerance of B and B of C while A and C are not, and Rust's sort
+/// panics when it catches that ("user-provided comparison function does not
+/// correctly implement a total order"). It did, on a screenshot with a stack
+/// of close rows, and took the classify server down with it.
+fn reading_order(mut lines: Vec<(i32, i32, String)>, band_tol: i32) -> Vec<String> {
+    lines.sort_by_key(|l| (l.0, l.1));
+    let mut band = 0i32;
+    let mut band_top = lines.first().map(|l| l.0).unwrap_or(0);
+    let mut keyed: Vec<(i32, i32, String)> = Vec::with_capacity(lines.len());
+    for (y, x, text) in lines {
+        if y - band_top > band_tol {
+            band += 1;
+            band_top = y;
+        }
+        keyed.push((band, x, text));
+    }
+    keyed.sort_by_key(|l| (l.0, l.1));
+    keyed.into_iter().map(|l| l.2).collect()
+}
+
+#[cfg(test)]
+mod reading_order_tests {
+    use super::reading_order;
+
+    fn l(y: i32, x: i32, t: &str) -> (i32, i32, String) {
+        (y, x, t.to_string())
+    }
+
+    #[test]
+    fn left_to_right_within_a_band_then_down() {
+        let lines = vec![l(102, 300, "b"), l(100, 10, "a"), l(140, 10, "c"), l(98, 600, "z")];
+        assert_eq!(reading_order(lines, 16), ["a", "b", "z", "c"]);
+    }
+
+    #[test]
+    fn a_staircase_of_close_rows_does_not_panic() {
+        // Each row is within the tolerance of its neighbour but not of the
+        // row two steps away: the input that broke the old comparator.
+        let lines: Vec<_> = (0..40).map(|i| l(i * 10, 1000 - i * 10, "r")).collect();
+        let out = reading_order(lines, 16);
+        assert_eq!(out.len(), 40);
+    }
+
+    #[test]
+    fn empty_is_empty() {
+        assert!(reading_order(Vec::new(), 16).is_empty());
+    }
 }

@@ -3427,6 +3427,13 @@ class _SettingsViewState extends State<SettingsView>
                         style: RelicTheme.mono(size: 10, color: c.accentMuted),
                       ),
                     ],
+                    if (repo.mlEnrich && repo.searchBacklog > 0) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        'updating search for ${_fmtCount(repo.searchBacklog)} items…',
+                        style: RelicTheme.mono(size: 10, color: c.accentMuted),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -3466,11 +3473,19 @@ class _SettingsViewState extends State<SettingsView>
           ),
           _toggleRow(
             c,
+            'Remember where copies came from',
+            repo.aiContext,
+            repo.setAiContext,
+            sub:
+                'Note the window, the page link and the words around what you copy, so titles and search know what it was for. Stays on this device and never syncs. Never kept for passwords or keys. Off forgets it all.',
+          ),
+          _toggleRow(
+            c,
             'Describe items',
             repo.describeItems,
             repo.setDescribeItems,
             sub:
-                'Give saved items a short title and topic tags, so you can search what a photo shows or what a note is about. Applies to vault items and every photo. Off by default: it downloads ~666 MB and runs in the background at about a second per item.',
+                'Give each new item a short title and topic tags, so you can search what a photo shows or what a copy was for. Uses a one-time ~666 MB download and about a second of background work per item.',
           ),
           _analysisSpeedRow(c),
           // Only meaningful once descriptions are on at all.
@@ -3481,7 +3496,7 @@ class _SettingsViewState extends State<SettingsView>
               repo.describeEverything,
               repo.setDescribeEverything,
               sub:
-                  'Also describe clipboard items you never saved to the vault. Most copies are throwaway and each costs about a second, so this is off unless you want everything covered.',
+                  'Also describe clipboard items you never saved to the vault, not just vault items and photos. Each costs about a second in the background. Turn off to describe vault items only.',
             ),
         ],
         if (repo.mlAvailable) _modelsRow(c),

@@ -41,7 +41,10 @@ re!(SLACK_TOKEN, r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b");
 re!(STRIPE_KEY, r"\b[sr]?[sp]k_(live|test)_[A-Za-z0-9]{16,}\b");
 re!(GOOGLE_API, r"\bAIza[0-9A-Za-z_-]{35}\b");
 re!(ANTHROPIC_KEY, r"\bsk-ant-[A-Za-z0-9_-]{20,}\b");
-re!(OPENAI_KEY, r"\bsk-(proj-)?[A-Za-z0-9]{20,}T3BlbkFJ[A-Za-z0-9]{20,}\b");
+// Project/service-account/admin keys carry `_` and `-` in the body, which the
+// old alphanumeric class never matched; the prefix alone is distinctive.
+re!(OPENAI_KEY, r"\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}T3BlbkFJ[A-Za-z0-9_-]{20,}");
+re!(OPENAI_SCOPED_KEY, r"\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{40,}");
 re!(NPM_TOKEN, r"\bnpm_[A-Za-z0-9]{36}\b");
 re!(SENDGRID_KEY, r"\bSG\.[A-Za-z0-9_-]{16,32}\.[A-Za-z0-9_-]{16,64}\b");
 re!(TWILIO_KEY, r"\bSK[0-9a-f]{32}\b");
@@ -85,6 +88,7 @@ static SECRET_RULES: &[SecretRule] = &[
     SecretRule { name: "google_api_key", category: "api_key", re: &GOOGLE_API, min_entropy: 0.0, confidence: 0.97 },
     SecretRule { name: "anthropic_key", category: "api_key", re: &ANTHROPIC_KEY, min_entropy: 0.0, confidence: 0.97 },
     SecretRule { name: "openai_key", category: "api_key", re: &OPENAI_KEY, min_entropy: 0.0, confidence: 0.97 },
+    SecretRule { name: "openai_key", category: "api_key", re: &OPENAI_SCOPED_KEY, min_entropy: 0.0, confidence: 0.97 },
     SecretRule { name: "npm_token", category: "api_key", re: &NPM_TOKEN, min_entropy: 0.0, confidence: 0.97 },
     SecretRule { name: "sendgrid_key", category: "api_key", re: &SENDGRID_KEY, min_entropy: 0.0, confidence: 0.97 },
     SecretRule { name: "twilio_key", category: "api_key", re: &TWILIO_KEY, min_entropy: 0.0, confidence: 0.97 },
@@ -714,6 +718,9 @@ mod tests {
             "npm_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5",
             "SG.aB3dE5fG7hJ9kL1mN3pQ.aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5cE7g",
             "SK0123456789abcdef0123456789abcdef",
+            // OpenAI project / service-account keys: `_` and `-` in the body
+            "sk-proj-FAKEfake_0123456789-FAKEfake_0123456789-FAKEfake_0123456789", // scan-ok
+            "sk-svcacct-FAKEfake_0123456789-FAKEfake_0123456789-FAKE", // scan-ok
         ] {
             let v = cats(s);
             assert!(
@@ -721,6 +728,14 @@ mod tests {
                 "{s}: expected api_key vote, got {v:?}"
             );
         }
+    }
+
+    /// The legacy OpenAI body marker, built at runtime so the source never
+    /// holds something shaped like a real key.
+    #[test]
+    fn openai_legacy_marker_key_hits_api_key() {
+        let k = format!("sk-proj-FAKE_fake0123456789abcd{}{}FAKE_fake0123456789abcd", "T3Blbk", "FJ");
+        assert!(cats(&k).iter().any(|(c, s)| c == "api_key" && *s >= 0.95));
     }
 
     #[test]

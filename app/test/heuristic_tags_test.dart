@@ -167,6 +167,22 @@ void main() {
       expect(detectTags(doc), isNot(contains('color')));
     });
 
+    test('OpenAI project and Anthropic keys are secrets', () {
+      for (final k in [
+        'sk-proj-FAKEfake_0123456789-FAKEfake_0123456789-FAKEfake_0123456789', // scan-ok
+        'sk-svcacct-FAKEfake_0123456789-FAKEfake_0123456789-FAKE', // scan-ok
+        // legacy marker built from pieces so the source never holds a key shape
+        'sk-proj-FAKE_fake0123456789abcd${'T3Blbk'}${'FJ'}FAKE_fake0123456789abcd',
+        'sk-ant-api03-FAKEfake_0123456789-FAKEfake', // scan-ok
+        'OPENAI_API_KEY=sk-proj-FAKEfake_0123456789-FAKEfake_0123456789-FAKEfake', // scan-ok
+      ]) {
+        expect(detectTags(k), contains('secret'), reason: k);
+      }
+      // "sk-" in ordinary prose or a short slug is not a key
+      expect(detectTags('ask-me-anything is a format'), isNot(contains('secret')));
+      expect(detectTags('see sk-proj-notes for details'), isNot(contains('secret')));
+    });
+
     test('detector re-audit round: secrets recall', () {
       // In-prose JWT must mask (curl commands, headers, .env lines).
       final jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0'
