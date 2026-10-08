@@ -44,4 +44,39 @@ void main() {
     expect(tok.unkId, 1);
     expect(tok.encode('', maxTokens: 64).ids, [2, 3]);
   });
+
+  // The shipped student's real tokenizer (all-MiniLM-L6-v2, uncased, 30,522
+  // pieces) against 61 cases from Python tokenizers 0.22, truncation 64:
+  // test/fixtures/wordpiece_minilm_cases.json. The tokenizer.json is not in
+  // the repo, so this runs only when RELIC_STUDENT_DIR points at a directory
+  // holding it (the model release folder, or the phone's models dir).
+  test('matches Python tokenizers on the real MiniLM file', () {
+    final dir = Platform.environment['RELIC_STUDENT_DIR'];
+    final file = dir == null ? null : File('$dir/tokenizer.json');
+    if (file == null || !file.existsSync()) {
+      markTestSkipped('RELIC_STUDENT_DIR not set or has no tokenizer.json');
+      return;
+    }
+    final real = WordPieceTokenizer.fromJson(file.readAsStringSync());
+    final real61 = (jsonDecode(
+            File('test/fixtures/wordpiece_minilm_cases.json').readAsStringSync())
+        as List)
+        .cast<Map<String, dynamic>>();
+    expect(real61.length, 61);
+    expect(real.clsId, 101);
+    expect(real.sepId, 102);
+    expect(real.unkId, 100);
+    final failures = <String>[];
+    for (final c in real61) {
+      final text = c['text'] as String;
+      final want = (c['ids'] as List).cast<int>();
+      final got = real.encode(text, maxTokens: 64);
+      if (got.ids.join(',') != want.join(',')) {
+        failures.add('${jsonEncode(text)}\n  want $want\n  got  ${got.ids}');
+      }
+    }
+    expect(failures, isEmpty,
+        reason: '${failures.length} of ${real61.length} differ:\n'
+            '${failures.join('\n')}');
+  });
 }

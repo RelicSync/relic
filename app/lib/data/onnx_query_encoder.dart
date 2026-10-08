@@ -27,7 +27,7 @@ import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
 
 import 'gemma_tokenizer.dart';
 import 'model_download.dart'
-    show semanticGraphFile, semanticTokenizerFile, semanticWeightsFile;
+    show semanticGraphFile, semanticTokenizerFile, semanticWeightsFile, studentGraphFile, studentTokenizerFile;
 import 'query_encoder.dart';
 import 'query_tokenizer.dart';
 import 'wordpiece_tokenizer.dart';
@@ -146,8 +146,24 @@ class OnnxEncoderSpec {
         truncateAndNormalise: false,
       );
 
+  /// The shipped student: all-MiniLM-L6-v2 distilled into the ft2 space
+  /// (round 2). Uncased WordPiece from its own tokenizer.json, raw query, 64
+  /// tokens, `query_embedding` [batch, 256] already unit length. Its floor is
+  /// its own entry in the repo's per-encoder table (0.23, matched to ft2's
+  /// 0.22 on the search benchmark).
+  static OnnxEncoderSpec studentMiniLm(String modelDir) => wordPieceStudent(
+        modelDir: modelDir,
+        graphFile: studentGraphFile,
+        tokenizerFile: studentTokenizerFile,
+        space: 'embeddinggemma-300m-ft2@int8-mrl256',
+        name: studentEncoderName,
+      );
+
   String get graphPath => '$modelDir${Platform.pathSeparator}$graphFile';
 }
+
+/// The student's encoder name, which keys its floor in the repo.
+const String studentEncoderName = 'q-minilm-l6-d2';
 
 class OnnxQueryEncoder implements QueryEncoder {
   final OnnxEncoderSpec spec;

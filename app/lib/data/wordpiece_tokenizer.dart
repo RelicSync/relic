@@ -186,6 +186,18 @@ class WordPieceTokenizer implements QueryTokenizer {
         continue;
       }
       if (_stripAccents) {
+        // Accent stripping is NFD plus dropping the marks, and NFD also
+        // splits a precomposed Hangul syllable into its jamo. The vocab
+        // holds the jamo, not the syllables, so Korean tokenises through
+        // this or not at all.
+        if (c >= 0xAC00 && c <= 0xD7A3) {
+          final syl = c - 0xAC00;
+          b.writeCharCode(0x1100 + syl ~/ 588);
+          b.writeCharCode(0x1161 + (syl % 588) ~/ 28);
+          final tail = syl % 28;
+          if (tail != 0) b.writeCharCode(0x11A7 + tail);
+          continue;
+        }
         final base = _accentBase[c];
         if (base != null) c = base;
         if (_isCombiningMark(c)) continue;

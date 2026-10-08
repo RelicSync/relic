@@ -2192,8 +2192,9 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
 
   // ---- Search by meaning --------------------------------------------------
   //
-  // The phone runs the desktop's query model (about 330 MB, Wi-Fi only,
-  // opt-in). The row below shows one of three things: off with a one-line
+  // The phone runs a small query encoder trained into the desktop model's
+  // space (about 24 MB, Wi-Fi only, opt-in); the stored vectors come from
+  // the desktop. The full desktop model is a bundle swap away if ever wanted. The row below shows one of three things: off with a one-line
   // pitch and a Turn on action, downloading with progress, or on with a
   // Turn off action that unloads the model and deletes the files.
 
@@ -2206,7 +2207,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
         final wifi = _wifi ??= WifiWatch();
         final m = ModelDownloadManager(
           dir: Directory('${support.path}${Platform.pathSeparator}models'),
-          bundle: semanticModelFt2,
+          bundle: semanticModelStudent,
           isWifi: wifi.isWifi,
           wifiChanges: wifi.changes,
         );
@@ -2242,7 +2243,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     final m = _semModel;
     if (m == null) return;
     final enc = _semEncoder ??=
-        OnnxQueryEncoder(OnnxEncoderSpec.ft2(m.dir.path));
+        OnnxQueryEncoder(OnnxEncoderSpec.studentMiniLm(m.dir.path));
     enc.recheckFiles();
     _wireQueryEncoder(repo, enc);
   }
@@ -2286,7 +2287,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
       case ModelDownloadPhase.absent:
       case ModelDownloadPhase.failed:
         blurb = 'Finds things by what they mean, not just the words. '
-            'Downloads 330 MB over Wi-Fi.';
+            'Downloads 24 MB over Wi-Fi.';
         action = 'Turn on';
         onAction = _semanticTurnOn;
     }
@@ -2340,7 +2341,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
             borderRadius: BorderRadius.circular(Radii.card),
             side: BorderSide(color: colors.borderStrong),
           ),
-          title: Text('Download 330 MB?',
+          title: Text('Download 24 MB?',
               style: RelicTheme.headline(size: 17, color: colors.text)),
           content: Text(
             'Relic downloads its search model over Wi-Fi only and keeps it '

@@ -104,6 +104,31 @@ const ModelBundle semanticModelFt2 = ModelBundle(
   ],
 );
 
+/// The distilled query encoder: all-MiniLM-L6-v2 trained to reproduce ft2's
+/// query vectors (round 2, 2026-10-08), int8. Two files, about 24 MB, and a
+/// query takes well under a millisecond on a PC. This is what "Search by
+/// meaning" downloads; the full ft2 bundle above stays for the day a device
+/// wants the teacher itself. Sizes and checksums are from the model's
+/// manifest: graph sha256 1e6c3e56938379523c7c96a1d07042d2b3f01059ae26e7ca2d4620d87729b334,
+/// tokenizer sha256 5f218e0ea9eaa9f154815cc067351fb941bea26da81bfd12af3ded3cc66fa3ff.
+const String studentGraphFile = 'q-all-MiniLM-L6-v2.int8.onnx';
+const String studentTokenizerFile = 'q-all-MiniLM-L6-v2.tokenizer.json';
+const ModelBundle semanticModelStudent = ModelBundle(
+  id: 'q-all-minilm-l6-v2-d2',
+  files: [
+    ModelFile(
+      name: studentGraphFile,
+      url: 'https://models.relic.space/relic-sift/v2/$studentGraphFile',
+      bytes: 23066462,
+    ),
+    ModelFile(
+      name: studentTokenizerFile,
+      url: 'https://models.relic.space/relic-sift/v2/$studentTokenizerFile',
+      bytes: 711648,
+    ),
+  ],
+);
+
 enum ModelDownloadPhase { absent, downloading, ready, failed }
 
 class ModelDownloadState {

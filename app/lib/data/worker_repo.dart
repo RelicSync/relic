@@ -484,8 +484,12 @@ class WorkerRepo implements RelicRepo {
   /// a different cut from their space's default. A distilled student that
   /// writes into the ft2 space scores a little lower across the board than
   /// the teacher, so it will want its own entry here, measured on the search
-  /// benchmark. Empty today: every encoder uses [semanticFloorBySpace].
-  static const Map<String, double> semanticFloorByEncoder = {};
+  /// benchmark. The MiniLM student's 0.23 is where its scores match ft2's
+  /// 0.22 (p95 of all unrelated pairs 0.234, median true match 0.601, on
+  /// 8,644 held-out searches).
+  static const Map<String, double> semanticFloorByEncoder = {
+    'q-minilm-l6-d2': 0.23,
+  };
 
   /// The floor for [enc]: its own entry, else its space's, else null, which
   /// means no semantic leg at all. A floor nobody measured is not a guess.
