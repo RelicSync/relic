@@ -756,7 +756,11 @@ class AiVectors {
         'd': dim,
         'q': 'i8',
         's': scales,
-        'c': [for (final c in chunks) base64Encode(c)],
+        // base64 wants unsigned bytes; the same bits read back as int8.
+        'c': [
+          for (final c in chunks)
+            base64Encode(c.buffer.asUint8List(c.offsetInBytes, c.length)),
+        ],
       };
 
   /// Null for anything that is not a well-formed int8 vector set, so an odd
@@ -770,7 +774,8 @@ class AiVectors {
       final dim = (j['d'] as num).toInt();
       final scales = (j['s'] as List).map((x) => (x as num).toDouble()).toList();
       final chunks = [
-        for (final c in (j['c'] as List)) Int8List.fromList(base64Decode(c as String)),
+        for (final c in (j['c'] as List))
+          Int8List.sublistView(base64Decode(c as String)),
       ];
       if (chunks.length != scales.length || chunks.length > maxChunks) {
         return null;
