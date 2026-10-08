@@ -3466,6 +3466,14 @@ class _SettingsViewState extends State<SettingsView>
           ),
           _toggleRow(
             c,
+            'Remember where copies came from',
+            repo.aiContext,
+            repo.setAiContext,
+            sub:
+                'Note the window, the page link and the words around what you copy, so titles and search know what it was for. Stays on this device and never syncs. Never kept for passwords or keys. Off forgets it all.',
+          ),
+          _toggleRow(
+            c,
             'Describe items',
             repo.describeItems,
             repo.setDescribeItems,

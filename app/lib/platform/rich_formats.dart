@@ -49,6 +49,38 @@ const kRelicHtml = SimpleValueFormat<String>(
   ),
 );
 
+/// The page a browser copied from. Windows: the CF_HTML header's SourceURL.
+/// macOS: Chromium's `org.chromium.source-url`. Linux: Chromium's
+/// `chromium/x-source-url` or Firefox's `text/x-moz-url-priv`. Read-only.
+const kRelicSourceUrl = SimpleValueFormat<String>(
+  windows: SimplePlatformCodec<String>(
+    formats: [_cfHtml],
+    onDecode: _sourceUrlFromCfHtml,
+  ),
+  macos: SimplePlatformCodec<String>(
+    formats: ['org.chromium.source-url'],
+    onDecode: _urlFromSystem,
+  ),
+  fallback: SimplePlatformCodec<String>(
+    formats: ['chromium/x-source-url', 'text/x-moz-url-priv'],
+    onDecode: _urlFromSystem,
+  ),
+);
+
+Future<String?> _sourceUrlFromCfHtml(
+    PlatformDataProvider provider, PlatformFormat format) async {
+  final bytes = await _bytesFromSystem(provider, format);
+  return bytes == null ? null : cfHtmlSourceUrl(bytes);
+}
+
+Future<String?> _urlFromSystem(
+    PlatformDataProvider provider, PlatformFormat format) async {
+  final bytes = await _bytesFromSystem(provider, format);
+  if (bytes == null) return null;
+  // text/x-moz-url-priv is UTF-16 on some builds; dropping NULs reads both.
+  return httpUrlOrNull(utf8.decode(bytes, allowMalformed: true));
+}
+
 /// RTF on the clipboard, as raw bytes.
 ///
 /// NOT `Formats.rtf`: that is a `SimpleFileFormat`, and a file format publishes

@@ -9,6 +9,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 import 'package:uuid/uuid.dart';
 
+import '../models/copy_context.dart';
 import '../models/relic.dart';
 import 'voice_capture.dart';
 import '../models/rich_body.dart';
@@ -1259,6 +1260,10 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   bool _aiOcr = true;
   bool _aiImageTags = true;
   bool _aiEmbeddings = true;
+  // Copy context: read the window title, page link and nearby words when
+  // something is copied, keep them on this device only, and use them for the
+  // item's title and search vectors. On by default; secrets never get one.
+  bool _aiContext = true;
   // Personalized ranking: learn from picks (usage frecency, query-pick
   // memory, summon-context prior) and apply the learned factors in search.
   // All signals are local-only; one switch governs both learning and use.
@@ -1330,6 +1335,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   bool get aiOcr => _aiOcr;
   bool get aiImageTags => _aiImageTags;
   bool get aiEmbeddings => _aiEmbeddings;
+  bool get aiContext => _aiContext;
   bool get downloadingModels => _downloadingModels;
   bool get removingModels => _removingModels;
   int get enrichBacklog => _enrichBacklog;
@@ -1491,6 +1497,14 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
 
   void setAiEmbeddings(bool on) {
     _aiEmbeddings = on;
+    _savePrefs();
+    notifyListeners();
+  }
+
+  /// Turning copy context off also forgets every context already stored.
+  void setAiContext(bool on) {
+    _aiContext = on;
+    if (!on) _db?.clearCopyContext();
     _savePrefs();
     notifyListeners();
   }
@@ -1720,6 +1734,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _aiOcr = j['ai_ocr'] as bool? ?? true;
         _aiImageTags = j['ai_image_tags'] as bool? ?? true;
         _aiEmbeddings = j['ai_embeddings'] as bool? ?? true;
+        _aiContext = j['ai_context'] as bool? ?? true;
         _personalRank = j['personal_rank'] as bool? ?? true;
         _multiCombine = j['feature_multi_combine'] as bool? ?? false;
         _snippets = j['feature_snippets'] as bool? ?? false;
@@ -1838,6 +1853,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           'ai_ocr': _aiOcr,
           'ai_image_tags': _aiImageTags,
           'ai_embeddings': _aiEmbeddings,
+          'ai_context': _aiContext,
           'personal_rank': _personalRank,
           'feature_multi_combine': _multiCombine,
           'feature_snippets': _snippets,
@@ -2522,6 +2538,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   String? get debugVectorModel => _vectorModel;
 
   @visibleForTesting
+  CopyContext? debugCopyContextOf(String uid) => _db?.copyContextOf(uid);
+
+  @visibleForTesting
   int get debugVectorCount => _vec.length;
 
   /// Load the tag-expansion table from the on-disk cache, refreshing it from the
@@ -2793,6 +2812,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     String? sourceApp,
     String? html,
     Uint8List? rtf,
+    CopyContext? context,
   }) {
     final t = text.trimRight();
     if (t.trim().isEmpty) return false;
@@ -2825,6 +2845,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         db.recordUse(existing, _now); // a re-copy is a use (frecency)
       }
       final touched = db.getByUid(existing);
+      if (touched != null && !touched.isSecret && db.copyContextOf(existing) == null) {
+        _keepContext(db, existing, context);
+      }
       _refreshWindow();
       notifyListeners();
       if (touched != null) _kickSync();
@@ -2855,11 +2878,30 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       rich: keep,
     );
     db.upsert(r, queuePush: syncEnabled);
+    if (!r.isSecret) _keepContext(db, r.uid, context);
     _enforceRetention();
     _refreshWindow();
     notifyListeners();
     _kickSync();
     return true;
+  }
+
+  /// Store where [uid] was copied from, when the setting allows. Device-only
+  /// (see RelicDb.setCopyContext); callers never pass one for a secret.
+  void _keepContext(RelicDb db, String uid, CopyContext? context) {
+    if (!_aiContext || context == null || context.isEmpty) return;
+    db.setCopyContext(uid, context.trimmed(), _now);
+  }
+
+  /// The stored copy context for [r], if it may be used: the setting is on,
+  /// the item is text and is not (or has not since become) a secret.
+  CopyContext? _contextFor(RelicDb db, Relic r) {
+    if (!_aiContext || r.kind != Kind.string) return null;
+    if (r.isSecret) {
+      db.deleteCopyContext(r.uid);
+      return null;
+    }
+    return db.copyContextOf(r.uid);
   }
 
   /// Create a relic by hand (the "+" composer): a text body, optional title,
@@ -6114,7 +6156,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       // label: false is the point of the whole pass. The caption and the tags
       // already exist and travelled here; re-running the labeler would spend
       // minutes to produce a second, different answer to a settled question.
-      final res = await sift.classifyText(doc, ml: true, label: false);
+      final res = await sift.classifyText(doc,
+          ml: true, label: false, context: _contextFor(db, r));
       final vec = res?.textVector;
       if (vec == null || vec.isEmpty) {
         _embedSkip.add(r.uid);
@@ -6159,6 +6202,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           promoted: r.promoted,
         ),
         embeddings: _aiEmbeddings,
+        context: _contextFor(db, r),
       );
     } else if (r.kind == Kind.photo || r.kind == Kind.file) {
       final ok = await ensureBlob(r);
@@ -6191,6 +6235,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     // an undead row racing its own tombstone).
     final cur = db.getByUid(r.uid);
     if (cur == null) return false;
+    // A copy the classifier recognizes as a secret keeps no context. (sift
+    // already ignored it for this item; this drops the stored row.)
+    if (res.relicTags.contains('secret')) db.deleteCopyContext(r.uid);
 
     // Persist the document embedding(s) for semantic / hybrid search: the
     // whole-doc vector first, then the extra chunks. Those cover long

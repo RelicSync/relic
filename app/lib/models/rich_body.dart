@@ -335,6 +335,30 @@ Uint8List cfHtmlEncode(String html) {
   return out;
 }
 
+/// The page a browser copied from: the `SourceURL:` line of the CF_HTML
+/// header (Chrome, Edge and Firefox all write it). Null when absent or not an
+/// http(s) link.
+String? cfHtmlSourceUrl(Uint8List bytes) {
+  final head = utf8.decode(
+    bytes.length > 4096 ? bytes.sublist(0, 4096) : bytes,
+    allowMalformed: true,
+  );
+  for (final line in const LineSplitter().convert(head)) {
+    if (line.startsWith('<')) break; // the header is over
+    if (line.startsWith('SourceURL:')) {
+      return httpUrlOrNull(line.substring('SourceURL:'.length));
+    }
+  }
+  return null;
+}
+
+/// [s] trimmed when it is an http(s) URL, else null (a `file:` or `about:`
+/// source says nothing a person would search for).
+String? httpUrlOrNull(String s) {
+  final t = s.replaceAll(' ', '').trim().split(RegExp(r'\s')).first;
+  return RegExp(r'^https?://\S+$', caseSensitive: false).hasMatch(t) ? t : null;
+}
+
 /// Pull the fragment back out of CF_HTML bytes. Null when the header is missing
 /// or its offsets do not fit the payload.
 String? cfHtmlDecode(Uint8List bytes) {

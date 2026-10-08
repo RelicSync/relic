@@ -129,6 +129,27 @@ impl TextEmbedModel {
         self.forward(&prepared)
     }
 
+    /// Embed `(title, text)` document pairs with a real title slot (Gemma's
+    /// `title: <title> | text: <text>`), for chunks that carry where a copy
+    /// came from (see context.rs). BGE has no title slot; it reads both.
+    pub fn embed_docs_titled(&mut self, pairs: &[(&str, &str)]) -> Result<Vec<Vec<f32>>, String> {
+        if pairs.is_empty() {
+            return Ok(vec![]);
+        }
+        let prepared: Vec<String> = pairs
+            .iter()
+            .map(|(title, t)| {
+                let t = Self::cap(t);
+                match self.kind {
+                    EmbedKind::Gemma => format!("title: {title} | text: {t}"),
+                    EmbedKind::Bge => format!("{title}
+{t}"),
+                }
+            })
+            .collect();
+        self.forward(&prepared)
+    }
+
     /// Embed texts for the nearest-centroid classification head — uses the
     /// task-specific *classification* prefix (Gemma); BGE is unaffected (raw).
     pub fn embed_classify(&mut self, texts: &[&str]) -> Result<Vec<Vec<f32>>, String> {

@@ -866,6 +866,10 @@ fn serve_classify(sift: &mut Sift) -> Result<(), String> {
         /// Defaults to whatever `--label` set.
         #[serde(default)]
         label: Option<bool>,
+        /// Where a text item was copied from (window title, link, nearby
+        /// words). Kept on the capturing device only; see context.rs.
+        #[serde(default)]
+        context: Option<relic_sift::CopyContext>,
     }
 
     let label_default = sift.has_labeler();
@@ -880,6 +884,7 @@ fn serve_classify(sift: &mut Sift) -> Result<(), String> {
             Err(e) => Err(format!("bad request: {e}")),
             Ok(req) => {
                 sift.set_labeling(req.label.unwrap_or(label_default));
+                sift.set_context(req.context);
                 match (req.path, req.text) {
                 (Some(p), _) => {
                     let forced = match req.kind.as_str() {

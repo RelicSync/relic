@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use image::DynamicImage;
 
+use crate::context::CopyContext;
 use crate::extract;
 use crate::fusion;
 use crate::models;
@@ -73,6 +74,8 @@ pub struct Sift {
     pub user_rules: UserRules,
     /// Load warnings (model missing/failed) — surfaced by `doctor` and CLI.
     pub warnings: Vec<String>,
+    /// Surroundings for the NEXT text item only (see [`Sift::set_context`]).
+    context: Option<CopyContext>,
 }
 
 impl Sift {
@@ -149,7 +152,7 @@ impl Sift {
         }
         let (user_rules, rule_warnings) = UserRules::load(&config.model_dir, &taxonomy);
         warnings.extend(rule_warnings);
-        Sift { taxonomy, config, text_model, clip, ocr, labeler, user_rules, warnings }
+        Sift { taxonomy, config, text_model, clip, ocr, labeler, user_rules, warnings, context: None }
     }
 
     pub fn has_text_model(&self) -> bool {
@@ -172,6 +175,16 @@ impl Sift {
     /// an ephemeral clipboard line no), and re-spawning the process to change a
     /// flag would throw away the ~4.4 s model load that resident mode exists to
     /// amortize. No effect if the labeler was never loaded.
+    /// Attach where the next text item was copied from: window title, link and
+    /// the words around it (context.rs). Used by that one [`Sift::classify`]
+    /// call and then dropped, so it can never leak onto another item. The
+    /// labeler then sees the copy in place, and the item gets two extra search
+    /// chunks; classification is unchanged. Ignored for anything holding a
+    /// secret or PII, like the labeler itself.
+    pub fn set_context(&mut self, context: Option<CopyContext>) {
+        self.context = context.filter(|c| !c.is_empty());
+    }
+
     pub fn set_labeling(&mut self, on: bool) {
         self.config.enable_labeling = on;
     }
@@ -182,6 +195,7 @@ impl Sift {
         let t_total = Instant::now();
         let mut ctx = Ctx::default();
         ctx.mime = item.declared_mime.clone();
+        let copy_context = self.context.take();
 
         match item.source_kind {
             SourceKind::String | SourceKind::Textblob => {
@@ -205,8 +219,22 @@ impl Sift {
                 .or(ctx.extracted_text.as_deref())
                 .unwrap_or("")
                 .to_string();
+            // Where the copy came from, secret-masked like every other text
+            // that reaches a model, and dropped entirely for sensitive items.
+            let around = copy_context
+                .filter(|_| !ctx.is_image && !enrichment_blocked_by_pii(&ctx.entities))
+                .map(|c| c.map(|t| mask_secrets(t, &stage_a::text::find_secrets(t))));
             if !body.trim().is_empty() {
-                self.run_labeler(LabelInput::Text(&body), &mut ctx);
+                match &around {
+                    Some(c) => {
+                        let input = c.labeler_input(&body, crate::labeler::MAX_BODY_CHARS);
+                        self.run_labeler(LabelInput::Text(&input), &mut ctx);
+                    }
+                    None => self.run_labeler(LabelInput::Text(&body), &mut ctx),
+                }
+            }
+            if let Some(c) = &around {
+                self.embed_context(c, &body, &mut ctx);
             }
         }
 
@@ -637,6 +665,33 @@ impl Sift {
                 ctx.embeddings.text =
                     Some(embedding_info(model.embed_version(), vec, true));
             }
+        }
+    }
+
+    /// Extra search chunks from a copy's surroundings: the marked copy and the
+    /// page around it, in the formats the embedder was trained on. Appended
+    /// after the document and title chunks, so chunk 0 keeps its meaning and
+    /// search simply takes the best of them. Only when vectors are wanted and
+    /// a document vector exists to hang them on.
+    fn embed_context(&mut self, around: &CopyContext, value: &str, ctx: &mut Ctx) {
+        if !self.config.include_vectors {
+            return;
+        }
+        let Some(model) = &mut self.text_model else { return };
+        let Some(info) = &mut ctx.embeddings.text else { return };
+        if info.vector.is_none() {
+            return;
+        }
+        let masked = mask_secrets(value, &ctx.secrets_in_preview);
+        let pairs = around.embed_chunks(&masked);
+        let refs: Vec<(&str, &str)> = pairs.iter().map(|(t, x)| (t.as_str(), x.as_str())).collect();
+        if let Ok(vecs) = model.embed_docs_titled(&refs) {
+            info.chunks.get_or_insert_with(Vec::new).extend(vecs);
+            ctx.extra_provenance.push(Provenance {
+                stage: Stage::BText,
+                signal: format!("context_chunks:{}", refs.len()),
+                score: 0.0,
+            });
         }
     }
 

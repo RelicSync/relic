@@ -51,6 +51,8 @@ import 'onboarding/desktop_onboarding.dart';
 import 'ui/actionable_notification.dart';
 import 'ui/popup.dart';
 import 'ui/settings.dart';
+import 'models/copy_context.dart';
+import 'platform/copy_context.dart';
 import 'ui/search_tuning_panel.dart';
 import 'ui/voice_offer.dart';
 import 'platform/popup_placement.dart';
@@ -1614,6 +1616,33 @@ class _RealAppState extends State<RealApp>
   /// take hundreds of milliseconds on a large selection. Each flavor gets its
   /// own short timeout and a failure costs only that flavor — the plain
   /// capture always lands.
+  /// Where [plain] was copied from: the page link a browser put on the
+  /// clipboard, plus the window title and nearby words (copy_context.dart).
+  /// Read only when copy context is on; bounded, and null when there is
+  /// nothing. The repo decides whether to keep it (never for a secret).
+  Future<CopyContext?> _readCopyContext(
+    ClipboardReader reader,
+    String plain,
+  ) async {
+    final repo = widget.repo;
+    if (!repo.aiContext || plain.trim().isEmpty) return null;
+    String? url;
+    try {
+      if (reader.canProvide(kRelicSourceUrl)) {
+        url = await reader
+            .readValue(kRelicSourceUrl)
+            .timeout(const Duration(milliseconds: 300), onTimeout: () => null);
+      }
+    } catch (_) {
+      url = null;
+    }
+    final around = await readCopyContext(plain);
+    final c = (around ?? const CopyContext()).withUrl(url);
+    // Lengths only: the text itself can be private.
+    debugPrint('copy context: $c');
+    return c.isEmpty ? null : c;
+  }
+
   Future<({String? html, Uint8List? rtf})> _readRichFlavors(
     ClipboardReader reader,
     String plain,
@@ -1876,11 +1905,13 @@ class _RealAppState extends State<RealApp>
           final text = await reader.readValue(Formats.plainText);
           if (text != null && !_isRecentlyHintedSecret(text)) {
             final rich = await _readRichFlavors(reader, text);
+            final context = await _readCopyContext(reader, text);
             repo.captureText(
               text,
               sourceApp: srcApp,
               html: rich.html,
               rtf: rich.rtf,
+              context: context,
             );
           }
         }

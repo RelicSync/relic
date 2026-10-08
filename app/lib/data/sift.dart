@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../models/copy_context.dart';
+
 /// One relic's classification, parsed from a `sift` ClassificationRecord
 /// (schema `sift/0.1`, see relic-sift/src/record.rs).
 class SiftResult {
@@ -282,14 +284,21 @@ class SiftSidecar {
     }
   }
 
+  /// [context] is where the text was copied from (device-only); the resident
+  /// server uses it to title the copy in place and add search chunks. The
+  /// one-shot fallback has no channel for it and simply goes without.
   Future<SiftResult?> classifyText(String text,
-          {required bool ml, bool label = false, bool embeddings = true}) =>
+          {required bool ml,
+          bool label = false,
+          bool embeddings = true,
+          CopyContext? context}) =>
       _classify(
           text: text,
           kind: 'string',
           ml: ml,
           label: label,
-          embeddings: embeddings);
+          embeddings: embeddings,
+          context: context);
 
   Future<SiftResult?> classifyPath(String path,
           {required bool ml,
@@ -483,6 +492,7 @@ class SiftSidecar {
     bool ocr = true,
     bool imageTags = true,
     bool embeddings = true,
+    CopyContext? context,
   }) async {
     // The process flag says the labeler may run at all; the per-request field
     // says whether THIS item earns one. Keeping them apart is what stops the
@@ -515,6 +525,8 @@ class SiftSidecar {
       'label': label,
       'path': ?path,
       if (path == null) 'text': text ?? '',
+      if (path == null && context != null && !context.isEmpty)
+        'context': context.toJson(),
     });
     if (served != null) return served;
 
