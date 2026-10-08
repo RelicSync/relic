@@ -24,6 +24,7 @@ import 'heuristic_tags.dart';
 import 'net.dart';
 import 'personal_store.dart';
 import 'pull_walk.dart';
+import 'query_encoder.dart';
 import 'recovery.dart';
 import 'relic_db.dart';
 import 'repo.dart';
@@ -457,6 +458,40 @@ class WorkerRepo implements RelicRepo {
   int _matchCount = 0;
   static const int _searchPool = 150; // skip the hybrid refine above this
 
+  // Semantic search. The phone runs no model over the items: their vectors
+  // arrive from a desktop inside AI records, and the host plugs in an encoder
+  // for the query side (see [queryEncoder]). The map holds, per uid, the
+  // unit-length chunks of every stored vector that lives in the encoder's
+  // space. A record from another model is left out: comparing across spaces
+  // gives noise, and the lexical legs still cover the item.
+  final Map<String, List<Float32List>> _vecByUid = {};
+  QueryEncoder? _queryEncoder;
+  bool _semanticSearch = true;
+  // Bumped by every query run. An embed that finishes under an older number
+  // belongs to a query the user has already typed past, and is dropped.
+  int _semGen = 0;
+  Timer? _semDebounce;
+  Timer? _encoderIdle;
+
+  /// How long a keystroke has to stand before the query is embedded. Typing
+  /// the next letter cancels the wait, so a word costs one embed, not five.
+  Duration semanticDebounce = const Duration(milliseconds: 150);
+
+  /// How long after the last search the encoder is asked to let its model go.
+  Duration encoderIdleUnload = const Duration(seconds: 60);
+
+  /// Floors by encoder [QueryEncoder.name], for encoders whose output needs
+  /// a different cut from their space's default. A distilled student that
+  /// writes into the ft2 space scores a little lower across the board than
+  /// the teacher, so it will want its own entry here, measured on the search
+  /// benchmark. Empty today: every encoder uses [semanticFloorBySpace].
+  static const Map<String, double> semanticFloorByEncoder = {};
+
+  /// The floor for [enc]: its own entry, else its space's, else null, which
+  /// means no semantic leg at all. A floor nobody measured is not a guess.
+  static double? semanticFloorFor(QueryEncoder enc) =>
+      semanticFloorByEncoder[enc.name] ?? semanticFloorBySpace[enc.space];
+
   SyncState _sync = const SyncState(SyncKind.offline);
   AccountInfo? _account;
   List<WaitingCopy> _waiting = const [];
@@ -583,6 +618,9 @@ class WorkerRepo implements RelicRepo {
     // paging — mirrors the desktop gates so results/counts stay honest. The
     // ranking is pure SQLite here (no ML), so it runs synchronously.
     final s = search.trim();
+    // Any run supersedes a semantic answer still in flight for the last one.
+    _semGen++;
+    _semDebounce?.cancel();
     final skipHybrid = sort != SortMode.relevance ||
         s.length < 3 ||
         RegExp(r'tag:\S+|(^|\s)(kind|is|has):\S+')
@@ -595,20 +633,191 @@ class WorkerRepo implements RelicRepo {
         _hybridUids = db.lexicalHybridUids(s, scope,
             createdAfter: createdAfter,
             createdBefore: createdBefore,
-            // Personal factors come from the on-disk store, not this
-            // ephemeral index (see the personalized-ranking section).
-            factorsFor: personalRank && _personal != null
-                ? (union) {
-                    try {
-                      return _personal!.factors(union, s, _now);
-                    } catch (_) {
-                      return const <String, double>{};
-                    }
-                  }
-                : null);
+            factorsFor: _personalFactorsFor(s));
+        // The lexical answer is on screen from here. The semantic leg is a
+        // second step that re-publishes when it lands, as on the desktop.
+        _scheduleSemantic(s, scope, createdAfter, createdBefore);
       }
     }
     _refreshWindow();
+  }
+
+  /// Personal factors come from the on-disk store, not this ephemeral index
+  /// (see the personalized-ranking section). Null when they are off.
+  Map<String, double> Function(List<String> union)? _personalFactorsFor(
+      String s) {
+    if (!personalRank || _personal == null) return null;
+    return (union) {
+      try {
+        return _personal!.factors(union, s, _now);
+      } catch (_) {
+        return const <String, double>{};
+      }
+    };
+  }
+
+  // --- semantic search (vectors from AI records, a pluggable encoder) ------
+
+  /// The encoder that turns a query into a vector. Null until the host plugs
+  /// one in; without it search is lexical only. Setting it, or swapping it
+  /// for one in another space, re-reads every stored vector against the new
+  /// space and re-runs the active search.
+  QueryEncoder? get queryEncoder => _queryEncoder;
+  set queryEncoder(QueryEncoder? e) {
+    if (identical(e, _queryEncoder)) return;
+    _encoderIdle?.cancel();
+    _queryEncoder = e;
+    _rebuildVectors();
+    _rerunActiveQuery();
+  }
+
+  /// The user's switch for the semantic leg. Off: results equal the lexical
+  /// ranking exactly, and the encoder is never asked to load.
+  bool get semanticSearch => _semanticSearch;
+  set semanticSearch(bool on) {
+    if (on == _semanticSearch) return;
+    _semanticSearch = on;
+    _rerunActiveQuery();
+  }
+
+  /// Whether a search right now would get a semantic leg: the switch is on,
+  /// an encoder is plugged in and ready, it has a measured floor, and
+  /// at least one item has a vector in that space. For the About page and
+  /// logs.
+  bool get semanticSearchActive {
+    final enc = _queryEncoder;
+    return _semanticSearch &&
+        enc != null &&
+        enc.ready &&
+        semanticFloorFor(enc) != null &&
+        _vecByUid.isNotEmpty;
+  }
+
+  /// How many items carry a vector the current encoder can compare against.
+  int get usableVectorCount => _vecByUid.length;
+
+  /// How many items carry a vector at all, in any space. Next to
+  /// [usableVectorCount] this says whether a gap is "no encoder" or "the
+  /// desktop has not embedded them yet".
+  int get storedVectorCount =>
+      _aiByUid.values.where((r) => r.vec != null).length;
+
+  void _rerunActiveQuery() {
+    if (!_indexReady || _query.trim().isEmpty) return;
+    _runQuery();
+    _changes.value++;
+  }
+
+  /// Read [uid]'s stored vector into [_vecByUid] when it lives in the
+  /// encoder's space, else drop whatever was there.
+  void _noteVectors(String uid) {
+    final v = _aiByUid[uid]?.vec;
+    final enc = _queryEncoder;
+    if (enc == null || v == null || v.model != enc.space || v.chunks.isEmpty) {
+      _vecByUid.remove(uid);
+      return;
+    }
+    _vecByUid[uid] = [for (var i = 0; i < v.chunks.length; i++) v.chunk(i)];
+  }
+
+  void _rebuildVectors() {
+    _vecByUid.clear();
+    if (_queryEncoder == null) return;
+    for (final uid in _aiByUid.keys) {
+      _noteVectors(uid);
+    }
+  }
+
+  /// Start the semantic leg for the query the lexical legs just answered.
+  ///
+  /// Waits out the debounce, embeds the query, ranks the stored vectors by
+  /// cosine, fuses that list with the lexical legs and publishes. Every step
+  /// checks the generation first, so a slow embed for a query the user has
+  /// moved past changes nothing.
+  void _scheduleSemantic(
+      String s, Scope scope, int? createdAfter, int? createdBefore) {
+    final enc = _queryEncoder;
+    if (enc == null || !_semanticSearch || _vecByUid.isEmpty || !enc.ready) {
+      return;
+    }
+    final floor = semanticFloorFor(enc);
+    if (floor == null) return; // nobody has measured a floor for it
+    final gen = _semGen;
+    _semDebounce = Timer(semanticDebounce, () async {
+      if (gen != _semGen) return;
+      _touchEncoder();
+      Float32List? qv;
+      try {
+        qv = await enc.embed(s);
+      } catch (_) {
+        qv = null; // the contract says never throw; be safe anyway
+      }
+      if (qv == null || gen != _semGen) return;
+      final db = _index;
+      if (db == null || !_indexReady) return;
+      // FTS and trigram are scope and date filtered in SQL; this leg is not,
+      // so filter here. Vault scope before the top-K cut, so a strong vault
+      // match is not pushed out by unpromoted neighbours.
+      var sem = _cosineTopK(qv, floor, _searchPool,
+          allow: scope == Scope.vault ? db.promotedUids() : null);
+      if (createdAfter != null || createdBefore != null) {
+        sem = db.filterByDate(sem, createdAfter, createdBefore);
+      }
+      if (sem.isEmpty) return; // the lexical answer stands
+      final fused = db.lexicalHybridUids(s, scope,
+          createdAfter: createdAfter,
+          createdBefore: createdBefore,
+          factorsFor: _personalFactorsFor(s),
+          sem: sem);
+      if (gen != _semGen || fused == null) return;
+      _hybridUids = fused;
+      _refreshWindow();
+      _changes.value++;
+      _touchEncoder();
+    });
+  }
+
+  /// Top [k] uids by cosine against [q], best chunk wins. Both sides are
+  /// unit length, so cosine is the dot product. Anything under [floor] is
+  /// not a match at all. Only items that are actually here count (a record
+  /// can land before its relic), and [allow] narrows further. Ties break on
+  /// uid so the order is stable from one refresh to the next.
+  List<String> _cosineTopK(Float32List q, double floor, int k,
+      {Set<String>? allow}) {
+    final scored = <MapEntry<String, double>>[];
+    for (final e in _vecByUid.entries) {
+      final uid = e.key;
+      if (!_envByUid.containsKey(uid)) continue;
+      if (allow != null && !allow.contains(uid)) continue;
+      var best = -1.0;
+      for (final v in e.value) {
+        if (v.length != q.length) continue;
+        var dot = 0.0;
+        for (var i = 0; i < v.length; i++) {
+          dot += q[i] * v[i];
+        }
+        if (dot > best) best = dot;
+      }
+      if (best >= floor) scored.add(MapEntry(uid, best));
+    }
+    scored.sort((a, b) {
+      final c = b.value.compareTo(a.value);
+      return c != 0 ? c : a.key.compareTo(b.key);
+    });
+    return [for (final e in scored.take(k)) e.key];
+  }
+
+  /// Re-arm the idle unload. After [encoderIdleUnload] without a search the
+  /// encoder is told to let its model go, so a big one does not sit in a
+  /// phone's memory between searches.
+  void _touchEncoder() {
+    _encoderIdle?.cancel();
+    _encoderIdle = Timer(encoderIdleUnload, () {
+      _encoderIdle = null;
+      final enc = _queryEncoder;
+      if (enc == null) return;
+      unawaited(enc.unload().catchError((_) {}));
+    });
   }
 
   @override
@@ -1481,6 +1690,7 @@ class WorkerRepo implements RelicRepo {
       // The AI record dies with its relic, as it does on the server.
       _aiEnvByUid.remove(uid);
       _aiByUid.remove(uid);
+      _vecByUid.remove(uid);
       if (_envByUid.remove(uid) != null) {
         _items.removeWhere((x) => x.uid == uid);
         _indexDelete(uid);
@@ -1658,6 +1868,7 @@ class WorkerRepo implements RelicRepo {
       if (p == null) continue; // not ours to read, or tampered with
       _aiEnvByUid[uid] = env;
       _aiByUid[uid] = AiRecord.fromWire(env, p);
+      _noteVectors(uid);
       landed.add(uid);
     }
     return _applyAiRecords(landed);
@@ -1801,6 +2012,7 @@ class WorkerRepo implements RelicRepo {
       final p = opened[uid];
       if (p != null) _aiByUid[uid] = AiRecord.fromWire(env, p);
     }
+    _rebuildVectors();
     // The merge alone: the index is rebuilt from _items just below, so there
     // is no row to write yet.
     for (var i = 0; i < _items.length; i++) {
@@ -1995,6 +2207,7 @@ class WorkerRepo implements RelicRepo {
     _envByUid.clear();
     _aiEnvByUid.clear();
     _aiByUid.clear();
+    _vecByUid.clear();
     _outbox.clear();
     _blobOutbox.clear();
     _account = null; // cached plan/storage belongs to the account being dropped
@@ -2388,6 +2601,7 @@ class WorkerRepo implements RelicRepo {
   void _deleteLocal(Relic r) {
     _items.removeWhere((x) => x.uid == r.uid);
     _envByUid.remove(r.uid);
+    _vecByUid.remove(r.uid); // its record stays, in case of an Undo
     _indexDelete(r.uid);
     try {
       _personal?.deleteUid(r.uid); // forget its learned-ranking rows too
@@ -2473,6 +2687,7 @@ class WorkerRepo implements RelicRepo {
     }
     _items.insert(0, restored);
     _items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    _noteVectors(restored.uid); // the record outlived the delete, so can this
     await _push(restored); // re-seal, re-queue the put, reindex + save + flush
   }
 
