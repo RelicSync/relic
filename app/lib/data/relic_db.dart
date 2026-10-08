@@ -800,6 +800,44 @@ class RelicDb {
         return;
       }
     }
+    if (uv < 13) {
+      // v13: OpenAI project keys (sk-proj-…) and Anthropic keys (sk-ant-…)
+      // were never recognized as secrets, so they sat unmasked in vaults.
+      // Re-run the detector over text items and mark the ones it now flags:
+      // masked from here on, formatting and any copy context dropped (a
+      // secret keeps neither), and pushed so every device masks it too.
+      db.execute('BEGIN');
+      try {
+        var changed = false;
+        for (final row in db.select(
+          "SELECT uid, tags, content FROM relics "
+          "WHERE kind = 'string' AND content LIKE '%sk-%'",
+        )) {
+          final tags = _jsonList(row['tags']);
+          if (tags.contains('secret')) continue;
+          final text = (row['content'] as String?) ?? '';
+          if (!detectTags(text).contains('secret')) continue;
+          db.execute('UPDATE relics SET tags = ?, rich = NULL WHERE uid = ?', [
+            jsonEncode([...tags, 'secret']),
+            row['uid'],
+          ]);
+          db.execute('DELETE FROM copy_context WHERE uid = ?', [row['uid']]);
+          db.execute(
+            "INSERT INTO pending_ops (uid, op, queued_at) "
+            "VALUES (?, 'push', strftime('%s','now')) "
+            'ON CONFLICT(uid, op) DO UPDATE SET queued_at = excluded.queued_at',
+            [row['uid']],
+          );
+          changed = true;
+        }
+        if (changed) _reindexAll(db);
+        db.execute('PRAGMA user_version = 13');
+        db.execute('COMMIT');
+      } catch (_) {
+        db.execute('ROLLBACK');
+        return;
+      }
+    }
   }
 
   static void _ensureColumn(Database db, String col, String decl) {
