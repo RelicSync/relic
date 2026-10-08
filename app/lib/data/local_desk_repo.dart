@@ -6054,7 +6054,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       // Embed anything a peer generated for us. Deliberately after the batch:
       // generating is the scarce work, indexing is the cheap work, and the
       // cheap work must never delay the scarce work.
-      if (sift.modelsReady && await _backfillVectors(sift, 8)) changed = true;
+      // 24 per 6 s cycle: an embed-only pass is ~0.1 s an item, and after a
+      // model change it has the whole vault to redo (~25 min for 6,700 items).
+      if (sift.modelsReady && await _backfillVectors(sift, 24)) changed = true;
       if (changed) {
         _refreshWindow();
         notifyListeners();
@@ -6162,9 +6164,15 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     // to ignore the result.
     if (db == null || !_aiEmbeddings) return false;
     var changed = false;
-    for (final r in db.needingVectors(_levelMl, limit)) {
-      if (_disposed) break;
+    // Items that can never get a vector (a bare "722889", "No.") stay at the
+    // head of the newest-first list forever. Ask past them, or a whole-vault
+    // rebuild (a new embedding model) stalls behind the first `limit` of them.
+    final fetch = (limit + _embedSkip.length).clamp(limit, 5000);
+    var done = 0;
+    for (final r in db.needingVectors(_levelMl, fetch)) {
+      if (_disposed || done >= limit) break;
       if (_embedSkip.contains(r.uid)) continue;
+      done++;
       final doc = embedDocFor(r);
       if (doc.isEmpty) {
         _embedSkip.add(r.uid);
