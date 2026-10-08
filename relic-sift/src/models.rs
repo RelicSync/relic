@@ -278,30 +278,38 @@ pub fn ocr_v6_present(dir: &std::path::Path) -> bool {
 /// 416 MiB decoder weights exceed what `wrangler r2 object put` will accept.
 ///
 /// NOT in `ALL`: ~666 MB, downloaded on demand the first time labeling is used.
+///
+/// `t3` is the language model fine-tuned to title a copy from the words around
+/// it (relic-sift-next `ft/`, TITLER-EXPORT.md): same graphs, re-quantized
+/// weights, so the decoder and embedding files carry new names (their data
+/// files are named inside the graphs) and the stock ones are SUPERSEDED. The
+/// vision tower and tokenizer are unchanged and shared. On held-out copies a
+/// search finds the item by its title alone at 0.74 vs 0.40 for stock (ideal
+/// titles: 0.81), and it invents fewer product names than stock.
 pub const QWEN35: ModelSpec = ModelSpec {
     id: "qwen3.5-0.8b",
     role: "vision-language (labeling)",
-    version: "qwen3.5-0.8b@q4f16",
+    version: "qwen3.5-0.8b-t3@q4f16",
     license: "Apache-2.0",
     files: &[
         ModelFile {
-            name: "qwen35-decoder-merged.q4f16.onnx",
-            url: "https://models.relic.space/relic-sift/v1/qwen35-decoder-merged.q4f16.onnx",
+            name: "qwen35-labeler-t3.decoder.q4f16.onnx",
+            url: "https://models.relic.space/relic-sift/v2/qwen35-labeler-t3.decoder.q4f16.onnx",
             min_bytes: 1_000_000,
         },
         ModelFile {
-            name: "decoder_model_merged_q4f16.onnx_data",
-            url: "https://models.relic.space/relic-sift/v1/decoder_model_merged_q4f16.onnx_data",
+            name: "qwen35-labeler-t3.decoder.q4f16.onnx_data",
+            url: "https://models.relic.space/relic-sift/v2/qwen35-labeler-t3.decoder.q4f16.onnx_data",
             min_bytes: 430_000_000,
         },
         ModelFile {
-            name: "qwen35-embed-tokens.q4f16.onnx",
-            url: "https://models.relic.space/relic-sift/v1/qwen35-embed-tokens.q4f16.onnx",
+            name: "qwen35-labeler-t3.embed-tokens.q4f16.onnx",
+            url: "https://models.relic.space/relic-sift/v2/qwen35-labeler-t3.embed-tokens.q4f16.onnx",
             min_bytes: 1_000,
         },
         ModelFile {
-            name: "embed_tokens_q4f16.onnx_data",
-            url: "https://models.relic.space/relic-sift/v1/embed_tokens_q4f16.onnx_data",
+            name: "qwen35-labeler-t3.embed-tokens.q4f16.onnx_data",
+            url: "https://models.relic.space/relic-sift/v2/qwen35-labeler-t3.embed-tokens.q4f16.onnx_data",
             min_bytes: 145_000_000,
         },
         ModelFile {
@@ -477,6 +485,17 @@ pub const SUPERSEDED: &[(&ModelSpec, &[&str])] = &[
     // Stock EmbeddingGemma graph + weights, replaced by the ft2 fine-tune.
     // The tokenizer is shared, so it is not listed.
     (&GEMMA, &["embeddinggemma-300m.int8.onnx", "model_quantized.onnx_data"]),
+    // Stock Qwen3.5 decoder + embedding, replaced by the t3 titler. The
+    // vision tower and tokenizer are shared, so they are not listed.
+    (
+        &QWEN35,
+        &[
+            "qwen35-decoder-merged.q4f16.onnx",
+            "decoder_model_merged_q4f16.onnx_data",
+            "qwen35-embed-tokens.q4f16.onnx",
+            "embed_tokens_q4f16.onnx_data",
+        ],
+    ),
 ];
 
 /// Subdirectories of the model dir that are retired wholesale. `dml/` held the
@@ -659,7 +678,11 @@ pub fn download_all(dir: &std::path::Path, quiet: bool) -> Result<(), String> {
 /// stays small.
 pub fn download_labeler(dir: &std::path::Path, quiet: bool) -> Result<(), String> {
     download_runtime(dir, quiet)?;
-    download(dir, &QWEN35, quiet)
+    download(dir, &QWEN35, quiet)?;
+    for name in superseded_files(|spec| is_present(dir, spec)) {
+        let _ = fs::remove_file(dir.join(name));
+    }
+    Ok(())
 }
 
 /// Status of the optional labeler (not part of the default `ALL`, so it never
@@ -851,9 +874,12 @@ mod tests {
         assert!(superseded_files(|_| false).is_empty());
         let gone = superseded_files(|spec| spec.id == GEMMA.id);
         assert_eq!(gone, ["embeddinggemma-300m.int8.onnx", "model_quantized.onnx_data"]);
-        // never the shared tokenizer or a file the live spec still names
-        for f in GEMMA.files {
-            assert!(!gone.contains(&f.name), "{} is still in use", f.name);
+        // never a shared file or one the live spec still names
+        for spec in [&GEMMA, &QWEN35] {
+            let gone = superseded_files(|s| s.id == spec.id);
+            for f in spec.files {
+                assert!(!gone.contains(&f.name), "{} is still in use", f.name);
+            }
         }
     }
 
