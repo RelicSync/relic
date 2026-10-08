@@ -75,6 +75,15 @@ dependencies:
   # The store's own rating sheet (Play In-App Review / SKStoreReviewController),
   # asked for once after the 10th capture on a phone. See data/review_prompt.dart.
   in_app_review: ^2.0.12
+  # Search by meaning on a phone: the desktop's query embedding model run
+  # through ONNX Runtime (see data/onnx_query_encoder.dart). Held below 1.9.0
+  # on purpose: 1.8.5 ships ONNX Runtime 1.23 on Android and iOS (the 16 KB
+  # page requirement needs >= 1.5.1); 1.9.0 moved to ORT 1.28 two days before
+  # this was written, so it gets a release of soak first. iOS resolves through
+  # Swift Package Manager.
+  flutter_onnxruntime: '>=1.8.5 <1.9.0'
+  # Wi-Fi gate for the 330 MB model download (data/wifi_watch.dart).
+  connectivity_plus: ^7.3.2
 dev_dependencies:
   flutter_test:
     sdk: flutter
