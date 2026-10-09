@@ -924,6 +924,25 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     await _openPhoneExpectation();
   }
 
+  /// One line for About and the diagnostics: whether search by meaning is
+  /// on, and how many items it can reach. It tells "no model yet" from "the
+  /// desktop has not embedded anything yet", which is the question anyone
+  /// looking here is asking.
+  String _semanticStatusLine(WorkerRepo repo) {
+    if (!_semanticSearch) return 'Search by meaning: off';
+    final usable = repo.usableVectorCount;
+    final stored = repo.storedVectorCount;
+    if (!(_semModel?.state.value.isReady ?? false)) {
+      return 'Search by meaning: on, model not downloaded yet';
+    }
+    if (!repo.semanticSearchActive) {
+      return stored == 0
+          ? 'Search by meaning: on, no vectors from a computer yet'
+          : 'Search by meaning: on, $stored vectors from another model';
+    }
+    return 'Search by meaning: on, $usable of ${repo.all.length} items';
+  }
+
   Future<void> _openPhoneExpectation() async {
     final ctx = _navKey.currentContext;
     if (!mounted || ctx == null || !ctx.mounted) return;
@@ -1841,6 +1860,15 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
                               size: 12.5, color: colors.textMuted),
                         ),
                       ),
+                    if (_repo != null)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 2, 16, 2),
+                        child: Text(
+                          _semanticStatusLine(_repo!),
+                          style: RelicTheme.mono(
+                              size: 12.5, color: colors.textMuted),
+                        ),
+                      ),
                     _sheetItem(colors, LucideIcons.circleHelp, 'Help and FAQ',
                         () => _openLink(sheetCtx, helpUrl('help.faq'))),
                     _sheetItem(colors, LucideIcons.globe, 'Website',
@@ -1994,9 +2022,11 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
 
   void _copyDiagnostics() {
     final v = _pkg == null ? '' : ' ${_pkg!.version}+${_pkg!.buildNumber}';
+    final repo = _repo;
     Clipboard.setData(ClipboardData(
       text: 'Relic$v · Android ${Platform.operatingSystemVersion} · '
-          'device $_deviceName · ${_repo?.all.length ?? 0} relics\n'
+          'device $_deviceName · ${repo?.all.length ?? 0} relics\n'
+          '${repo == null ? '' : '${_semanticStatusLine(repo)}\n'}'
           '${BootTrace.report().join('\n')}',
     ));
     _snack('Diagnostics copied');
