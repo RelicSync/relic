@@ -12,6 +12,7 @@
 //   * neither of those may disturb the relic's own updated_at, or a background
 //     tagging pass would look like a user edit.
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:relic_app/data/local_desk_repo.dart';
@@ -711,6 +712,260 @@ void main() {
             _r('s', kind: Kind.photo, content: 'BOARDING PASS 14C')),
         'BOARDING PASS 14C',
       );
+    });
+  });
+
+  group('search vectors travel with the record', () {
+    // The desktop embeds every item it enriches. A phone has no model of its
+    // own, so the vectors ride the AI record, quantised, tagged with the
+    // model that made them. These pin the local half of that: the column, the
+    // merge, the import on a second desktop, and who may re-publish.
+    const space = 'embeddinggemma-300m-ft2@int8-mrl256';
+    List<double> unit(int seed) {
+      final v = [for (var i = 0; i < 4; i++) ((seed * 31 + i * 7) % 11) - 5.0];
+      final n = math.sqrt(v.fold<double>(0, (a, x) => a + x * x));
+      return [for (final x in v) x / n];
+    }
+
+    final vec = AiVectors.quantize(space, [unit(1), unit(2)]);
+
+    test('a record with vectors is stored and read back', () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      db.putAiRecord(_rec('u1', title: 't').copyWith(vec: vec), needsPush: true);
+
+      final back = db.aiRecord('u1')!.vec!;
+      expect(back.model, space);
+      expect(back.dim, 4);
+      expect(back.scales, vec.scales);
+      expect(back.chunks.length, 2);
+      for (var i = 0; i < 2; i++) {
+        expect(back.chunks[i], vec.chunks[i]);
+      }
+    });
+
+    test('the merge keeps vectors when a later record has none', () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      db.putAiRecord(_rec('u1', at: 100, title: 't').copyWith(vec: vec),
+          needsPush: false);
+      // The owner amends with attachment text and says nothing about vectors.
+      expect(
+        db.putAiRecord(
+          AiRecord(uid: 'u1', at: 100, level: 3, by: 'desk-a', att: 'read'),
+          needsPush: true,
+        ),
+        isTrue,
+      );
+      expect(db.aiRecord('u1')!.vec, isNotNull);
+      expect(db.aiRecord('u1')!.att, 'read');
+
+      // A model upgrade on another device wins the uid; the vectors it does
+      // not carry stay here rather than being thrown away with the old record.
+      expect(
+        db.putAiRecord(_rec('u1', at: 200, level: 4, by: 'desk-b', title: 'new'),
+            needsPush: false),
+        isTrue,
+      );
+      expect(db.aiRecord('u1')!.title, 'new');
+      expect(db.aiRecord('u1')!.vec!.model, space);
+    });
+
+    test('arriving vectors from the same model fill the vectors table', () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      db.upsert(_r('u1', content: 'a peer read this'));
+      db.raiseEnrichLevel('u1', 3);
+      expect(db.needingVectors(3, 10).map((r) => r.uid), ['u1'],
+          reason: 'queued for embedding until something lands');
+
+      final chunks = LocalDeskRepo.importableVectors(
+        vec,
+        model: space,
+        embeddings: true,
+        haveLocal: false,
+      )!;
+      db.upsertVectors('u1', chunks);
+
+      expect(db.needingVectors(3, 10), isEmpty, reason: 'nothing left to embed');
+      final rows = db.allVectors();
+      expect(rows.length, 2);
+      expect(rows.map((r) => r.chunk), [0, 1]);
+      // What landed is the dequantised unit vector, within int8 error.
+      var dot = 0.0;
+      for (var i = 0; i < 4; i++) {
+        dot += rows.first.vec[i] * unit(1)[i];
+      }
+      expect(dot, closeTo(1.0, 0.01));
+    });
+
+    test('vectors from a different model are ignored', () {
+      // Two models put the same text in unrelated places. A vector from the
+      // wrong one would rank garbage, so it is left alone and the item is
+      // embedded locally instead.
+      final other = AiVectors.quantize('some-other-model@int8', [unit(1)]);
+      expect(
+        LocalDeskRepo.importableVectors(other,
+            model: space, embeddings: true, haveLocal: false),
+        isNull,
+      );
+      // Until this device has seen its own model, nothing is comparable.
+      expect(
+        LocalDeskRepo.importableVectors(vec,
+            model: null, embeddings: true, haveLocal: false),
+        isNull,
+      );
+      // This device's own float vectors beat a peer's int8 copy.
+      expect(
+        LocalDeskRepo.importableVectors(vec,
+            model: space, embeddings: true, haveLocal: true),
+        isNull,
+      );
+      // Embeddings off: the user asked for no semantic index.
+      expect(
+        LocalDeskRepo.importableVectors(vec,
+            model: space, embeddings: false, haveLocal: false),
+        isNull,
+      );
+      expect(
+        LocalDeskRepo.importableVectors(vec,
+            model: space, embeddings: true, haveLocal: false),
+        hasLength(2),
+      );
+    });
+
+    test('attaching vectors to our own record re-publishes it', () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      db.upsert(_r('u1'));
+      db.putAiRecord(_rec('u1', by: 'desk-a', title: 'mine', tags: ['x']),
+          needsPush: true);
+      db.markAiPushed('u1');
+      expect(db.countAiRecordsNeedingPush(), 0);
+
+      expect(
+        db.attachAiVectors('u1', vec, deviceId: 'desk-a', now: 9000, publish: true),
+        isTrue,
+      );
+      final rec = db.aiRecord('u1')!;
+      expect(rec.vec, isNotNull);
+      expect(rec.title, 'mine', reason: 'an amendment, not a replacement');
+      expect(rec.tags, ['x']);
+      expect(rec.by, 'desk-a');
+      expect(rec.at, 5000, reason: 'same at: the server takes it as an amendment');
+      expect(db.aiRecordsNeedingPush().map((r) => r.uid), ['u1']);
+    });
+
+    test('vectors on a peer record stay local', () {
+      // The server stamps a push with the pushing device, so re-publishing a
+      // peer's record would either be refused or move its ownership to the
+      // device that holds less of the answer.
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      db.upsert(_r('u1'));
+      db.putAiRecord(_rec('u1', by: 'desk-b', title: 'theirs', tags: ['y']),
+          needsPush: false);
+
+      expect(
+        db.attachAiVectors('u1', vec, deviceId: 'desk-a', now: 9000, publish: true),
+        isFalse,
+      );
+      final rec = db.aiRecord('u1')!;
+      expect(rec.vec!.model, space, reason: 'kept here for this device');
+      expect(rec.by, 'desk-b');
+      expect(rec.title, 'theirs');
+      expect(rec.tags, ['y']);
+      expect(db.countAiRecordsNeedingPush(), 0);
+    });
+
+    test('a record with no owner, or a device with no id, is never re-pushed', () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      db.upsert(_r('u1'));
+      db.upsert(_r('u2'));
+      db.putAiRecord(_rec('u1', by: null, title: 'old'), needsPush: false);
+      db.putAiRecord(_rec('u2', by: 'desk-a', title: 'mine'), needsPush: false);
+
+      expect(
+        db.attachAiVectors('u1', vec, deviceId: 'desk-a', now: 9000, publish: true),
+        isFalse,
+      );
+      expect(
+        db.attachAiVectors('u2', vec, deviceId: null, now: 9000, publish: true),
+        isFalse,
+      );
+      expect(db.countAiRecordsNeedingPush(), 0);
+      expect(db.aiRecord('u1')!.vec, isNotNull);
+      expect(db.aiRecord('u2')!.vec, isNotNull);
+    });
+
+    test('with sync off the vectors are kept, and an owed record stays owed', () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      db.upsert(_r('u1'));
+      db.putAiRecord(_rec('u1', by: 'desk-a', title: 'mine'), needsPush: true);
+
+      expect(
+        db.attachAiVectors('u1', vec, deviceId: 'desk-a', now: 9000, publish: false),
+        isFalse,
+      );
+      expect(db.aiRecord('u1')!.vec, isNotNull);
+      expect(db.aiRecordsNeedingPush().map((r) => r.uid), ['u1'],
+          reason: 'still owed for the title it carries');
+    });
+
+    test('with no record yet, a vectors-only one is made at the item level', () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      db.upsert(_r('u1'));
+      db.raiseEnrichLevel('u1', 3);
+
+      expect(
+        db.attachAiVectors('u1', vec, deviceId: 'desk-a', now: 9000, publish: true),
+        isTrue,
+      );
+      final rec = db.aiRecord('u1')!;
+      expect(rec.level, 3, reason: 'the item level, never above it');
+      expect(rec.by, 'desk-a');
+      expect(rec.at, 9000);
+      expect(rec.title, isNull);
+      expect(rec.isEmpty, isFalse, reason: 'vectors are worth publishing');
+      expect(db.aiRecordsNeedingPush().map((r) => r.uid), ['u1']);
+
+      // A real record at a newer model generation still takes the uid.
+      expect(
+        db.putAiRecord(_rec('u1', at: 9500, level: 4, by: 'desk-b', title: 'real'),
+            needsPush: false),
+        isTrue,
+      );
+      expect(db.aiRecord('u1')!.title, 'real');
+    });
+
+    test('no relic, no record', () {
+      // The relic was deleted while the embedding ran. A record now would
+      // wait forever for a relic that never comes.
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      expect(
+        db.attachAiVectors('gone', vec, deviceId: 'desk-a', now: 9000, publish: true),
+        isFalse,
+      );
+      expect(db.aiRecord('gone'), isNull);
+    });
+
+    test('the vectors outlive the text in an over-budget payload', () {
+      // Same escaping blow-up as the text test above. The text goes before
+      // the vectors do: a few kilobytes that let a phone find the item by
+      // meaning are worth more than a document it can no longer fit.
+      final rec = AiRecord(
+        uid: 'u1', at: 1, level: 3, by: 'desk-a', title: 't',
+        text: '' * kAiTextBytes,
+        vec: AiVectors.quantize(space, [unit(1)]),
+      );
+      final p = rec.toPayload();
+      expect(p.containsKey('text'), isFalse);
+      expect(p.containsKey('vec'), isTrue);
+      expect(p['title'], 't');
     });
   });
 

@@ -1,0 +1,199 @@
+{
+ "version": "1.0",
+ "truncation": null,
+ "padding": null,
+ "added_tokens": [
+  {
+   "id": 0,
+   "content": "[PAD]",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 1,
+   "content": "[UNK]",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 2,
+   "content": "[CLS]",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 3,
+   "content": "[SEP]",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 4,
+   "content": "[MASK]",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  }
+ ],
+ "normalizer": {
+  "type": "BertNormalizer",
+  "clean_text": true,
+  "handle_chinese_chars": true,
+  "strip_accents": null,
+  "lowercase": true
+ },
+ "pre_tokenizer": {
+  "type": "BertPreTokenizer"
+ },
+ "post_processor": {
+  "type": "TemplateProcessing",
+  "single": [
+   {
+    "SpecialToken": {
+     "id": "[CLS]",
+     "type_id": 0
+    }
+   },
+   {
+    "Sequence": {
+     "id": "A",
+     "type_id": 0
+    }
+   },
+   {
+    "SpecialToken": {
+     "id": "[SEP]",
+     "type_id": 0
+    }
+   }
+  ],
+  "pair": [
+   {
+    "SpecialToken": {
+     "id": "[CLS]",
+     "type_id": 0
+    }
+   },
+   {
+    "Sequence": {
+     "id": "A",
+     "type_id": 0
+    }
+   },
+   {
+    "SpecialToken": {
+     "id": "[SEP]",
+     "type_id": 0
+    }
+   },
+   {
+    "Sequence": {
+     "id": "B",
+     "type_id": 1
+    }
+   },
+   {
+    "SpecialToken": {
+     "id": "[SEP]",
+     "type_id": 1
+    }
+   }
+  ],
+  "special_tokens": {
+   "[CLS]": {
+    "id": "[CLS]",
+    "ids": [
+     2
+    ],
+    "tokens": [
+     "[CLS]"
+    ]
+   },
+   "[SEP]": {
+    "id": "[SEP]",
+    "ids": [
+     3
+    ],
+    "tokens": [
+     "[SEP]"
+    ]
+   }
+  }
+ },
+ "decoder": {
+  "type": "WordPiece",
+  "prefix": "##",
+  "cleanup": true
+ },
+ "model": {
+  "type": "WordPiece",
+  "unk_token": "[UNK]",
+  "continuing_subword_prefix": "##",
+  "max_input_chars_per_word": 100,
+  "vocab": {
+   "[PAD]": 0,
+   "[UNK]": 1,
+   "[CLS]": 2,
+   "[SEP]": 3,
+   "[MASK]": 4,
+   "the": 5,
+   "wifi": 6,
+   "pass": 7,
+   "##word": 8,
+   "password": 9,
+   "gate": 10,
+   "code": 11,
+   "meeting": 12,
+   "link": 13,
+   "zoom": 14,
+   "a": 15,
+   "b": 16,
+   "c": 17,
+   "##a": 18,
+   "##b": 19,
+   "##c": 20,
+   "un": 21,
+   "##aff": 22,
+   "##able": 23,
+   "##s": 24,
+   ",": 25,
+   ".": 26,
+   "?": 27,
+   "!": 28,
+   "#": 29,
+   "7": 30,
+   "##7": 31,
+   "4": 32,
+   "##1": 33,
+   "cafe": 34,
+   "##e": 35,
+   "key": 36,
+   "aws": 37,
+   "that": 38,
+   "'": 39,
+   "s": 40,
+   "##t": 41,
+   "don": 42,
+   "in": 43,
+   "##voice": 44,
+   "last": 45,
+   "month": 46,
+   "x": 47,
+   "##x": 48
+  }
+ }
+}
