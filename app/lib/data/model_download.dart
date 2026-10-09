@@ -62,13 +62,14 @@ class ModelBundle {
 }
 
 /// The graph file of the ft2 model, named once for the manifest, the encoder
-/// spec and the ready check. It switches to
-/// `embeddinggemma-300m-ft2.gf.int8.onnx` once that file is live on
-/// models.relic.space: a gather-first rewrite of the same graph with
-/// bit-identical vectors and the same model version string, loading the same
-/// weights file by name. Its exact size is not known yet, which is why the
-/// graph is the one file checked against a minimum rather than an exact size.
-const String semanticGraphFile = 'embeddinggemma-300m-ft2.int8.onnx';
+/// spec and the ready check. This is the gather-first rewrite published on
+/// 2026-10-09: bit-identical vectors to the original graph and the same
+/// model version string, but it looks up the token rows before dequantising
+/// them, so a query no longer decompresses the whole 262144-row table (about
+/// half the time per query and a 1.2 GB transient gone). It loads the same
+/// weights file by name. sha256
+/// e9443f6d89e334a5e2b891c099e523cb252fbccf07334e457f534f880e8eab0d.
+const String semanticGraphFile = 'embeddinggemma-300m-ft2.gf.int8.onnx';
 
 /// The ft2 weights, which the graph refers to by this exact name; ONNX
 /// Runtime looks for it beside the graph.
@@ -79,17 +80,16 @@ const String semanticTokenizerFile = 'embeddinggemma-300m.tokenizer.json';
 
 /// The desktop's search embedding model, EmbeddingGemma fine-tuned on copy
 /// and search pairs, as an int8 ONNX graph. Three files, about 330 MB.
-/// Sizes are what the desktop's relic-sift registry downloaded
-/// (`relic-sift/src/models.rs` lists the same files with minimums); there is
-/// no published checksum, so size plus a successful load is the check.
+/// Sizes are the served files' exact byte counts, checked against the host on
+/// 2026-10-09 (the desktop's relic-sift registry lists the same files with
+/// minimums); size plus a successful load is the check.
 const ModelBundle semanticModelFt2 = ModelBundle(
   id: 'embeddinggemma-300m-ft2',
   files: [
     ModelFile(
       name: semanticGraphFile,
       url: 'https://models.relic.space/relic-sift/v2/$semanticGraphFile',
-      bytes: 581739,
-      minBytes: 400000,
+      bytes: 581678,
     ),
     ModelFile(
       name: semanticTokenizerFile,
