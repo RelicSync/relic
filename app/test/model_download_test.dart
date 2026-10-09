@@ -166,18 +166,29 @@ void main() {
     }
   }
 
+  test('bundle sizes: the student bundle is two exact files, about 24 MB', () {
+    expect(semanticModelStudent.files.length, 2);
+    expect((semanticModelStudent.totalBytes / 1e6).round(), 24);
+    for (final f in semanticModelStudent.files) {
+      expect(f.accepts(f.bytes), isTrue);
+      expect(f.accepts(f.bytes - 1), isFalse);
+      expect(f.url, startsWith('https://models.relic.space/relic-sift/v2/'));
+    }
+  });
+
   test('bundle sizes: the ft2 bundle is about 330 MB', () {
     expect(semanticModelFt2.files.length, 3);
     expect((semanticModelFt2.totalBytes / 1e6).round(), 330);
     // The weights must keep the name the graph refers to.
     expect(semanticModelFt2.files.map((f) => f.name),
         contains('embeddinggemma-300m-ft2.onnx_data'));
-    // The graph is checked against a minimum (its gather-first rewrite has
-    // no final size yet); the other two are exact.
+    // Every file is checked against its exact served size. The graph is the
+    // gather-first rewrite published on 2026-10-09.
+    expect(semanticGraphFile, 'embeddinggemma-300m-ft2.gf.int8.onnx');
     final graph =
         semanticModelFt2.files.firstWhere((f) => f.name == semanticGraphFile);
-    expect(graph.accepts(graph.bytes + 1000), isTrue);
-    expect(graph.accepts(1000), isFalse);
+    expect(graph.accepts(graph.bytes), isTrue);
+    expect(graph.accepts(graph.bytes + 1), isFalse);
     for (final f
         in semanticModelFt2.files.where((f) => f.name != semanticGraphFile)) {
       expect(f.accepts(f.bytes), isTrue);
