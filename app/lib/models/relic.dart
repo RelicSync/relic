@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'rich_body.dart';
 
@@ -568,6 +570,12 @@ class AiRecord {
   /// found nothing, which is worth saying so nobody retries it.
   final String? att;
 
+  /// The search vectors the producing device computed for the item, so a
+  /// device with no model of its own (a phone, the web vault) can still
+  /// search it by meaning. See [AiVectors]. Null when the producer had no
+  /// embedding model, or the record predates the field.
+  final AiVectors? vec;
+
   const AiRecord({
     required this.uid,
     required this.at,
@@ -577,6 +585,7 @@ class AiRecord {
     this.tags = const [],
     this.text,
     this.att,
+    this.vec,
   });
 
   AiRecord copyWith({
@@ -584,6 +593,7 @@ class AiRecord {
     List<String>? tags,
     String? text,
     String? att,
+    AiVectors? vec,
     int? at,
     int? level,
     String? by,
@@ -597,6 +607,7 @@ class AiRecord {
         tags: tags ?? this.tags,
         text: text ?? this.text,
         att: att ?? this.att,
+        vec: vec ?? this.vec,
       );
 
   /// True when there is nothing worth publishing. An empty record would still
@@ -606,7 +617,8 @@ class AiRecord {
       (title == null || title!.trim().isEmpty) &&
       tags.isEmpty &&
       (text == null || text!.trim().isEmpty) &&
-      (att == null || att!.trim().isEmpty);
+      (att == null || att!.trim().isEmpty) &&
+      (vec == null || vec!.chunks.isEmpty);
 
   /// The sealed half of the wire record (the half the server never reads).
   ///
@@ -630,14 +642,19 @@ class AiRecord {
       // Empty is meaningful here ("ran, found nothing"), so it is sent as ''
       // rather than dropped — but only when there was something to say.
       if (a != null || (att != null && att!.isEmpty)) 'att': a ?? '',
+      if (vec != null && vec!.chunks.isNotEmpty) 'vec': vec!.toJson(),
     };
     // The byte budget is on the text; JSON escaping is on top of it and has no
     // fixed ratio (a stray control character costs six bytes to encode one).
     // In the rare case that pushes a record over, the text goes and the title
     // and tags still travel — losing the whole record because a document
-    // contained something strange would be the worse outcome by far.
+    // contained something strange would be the worse outcome by far. The
+    // vectors go last: they are a few kilobytes at most ([AiVectors.maxChunks]
+    // chunks of 256 bytes plus their scales), and they are what lets a phone
+    // find the item by meaning at all.
     if (utf8.encode(jsonEncode(p)).length > kAiPayloadBytes) p.remove('att');
     if (utf8.encode(jsonEncode(p)).length > kAiPayloadBytes) p.remove('text');
+    if (utf8.encode(jsonEncode(p)).length > kAiPayloadBytes) p.remove('vec');
     return p;
   }
 
@@ -652,7 +669,125 @@ class AiRecord {
         tags: (p['tags'] as List?)?.whereType<String>().toList() ?? const [],
         text: p['text'] as String?,
         att: p['att'] as String?,
+        vec: AiVectors.fromJson(p['vec']),
       );
+}
+
+/// The search vectors one device computed for an item, carried inside the
+/// sealed AI record so every other device can search it by meaning without
+/// running the model over the item itself.
+///
+/// Chunk 0 is the whole item; further chunks cover a long document, the way
+/// the desktop's own `vectors` table does. Values are int8 with one scale per
+/// chunk (`value = int8 * scale`), which costs about one percent of cosine
+/// accuracy at 256 dimensions and keeps a record to a few kilobytes. The
+/// wire shape is `{m, d, q: "i8", s: [scale...], c: [base64...]}`.
+class AiVectors {
+  /// The model version string that produced them, in the desktop's words
+  /// (`embeddinggemma-300m-ft2@int8-mrl256` today). A query encoder reads
+  /// only vectors from its own space; anything else is left to the lexical
+  /// legs rather than compared against the wrong model.
+  final String model;
+  final int dim;
+  final List<Int8List> chunks;
+  final List<double> scales;
+
+  /// The most chunks one record carries. Sixteen covers every document the
+  /// desktop chunks today and bounds the record at under six kilobytes.
+  static const int maxChunks = 16;
+
+  const AiVectors({
+    required this.model,
+    required this.dim,
+    required this.chunks,
+    required this.scales,
+  });
+
+  /// Quantise unit-length float vectors to int8, one scale per chunk.
+  factory AiVectors.quantize(String model, List<List<double>> vectors) {
+    final take = vectors.take(maxChunks).toList();
+    final chunks = <Int8List>[];
+    final scales = <double>[];
+    for (final v in take) {
+      var maxAbs = 0.0;
+      for (final x in v) {
+        final a = x.abs();
+        if (a > maxAbs) maxAbs = a;
+      }
+      final scale = maxAbs == 0 ? 1.0 : maxAbs / 127.0;
+      final q = Int8List(v.length);
+      for (var i = 0; i < v.length; i++) {
+        q[i] = (v[i] / scale).round().clamp(-127, 127);
+      }
+      chunks.add(q);
+      scales.add(scale);
+    }
+    return AiVectors(
+      model: model,
+      dim: take.isEmpty ? 0 : take.first.length,
+      chunks: chunks,
+      scales: scales,
+    );
+  }
+
+  /// Chunk [i] as unit-length floats, ready for a dot product against a
+  /// unit-length query vector.
+  Float32List chunk(int i) {
+    final q = chunks[i];
+    final s = scales[i];
+    final out = Float32List(q.length);
+    var norm = 0.0;
+    for (var j = 0; j < q.length; j++) {
+      final x = q[j] * s;
+      out[j] = x;
+      norm += x * x;
+    }
+    if (norm > 0) {
+      final inv = 1 / math.sqrt(norm);
+      for (var j = 0; j < out.length; j++) {
+        out[j] *= inv;
+      }
+    }
+    return out;
+  }
+
+  Map<String, dynamic> toJson() => {
+        'm': model,
+        'd': dim,
+        'q': 'i8',
+        's': scales,
+        // base64 wants unsigned bytes; the same bits read back as int8.
+        'c': [
+          for (final c in chunks)
+            base64Encode(c.buffer.asUint8List(c.offsetInBytes, c.length)),
+        ],
+      };
+
+  /// Null for anything that is not a well-formed int8 vector set, so an odd
+  /// record from a newer or older client costs the item its vectors and
+  /// nothing else.
+  static AiVectors? fromJson(Object? j) {
+    if (j is! Map) return null;
+    try {
+      if (j['q'] != 'i8') return null;
+      final model = j['m'] as String;
+      final dim = (j['d'] as num).toInt();
+      final scales = (j['s'] as List).map((x) => (x as num).toDouble()).toList();
+      final chunks = [
+        for (final c in (j['c'] as List))
+          Int8List.sublistView(base64Decode(c as String)),
+      ];
+      if (chunks.length != scales.length || chunks.length > maxChunks) {
+        return null;
+      }
+      for (final c in chunks) {
+        if (c.length != dim) return null;
+      }
+      return AiVectors(model: model, dim: dim, chunks: chunks, scales: scales);
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 /// How much extracted text one AI record may carry, in UTF-8 bytes.
