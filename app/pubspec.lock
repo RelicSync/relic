@@ -270,10 +270,9 @@ packages:
   flutter_onnxruntime:
     dependency: "direct main"
     description:
-      name: flutter_onnxruntime
-      sha256: "14cb7872d164d8d2fd52e8137775916ea9d46f67a4100ff11cdc62d41752fe5e"
-      url: "https://pub.dev"
-    source: hosted
+      path: "vendor/flutter_onnxruntime"
+      relative: true
+    source: path
     version: "1.8.5"
   flutter_plugin_android_lifecycle:
     dependency: transitive
