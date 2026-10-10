@@ -1303,6 +1303,10 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   // Set when a pass stores a record it owes its peers; the cycle kicks a sync
   // once the batch is done so the record leaves within seconds.
   bool _aiRecordsOwed = false;
+  // The model whose already-stored vectors this device has attached to its AI
+  // records (see [_publishExistingVectors]); null until that pass finishes.
+  String? _vecPublishedModel;
+  final Set<String> _vecPublishTried = {}; // this session, so a row that can't take one isn't retried forever
   /// Uids queued or in flight in the current enrich cycle — drives the per-row
   /// "Analyzing…" spinner. Empty whenever the worker is idle.
   Set<String> _analyzing = {};
@@ -1749,6 +1753,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         }
         _analysisSpeed = AnalysisSpeed.byName(j['analysis_speed'] as String?);
         _prunedGen = j['models_pruned_gen'] as int? ?? 0;
+        _vecPublishedModel = j['vec_published_model'] as String?;
         _vectorModel = j['vector_model'] as String?;
         _aiConverged = j['ai_records_converged'] as bool? ?? false;
         _uprightRescanned = j['upright_rescan_done'] as bool? ?? false;
@@ -1869,6 +1874,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           'describe_all_on': _describeAllOn,
           'analysis_speed': _analysisSpeed.name,
           'models_pruned_gen': _prunedGen,
+          'vec_published_model': _vecPublishedModel,
           if (_vectorModel != null) 'vector_model': _vectorModel,
           'ai_records_converged': _aiConverged,
           'upright_rescan_done': _uprightRescanned,
@@ -2562,6 +2568,13 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
 
   @visibleForTesting
   CopyContext? debugCopyContextOf(String uid) => _db?.copyContextOf(uid);
+
+  @visibleForTesting
+  bool debugPublishExistingVectors(int limit) =>
+      _db != null && _publishExistingVectors(_db!, limit);
+
+  @visibleForTesting
+  String? get debugVecPublishedModel => _vecPublishedModel;
 
   @visibleForTesting
   int get debugVectorCount => _vec.length;
@@ -6075,6 +6088,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       // 24 per 6 s cycle: an embed-only pass is ~0.1 s an item, and after a
       // model change it has the whole vault to redo (~25 min for 6,700 items).
       if (sift.modelsReady && await _backfillVectors(sift, 24)) changed = true;
+      if (_publishExistingVectors(db, 200)) changed = true;
       // The backfill re-queues records it put vectors on; same reasoning as
       // above, a phone searching by meaning is waiting on them.
       if (_aiRecordsOwed) {
@@ -6233,6 +6247,37 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       changed = true;
     }
     return changed;
+  }
+
+  /// One-time per model: put the vectors this device ALREADY holds on the
+  /// items' AI records, so phones can search the existing vault by meaning.
+  ///
+  /// [_attachVectors] only runs when an item is embedded. A vault embedded
+  /// before vectors travelled (1.0.59), or a model swap that keeps the vectors
+  /// (the gather-first graph is bit-identical), would otherwise reach phones
+  /// only as new items arrive. No model runs here: it re-uses the stored
+  /// vectors, [limit] items per cycle, and records the model when nothing is
+  /// left. Ownership rules are [RelicDb.attachAiVectors]'s: a record another
+  /// device owns is updated locally and published by its owner's own pass.
+  bool _publishExistingVectors(RelicDb db, int limit) {
+    final model = _vectorModel;
+    if (model == null || model.isEmpty || !_aiEmbeddings) return false;
+    if (_vecPublishedModel == model) return false;
+    var done = 0;
+    for (final e in _vec.entries) {
+      if (done >= limit) break;
+      if (_vecPublishTried.contains(e.key)) continue;
+      final rec = db.aiRecord(e.key);
+      if (rec?.vec?.model == model) continue;
+      _vecPublishTried.add(e.key);
+      _attachVectors(db, e.key, [for (final c in e.value) c.toList()], model);
+      done++;
+    }
+    if (done == 0) {
+      _vecPublishedModel = model;
+      _savePrefs();
+    }
+    return done > 0;
   }
 
   /// Put the vectors this device just computed on the item's AI record, so a

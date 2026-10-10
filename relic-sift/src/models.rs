@@ -72,8 +72,8 @@ pub const GEMMA: ModelSpec = ModelSpec {
     license: "Gemma",
     files: &[
         ModelFile {
-            name: "embeddinggemma-300m-ft2.int8.onnx",
-            url: "https://models.relic.space/relic-sift/v2/embeddinggemma-300m-ft2.int8.onnx",
+            name: "embeddinggemma-300m-ft2.gf.int8.onnx",
+            url: "https://models.relic.space/relic-sift/v2/embeddinggemma-300m-ft2.gf.int8.onnx",
             min_bytes: 400_000,
         },
         ModelFile {
@@ -485,6 +485,11 @@ pub const SUPERSEDED: &[(&ModelSpec, &[&str])] = &[
     // Stock EmbeddingGemma graph + weights, replaced by the ft2 fine-tune.
     // The tokenizer is shared, so it is not listed.
     (&GEMMA, &["embeddinggemma-300m.int8.onnx", "model_quantized.onnx_data"]),
+    // The first ft2 graph dequantized the whole 262k x 768 token table on every
+    // embed (~1.2 GB transient, half the time) before gathering a dozen rows.
+    // `.gf.` gathers the int8 rows first: bit-identical vectors, so the version
+    // string and every stored vector stay; only this 0.6 MB graph is new.
+    (&GEMMA, &["embeddinggemma-300m-ft2.int8.onnx"]),
     // Stock Qwen3.5 decoder + embedding, replaced by the t3 titler. The
     // vision tower and tokenizer are shared, so they are not listed.
     (
@@ -873,7 +878,10 @@ mod tests {
     fn superseded_files_wait_for_their_replacement() {
         assert!(superseded_files(|_| false).is_empty());
         let gone = superseded_files(|spec| spec.id == GEMMA.id);
-        assert_eq!(gone, ["embeddinggemma-300m.int8.onnx", "model_quantized.onnx_data"]);
+        assert_eq!(
+            gone,
+            ["embeddinggemma-300m.int8.onnx", "model_quantized.onnx_data", "embeddinggemma-300m-ft2.int8.onnx"]
+        );
         // never a shared file or one the live spec still names
         for spec in [&GEMMA, &QWEN35] {
             let gone = superseded_files(|s| s.id == spec.id);
