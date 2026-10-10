@@ -234,12 +234,13 @@ class _Creds {
   static Future<void> setPersonalRank(bool v) =>
       _s.write(key: _kPersonalRank, value: v ? '1' : '0');
 
-  // Search by meaning: the user chose to download the model. Off by default;
-  // the files on disk say whether it is usable, this says whether it is
-  // wanted (so a download cut short by a restart picks up again).
+  // Search by meaning. On by default: the model is 24 MB and fetches itself
+  // the first time the phone is on Wi-Fi, so nobody has to know it exists.
+  // The files on disk say whether it is usable; this says whether it is
+  // wanted, and only an explicit Off in Settings makes it false.
   static const _kSemanticSearch = 'relic.search.semantic';
   static Future<bool> semanticSearch() async =>
-      (await _s.read(key: _kSemanticSearch)) == '1';
+      (await _s.read(key: _kSemanticSearch)) != '0';
   static Future<void> setSemanticSearch(bool v) =>
       _s.write(key: _kSemanticSearch, value: v ? '1' : '0');
 }
@@ -299,7 +300,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   // Search by meaning (the on-phone query model). The pref is what the user
   // asked for; the manager knows what is on disk; the encoder is handed to
   // the repo once the files are there.
-  bool _semanticSearch = false;
+  bool _semanticSearch = true;
   ModelDownloadManager? _semModel;
   OnnxQueryEncoder? _semEncoder;
   WifiWatch? _wifi;
@@ -473,8 +474,9 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
       _saveOptions = so;
       _semanticSearch = sem;
     });
-    // Wanted but not finished (the app was closed mid-download): pick the
-    // download up again, on Wi-Fi only. Ready files just attach.
+    // On by default: the first launch on Wi-Fi fetches the model in the
+    // background, a launch after an interrupted download picks it up again,
+    // and ready files just attach. Nothing is asked.
     if (sem) unawaited(_semanticResume());
     final repo = _repo;
     if (repo != null) {
@@ -933,7 +935,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     final usable = repo.usableVectorCount;
     final stored = repo.storedVectorCount;
     if (!(_semModel?.state.value.isReady ?? false)) {
-      return 'Search by meaning: on, model not downloaded yet';
+      return 'Search by meaning: on, getting ready';
     }
     if (!repo.semanticSearchActive) {
       return stored == 0
@@ -2299,29 +2301,28 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     );
   }
 
+  /// A plain switch. It is on by default and the model fetches itself, so
+  /// the row never talks about downloads or megabytes; while the files are
+  /// still coming it says so in two words and shows a thin bar.
   Widget _semanticRow(RelicColors c, ModelDownloadState s) {
+    const base = 'Finds things by what they mean, not just the words.';
     final String blurb;
-    final String action;
-    final VoidCallback onAction;
-    switch (s.phase) {
-      case ModelDownloadPhase.ready:
-        blurb = 'On. Finds things by what they mean, not just the words.';
-        action = 'Turn off';
-        onAction = _semanticTurnOff;
-      case ModelDownloadPhase.downloading:
-        blurb = s.waitingForWifi
-            ? 'Waiting for Wi-Fi'
-            : 'Downloading, ${(s.fraction * 100).round()}%';
-        action = 'Cancel';
-        onAction = _semanticTurnOff;
-      case ModelDownloadPhase.absent:
-      case ModelDownloadPhase.failed:
-        blurb = 'Finds things by what they mean, not just the words. '
-            'Downloads 24 MB over Wi-Fi.';
-        action = 'Turn on';
-        onAction = _semanticTurnOn;
+    if (!_semanticSearch) {
+      blurb = base;
+    } else {
+      switch (s.phase) {
+        case ModelDownloadPhase.ready:
+          blurb = base;
+        case ModelDownloadPhase.downloading:
+          blurb = s.waitingForWifi
+              ? 'Getting ready the next time you are on Wi-Fi.'
+              : 'Getting ready.';
+        case ModelDownloadPhase.absent:
+          blurb = 'Getting ready the next time you are on Wi-Fi.';
+        case ModelDownloadPhase.failed:
+          blurb = 'Could not get ready. It will try again.';
+      }
     }
-    final reason = s.phase == ModelDownloadPhase.failed ? s.reason : null;
     return ListTile(
       leading: Icon(LucideIcons.brain, color: c.accent, size: 20),
       title: Text('Search by meaning',
@@ -2330,9 +2331,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(blurb, style: RelicTheme.sans(size: 11.5, color: c.textMuted)),
-          if (reason != null)
-            Text(reason, style: RelicTheme.sans(size: 11.5, color: c.danger)),
-          if (s.isDownloading)
+          if (_semanticSearch && s.isDownloading && !s.waitingForWifi)
             Padding(
               padding: const EdgeInsets.only(top: 6, right: 8),
               child: ClipRRect(
@@ -2347,59 +2346,16 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
             ),
         ],
       ),
-      trailing: TextButton(
-        onPressed: onAction,
-        child: Text(action,
-            style: RelicTheme.sans(
-                size: 13, weight: FontWeight.w600, color: c.accent)),
+      trailing: Switch.adaptive(
+        value: _semanticSearch,
+        activeTrackColor: c.accent,
+        onChanged: (on) => on ? _semanticTurnOn() : _semanticTurnOff(),
       ),
     );
   }
 
+  /// On, with no questions: the files come in the background on Wi-Fi.
   Future<void> _semanticTurnOn() async {
-    final ctx = _navKey.currentContext;
-    if (ctx == null) return;
-    final colors = _dark ? RelicColors.dark : RelicColors.light;
-    final ok = await showDialog<bool>(
-      context: ctx,
-      builder: (dctx) => RelicTheme(
-        colors: colors,
-        isMobile: true,
-        child: AlertDialog(
-          backgroundColor: colors.panel,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(Radii.card),
-            side: BorderSide(color: colors.borderStrong),
-          ),
-          title: Text('Download 24 MB?',
-              style: RelicTheme.headline(size: 17, color: colors.text)),
-          content: Text(
-            'Relic downloads its search model over Wi-Fi only and keeps it '
-            'on this phone. Your searches stay on the phone too. You can '
-            'turn it off later to free the space.',
-            style: RelicTheme.sans(
-                size: 13.5, color: colors.textSecondary, height: 1.5),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dctx, false),
-              child: Text('Cancel',
-                  style: RelicTheme.sans(
-                      size: 13.5, color: colors.textSecondary)),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(dctx, true),
-              child: Text('Download',
-                  style: RelicTheme.sans(
-                      size: 13.5,
-                      weight: FontWeight.w600,
-                      color: colors.accent)),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (ok != true) return;
     _semanticSearch = true;
     unawaited(_Creds.setSemanticSearch(true));
     final m = await _semanticManager();
