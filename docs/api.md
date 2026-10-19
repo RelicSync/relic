@@ -307,7 +307,7 @@ sends none of these headers and never answers 429.
 
 | | free | pro | max |
 |---|---|---|---|
-| per-item size | 10 MB | 100 MB | 500 MB |
+| per-item size | 2 MB | 100 MB | 500 MB |
 | storage quota | 250 MB | 25 GB | 250 GB |
 | stream | prune unpromoted past 500 | unlimited | unlimited |
 | vault | 100 promoted | unlimited | unlimited |

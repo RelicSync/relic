@@ -1630,6 +1630,12 @@ class RelicDb {
   int rejectionCount() =>
       _db.select('SELECT COUNT(*) AS n FROM sync_rejections').first['n'] as int;
 
+  /// Rejections with one HTTP status (413 = too large for the plan).
+  int rejectionCountWithStatus(int status) => _db
+      .select('SELECT COUNT(*) AS n FROM sync_rejections WHERE status = ?',
+          [status])
+      .first['n'] as int;
+
   /// The most recent rejection for one relic (drives the row badge popover).
   ({String op, int status, int rejectedAt})? rejectionFor(String uid) {
     final rs = _db.select(

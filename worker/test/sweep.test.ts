@@ -13,7 +13,7 @@ import { blobR2Key } from "../src/blob";
 import worker from "../src/index";
 import { MAIL_FROM } from "../src/mail";
 import { ringNudgeSweep, vaultCapSweep } from "../src/stripe";
-import { TIERS } from "../src/tiers";
+import { RING_NEW, RING_NEW_FROM, TIERS } from "../src/tiers";
 import { setupSchema } from "./helpers";
 
 // deno-lint-ignore no-explicit-any
@@ -190,10 +190,14 @@ describe("ring nudge sweep", () => {
       subscribed?: boolean;
       vaultCount?: number;
       vaultEmailedAt?: number | null;
+      createdAt?: number;
     } = {},
   ) {
-    await E.DB.prepare("INSERT INTO accounts (account_id, email) VALUES (?1, ?2)")
-      .bind(account, email).run();
+    // An explicit, old creation date by default: the ring in the copy depends
+    // on it (tiers.ts ringCap), and a default of "now" would flip these tests
+    // to the new-account cap the day the cutoff passes.
+    await E.DB.prepare("INSERT INTO accounts (account_id, email, created_at) VALUES (?1, ?2, ?3)")
+      .bind(account, email, o.createdAt ?? 1).run();
     await E.DB.prepare(
       `INSERT INTO account_usage
          (account_id, bytes_used, vault_count, ring_evicted, ring_email_at, vault_email_at)
@@ -243,6 +247,14 @@ describe("ring nudge sweep", () => {
     expect(await stampOf("ringB")).toBe(99); // untouched
     expect(await stampOf("ringC")).toBeNull();
     expect(await stampOf("ringD")).toBeNull();
+  });
+
+  it("quotes the 100 cap to an account created after the cutoff", async () => {
+    await seedAccount("ringN", "new@x.com", { ringEvicted: 3, createdAt: RING_NEW_FROM + 60 });
+    await ringNudgeSweep(withKey());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.text).toContain(`your last ${RING_NEW} in view`);
   });
 
   it("never sends twice", async () => {

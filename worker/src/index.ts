@@ -6,7 +6,7 @@
 // tier caps in tiers.ts, bindings/config in env.ts, HTTP helpers in http.ts.
 
 import type { Env, StripeMessage } from "./env";
-import { TIERS } from "./tiers";
+import { accountCreatedAt, RING_NEW, ringCap, TIERS } from "./tiers";
 import {
   BLOB_ID,
   blobR2Key,
@@ -294,8 +294,9 @@ export async function putRelic(req: Request, env: Env, auth: Auth, uid: string, 
   ]);
 
   // history ring: lazily push the oldest unpromoted past the tier's ring out of
-  // view (with tombstones, so other devices drop them too). Free = 500; pro/max
-  // = null (no ring, keep everything).
+  // view (with tombstones, so other devices drop them too). Free = 500 for
+  // accounts created before RING_NEW_FROM and 100 after (tiers.ts); pro/max =
+  // null (no ring, keep everything).
   //
   // Text rows are SOFT-evicted: the row and its R2 envelope stay, free pulls
   // skip them, and paying flips them back (restoreEvicted in stripe.ts). A
@@ -309,7 +310,7 @@ export async function putRelic(req: Request, env: Env, auth: Auth, uid: string, 
   // been free — i.e. have no billing history. An account with any subscriptions
   // row earned its data on a paid plan, so we skip the prune entirely (the
   // 250MB storage cap still blocks *new* writes via the 402 above).
-  const ring = caps.ring;
+  const legacyRing = caps.ring;
   // How many live unpromoted copies this write leaves the account holding, and
   // so how many are past the ring. Both halves are already in hand: `usage` is
   // the cached total this request read for the caps above, and the two
@@ -322,7 +323,15 @@ export async function putRelic(req: Request, env: Env, auth: Auth, uid: string, 
   // sitting at the cap paid 501 rows read to be told "nothing to do", on every
   // single write, and that one query was ~97% of all the rows D1 read for us
   // (measured 2026-09-22: 24M rows/day against a 9,607-row table).
-  const overflow = ring === null ? 0 : usage.history + (nowHistory - wasHistory) - ring;
+  //
+  // The per-account cap needs the account's creation date, and that is one more
+  // read. Below the smaller cap nothing can be past either ring, so only an
+  // account already holding more than RING_NEW pays for it.
+  const held = usage.history + (nowHistory - wasHistory);
+  const ring = legacyRing === null || held <= RING_NEW
+    ? legacyRing
+    : ringCap(auth.tier, await accountCreatedAt(env.DB, auth.account));
+  const overflow = ring === null ? 0 : held - ring;
   if (ring !== null && overflow > 0) {
     const everBilled = await env.DB.prepare(
       "SELECT 1 FROM subscriptions WHERE account_id = ?1",
@@ -822,6 +831,9 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
     if (path === "/account" && req.method === "GET") {
       const caps = TIERS[auth.tier];
       const usage = await readUsage(env, auth.account);
+      const ring = caps.ring === null
+        ? null
+        : ringCap(auth.tier, await accountCreatedAt(env.DB, auth.account));
       return json({
         tier: auth.tier,
         storage_used: usage.bytes,
@@ -833,8 +845,8 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
         // pinned to 0 there for the same reason: nothing is hidden, so nothing
         // is waiting. Older clients ignore all four.
         history_count: usage.history,
-        history_cap: caps.ring,
-        evicted_count: caps.ring === null ? 0 : usage.evicted,
+        history_cap: ring,
+        evicted_count: ring === null ? 0 : usage.evicted,
         devices_cap: caps.devices,
       });
     }

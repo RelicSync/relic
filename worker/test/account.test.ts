@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deleteAccount } from "../src/account";
 import type { Auth } from "../src/auth";
 import worker from "../src/index";
-import { TIERS } from "../src/tiers";
+import { RING_NEW, RING_NEW_FROM, TIERS } from "../src/tiers";
 import { setupSchema, sha256Hex } from "./helpers";
 
 // deno-lint-ignore no-explicit-any
@@ -258,6 +258,14 @@ describe("GET /account", () => {
       evicted_count: 312,
       devices_cap: TIERS.free.devices,
     });
+  });
+
+  it("reports the 100 ring to a free account created after the cutoff", async () => {
+    await seedToken("tokAcctN", "acctN", "free");
+    await E.DB.prepare("INSERT INTO accounts (account_id, tier, created_at) VALUES ('acctN','free',?1)")
+      .bind(RING_NEW_FROM + 1).run();
+    const body = await (await get("tokAcctN")).json();
+    expect(body.history_cap).toBe(RING_NEW);
   });
 
   it("reports no ring and nothing waiting on pro", async () => {

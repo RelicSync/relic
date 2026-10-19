@@ -845,6 +845,10 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   /// The history-ring notices already shown, as a copy the caller can edit.
   /// Hand the edited set back to [setRingNotified] to persist it.
   Set<String> get ringNotified => {..._ringNotified};
+
+  /// Copies the server refused as too large for the plan (413). They stay on
+  /// this device; the size-cap toast fires once when the first one appears.
+  int get tooLargeCount => _db?.rejectionCountWithStatus(413) ?? 0;
   void setRingNotified(Set<String> flags) {
     if (flags.length == _ringNotified.length &&
         flags.every(_ringNotified.contains)) {
@@ -881,12 +885,15 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   RetentionLimits get retentionLimits {
     switch (account?.tier) {
       case 'Free':
-        return const RetentionLimits(
+        // The server's own number: 500 for accounts made before 2026-10-20,
+        // 100 after (worker/src/tiers.ts ringCap).
+        final ring = account?.historyCap ?? 500;
+        return RetentionLimits(
           vaultCount: 100,
           storageBytes: 250 * 1024 * 1024,
-          ringMin: 500,
-          ringMax: 500,
-          ringDefault: 500,
+          ringMin: ring,
+          ringMax: ring,
+          ringDefault: ring,
           allowUnlimited: false,
         );
       case 'Paid':

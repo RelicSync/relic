@@ -398,6 +398,30 @@ void main() {
     });
   });
 
+  group('the size-cap notification', () {
+    test('fires once at the first too-large copy on free, then stays quiet', () {
+      final sent = <String>{};
+      final a = _acct(historyCount: 10, historyCap: 100, evictedCount: 0);
+      expect(sizeCapNoticeBody(a, 0, 'acct-a', sent), isNull);
+      final body = sizeCapNoticeBody(a, 1, 'acct-a', sent);
+      expect(body, contains('over 2 MB'));
+      expect(body, isNot(contains('—')));
+      expect(sizeCapNoticeBody(a, 3, 'acct-a', sent), isNull);
+      // Another account on the same machine gets its own once.
+      expect(sizeCapNoticeBody(a, 1, 'acct-b', sent), isNotNull);
+    });
+
+    test('never fires on a plan with no ring (paid, self-hosted)', () {
+      const paid = AccountInfo(
+        tier: 'Paid',
+        usedBytes: 0,
+        quotaBytes: 0,
+        vaultCount: 0,
+      );
+      expect(sizeCapNoticeBody(paid, 5, 'acct', <String>{}), isNull);
+    });
+  });
+
   group('the notification', () {
     test('fires once at the first evicted copy, then stays quiet', () {
       final sent = <String>{};

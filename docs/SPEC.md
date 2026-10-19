@@ -48,16 +48,16 @@ restates the enforced limits.
 
 | | Free | Pro ($7/mo or $60/yr) | Max ($12/mo or $96/yr) |
 |---|---|---|---|
-| Stream | rolling 500 items | unlimited, never expires | unlimited, never expires |
+| Stream | rolling 100 items (500 for accounts made before 2026-10-20) | unlimited, never expires | unlimited, never expires |
 | Vault (promoted) | 100 | unlimited | unlimited |
 | Storage quota | 250 MB | 25 GB | 250 GB |
-| Max relic size | 10 MB | 100 MB | 500 MB |
+| Max relic size | 2 MB | 100 MB | 500 MB |
 | Devices | 3 | 10 | unlimited |
 | Share links | 10 active, 5 MB each | 100 active, 50 MB each | unlimited, 50 MB each |
 
 Self-hosting has no tiers and no caps beyond your own disk.
 
-Storage is counted uniformly on every tier: every stored byte draws from the quota. In practice blobs are the only thing that moves the number — a heavy user copying ~50 text items a day accrues roughly 36 MB a **year**, so a decade of text is about 360 MB against a 25 GB Pro quota. That is what makes the headline promise *every string you ever copy, forever* honest. Photos and files are the cost driver and are what the quota actually bounds. **Over quota:** nothing is ever deleted — new blob captures are refused (text keeps flowing) until the user frees space or upgrades. The free 250 MB total quota exists to close the file-host abuse hole (500 ring × 10 MB ≈ 5 GB otherwise); normal free users never notice it.
+Storage is counted uniformly on every tier: every stored byte draws from the quota. In practice blobs are the only thing that moves the number — a heavy user copying ~50 text items a day accrues roughly 36 MB a **year**, so a decade of text is about 360 MB against a 25 GB Pro quota. That is what makes the headline promise *every string you ever copy, forever* honest. Photos and files are the cost driver and are what the quota actually bounds. **Over quota:** nothing is ever deleted — new blob captures are refused (text keeps flowing) until the user frees space or upgrades. The free 250 MB total quota exists to close the file-host abuse hole (100 ring × 2 MB ≈ 200 MB otherwise); normal free users never notice it.
 
 The Worker enforces all caps server-side from tier claims in the device token (§10), with per-user byte counters in D1.
 

@@ -250,9 +250,10 @@ describe("account_usage: the caps still bite", () => {
     expect(await cached()).toEqual({ bytes_used: cap * 10, vault_count: cap }); // unchanged
   }, SLOW);
 
-  // free is 250 MB of storage in 10 MB items, so 25 unpromoted relics sit
-  // exactly on the cap (the check is `>`), and the 26th byte is over it.
-  const ITEM = 10 * 1024 * 1024;
+  // free is 250 MB of storage in 2 MB items (the free item cap), so 125
+  // unpromoted relics sit exactly on the cap (the check is `>`), and the next
+  // byte is over it.
+  const ITEM = TIERS.free.item;
   const CAP = 250 * 1024 * 1024;
   const fillToCap = async () => {
     for (let i = 0; i < CAP / ITEM; i++) {
