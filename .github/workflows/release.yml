@@ -68,7 +68,9 @@ jobs:
   # from this same script, run against this same tag.
   linux:
     name: linux build (tarball + AppImage)
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, whose clang fails hotkey_manager_linux
+    # with -Werror, and a newer glibc would stop the AppImage running on older distros.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Linux desktop build deps

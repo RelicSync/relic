@@ -187,7 +187,9 @@ jobs:
 
   flutter-linux:
     name: flutter build linux
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, whose clang fails hotkey_manager_linux
+    # with -Werror, and a newer glibc would stop the AppImage running on older distros.
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: app
