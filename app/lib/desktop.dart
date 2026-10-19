@@ -37,7 +37,7 @@ import 'data/device_directory.dart';
 import 'data/hotkeys.dart';
 import 'data/local_desk_repo.dart';
 import 'data/recovery.dart';
-import 'data/repo.dart' show ringNoticeBody;
+import 'data/repo.dart' show ringNoticeBody, sizeCapNoticeBody;
 import 'data/self_update.dart';
 import 'data/supabase_auth.dart';
 import 'data/update_check.dart';
@@ -1323,6 +1323,7 @@ class _RealAppState extends State<RealApp>
     // Before the visibility early-return too: a pull that lands while the
     // window is hidden is exactly when this needs to be heard.
     _maybeNotifyRing();
+    _maybeNotifySizeCap();
     // Before the visibility early-return: the stack changes most often while
     // the popup is HIDDEN (that is what the push hotkey is for), and the tray
     // is the only surface showing it then.
@@ -2288,6 +2289,31 @@ class _RealAppState extends State<RealApp>
     // Linux never delivers a click on a notification body, so the copy has to
     // stand on its own. It does; there is no click handler here.
     _notify('Relic', body);
+  }
+
+  /// One-time toast the first time the free plan refuses a copy as too large
+  /// to sync. A click opens the upgrade page (Linux gets it as a button).
+  void _maybeNotifySizeCap() {
+    if (storeSafeBuild) return;
+    final repo = widget.repo;
+    final account = repo.account;
+    // Cheap checks first: this runs on every repo tick.
+    if (account == null || !account.isFree) return;
+    final id = repo.supabaseUserId ?? '';
+    final sent = repo.ringNotified;
+    if (sent.contains('size_cap_notified:$id')) return;
+    final body = sizeCapNoticeBody(account, repo.tooLargeCount, id, sent);
+    if (body == null) return;
+    repo.setRingNotified(sent);
+    try {
+      actionableNotification(
+        title: 'Too large to sync',
+        body: body,
+        actionLabel: 'See Pro',
+        onActivate: () => _ringUpgrade('size_cap_toast'),
+        isLinux: Platform.isLinux,
+      ).show();
+    } catch (_) {}
   }
 
   /// Guided "switch account": disconnect, then re-open onboarding on the main

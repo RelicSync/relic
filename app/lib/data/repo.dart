@@ -126,6 +126,23 @@ String? ringNoticeBody(AccountInfo? a, String accountId, Set<String> sent) {
   return null;
 }
 
+/// The one-time toast for the first copy the free plan refused as too large
+/// (413), or null for silence. Shares the persisted [sent] set with the ring
+/// notices, under its own key, so it shows once per account, ever.
+String? sizeCapNoticeBody(
+  AccountInfo? a,
+  int tooLarge,
+  String accountId,
+  Set<String> sent,
+) {
+  if (a == null || !a.isFree || tooLarge <= 0) return null;
+  final key = 'size_cap_notified:$accountId';
+  if (sent.contains(key)) return null;
+  sent.add(key);
+  return 'That copy is over 2 MB, so it stays on this computer. '
+      'Pro syncs items up to 100 MB.';
+}
+
 /// One purchasable plan, from the Worker `GET /stripe/plans`.
 class BillingPlan {
   final String priceId;

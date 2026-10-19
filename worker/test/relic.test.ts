@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { deleteRelic, listRelics, listWaiting, putRelic } from "../src/index";
 import { blobR2Key } from "../src/blob";
 import { LEGACY_PAGE, pageLimitFor } from "../src/http";
-import { TIERS } from "../src/tiers";
+import { TIERS, RING_NEW, RING_NEW_FROM, ringCap } from "../src/tiers";
 import { setupSchema } from "./helpers";
 
 // deno-lint-ignore no-explicit-any
@@ -312,6 +312,49 @@ describe("deleteRelic", () => {
     expect(await tombstoneOf("x")).toBe(12345);
     expect(await E.STORE.get(relicR2Key("A", "x"))).toBeNull();
     expect(await E.STORE.get(blobR2Key("A", "blob1"))).toBeNull();
+  });
+});
+
+describe("putRelic — the 100-item ring for new accounts", () => {
+  async function seedAccount(createdAt: number) {
+    await E.DB.prepare("INSERT INTO accounts (account_id, tier, created_at) VALUES ('A','free',?1)")
+      .bind(createdAt).run();
+  }
+  async function seedRows(n: number) {
+    const stmts = [];
+    for (let i = 1; i <= n; i++) {
+      stmts.push(
+        E.DB.prepare(
+          `INSERT INTO relic_meta (account_id, uid, created_at, updated_at, byte_size, promoted)
+           VALUES ('A', ?1, ?2, ?2, 1, 0)`,
+        ).bind(`u${i}`, i),
+      );
+    }
+    await E.DB.batch(stmts);
+  }
+
+  it("evicts past 100 for an account created on or after the cutoff", async () => {
+    await seedAccount(RING_NEW_FROM);
+    await seedRows(RING_NEW);
+    const res = await put(FREE, "unew", { created_at: 10_000, updated_at: 10_000 });
+    expect(res.status).toBe(200);
+    expect(await evictedOf("u1")).toBe(1);
+    expect(await evictedOf("u2")).toBe(0);
+    expect(await evictedOf("unew")).toBe(0);
+  }, 30_000);
+
+  it("keeps the 500 ring for an account created before the cutoff", async () => {
+    await seedAccount(RING_NEW_FROM - 1);
+    await seedRows(RING_NEW + 5);
+    await put(FREE, "unew", { created_at: 10_000, updated_at: 10_000 });
+    expect(await evictedOf("u1")).toBe(0);
+  }, 30_000);
+
+  it("ringCap: legacy without a date, 100 from the cutoff, none on paid", () => {
+    expect(ringCap("free", null)).toBe(TIERS.free.ring);
+    expect(ringCap("free", RING_NEW_FROM - 1)).toBe(TIERS.free.ring);
+    expect(ringCap("free", RING_NEW_FROM)).toBe(RING_NEW);
+    expect(ringCap("pro", RING_NEW_FROM)).toBeNull();
   });
 });
 

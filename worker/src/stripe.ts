@@ -11,7 +11,7 @@
 // queue consumer, or the reconcile cron.
 
 import type { Env, StripeMessage } from "./env";
-import { isTier, type Tier, TIERS } from "./tiers";
+import { isTier, ringCap, type Tier, TIERS } from "./tiers";
 import type { Auth } from "./auth";
 import { CORS, err, json } from "./http";
 import { MAIL_FROM } from "./mail";
@@ -759,9 +759,9 @@ async function dueForNudge(
   stampColumn: "ring_email_at" | "vault_email_at",
   predicate: string,
   bind: unknown[],
-): Promise<{ account_id: string; email: string }[]> {
+): Promise<{ account_id: string; email: string; created_at: number }[]> {
   const r = await env.DB.prepare(
-    `SELECT u.account_id, a.email
+    `SELECT u.account_id, a.email, a.created_at
        FROM account_usage u
        JOIN accounts a ON a.account_id = u.account_id
       WHERE ${predicate}
@@ -769,7 +769,7 @@ async function dueForNudge(
         AND a.email IS NOT NULL
         AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.account_id = u.account_id)
       LIMIT ?${bind.length + 1}`,
-  ).bind(...bind, NUDGE_EMAIL_BATCH).all<{ account_id: string; email: string }>();
+  ).bind(...bind, NUDGE_EMAIL_BATCH).all<{ account_id: string; email: string; created_at: number }>();
   return r.results ?? [];
 }
 
@@ -793,7 +793,7 @@ export async function ringNudgeSweep(env: Env): Promise<void> {
   const due = await dueForNudge(env, "ring_email_at", "u.ring_evicted > 0", []);
 
   for (const row of due) {
-    if (await sendNudgeMail(env, "ring_email", row.account_id, row.email, ringNudgeMail())) {
+    if (await sendNudgeMail(env, "ring_email", row.account_id, row.email, ringNudgeMail(ringCap("free", row.created_at) ?? TIERS.free.ring))) {
       await stampNudge(env, "ring_email_at", row.account_id, now);
     }
   }
@@ -815,8 +815,8 @@ export async function vaultCapSweep(env: Env): Promise<void> {
   }
 }
 
-function ringNudgeMail(): NudgeMail {
-  const cap = TIERS.free.ring; // the number in the copy is the live cap
+function ringNudgeMail(cap: number): NudgeMail {
+  // The number in the copy is this account's own cap (500 or 100, tiers.ts).
   const upgrade = "https://relic.space/upgrade?source=ring_email";
   return {
     subject: "Your oldest copies are dropping off",
