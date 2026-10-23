@@ -617,30 +617,34 @@ class WorkerRepo implements RelicRepo {
     final createdBefore = _createdBefore;
     // Hybrid refine — for real relevance searches only. A forced by-date sort,
     // any `tag:` clause (the hybrid legs don't parse it), a negation ("a -b",
-    // which the recall legs don't understand), a <3-char query, or a very broad
-    // query (more lexical hits than the pool) all skip it and use plain lexical
-    // paging — mirrors the desktop gates so results/counts stay honest. The
-    // ranking is pure SQLite here (no ML), so it runs synchronously.
+    // which the recall legs don't understand) or a one-character query skip
+    // it and use plain lexical paging. A broad query (more lexical hits than
+    // the pool) ranks its head and keeps every other match after it. Mirrors
+    // the desktop gates. The ranking is pure SQLite here (no ML), so it runs
+    // synchronously.
     final s = search.trim();
     // Any run supersedes a semantic answer still in flight for the last one.
     _semGen++;
     _semDebounce?.cancel();
     final skipHybrid = sort != SortMode.relevance ||
-        s.length < 3 ||
+        s.length < 2 ||
         RegExp(r'tag:\S+|(^|\s)(kind|is|has):\S+')
             .hasMatch(s.toLowerCase()) ||
         RegExp(r'(^|\s)-\S').hasMatch(s);
     if (!skipHybrid) {
       final lexCount = db.countMatching(s, scope,
           createdAfter: createdAfter, createdBefore: createdBefore);
-      if (lexCount <= _searchPool) {
-        _hybridUids = db.lexicalHybridUids(s, scope,
-            createdAfter: createdAfter,
-            createdBefore: createdBefore,
-            factorsFor: _personalFactorsFor(s));
-        // The lexical answer is on screen from here. The semantic leg is a
-        // second step that re-publishes when it lands, as on the desktop.
-        _scheduleSemantic(s, scope, createdAfter, createdBefore);
+      final broad = lexCount > _searchPool;
+      _hybridUids = db.lexicalHybridUids(s, scope,
+          createdAfter: createdAfter,
+          createdBefore: createdBefore,
+          factorsFor: _personalFactorsFor(s),
+          broad: broad);
+      // The lexical answer is on screen from here. The semantic leg is a
+      // second step that re-publishes when it lands, as on the desktop.
+      // Below three characters a query embedding is noise.
+      if (s.length >= 3) {
+        _scheduleSemantic(s, scope, createdAfter, createdBefore, broad: broad);
       }
     }
     _refreshWindow();
@@ -739,7 +743,8 @@ class WorkerRepo implements RelicRepo {
   /// checks the generation first, so a slow embed for a query the user has
   /// moved past changes nothing.
   void _scheduleSemantic(
-      String s, Scope scope, int? createdAfter, int? createdBefore) {
+      String s, Scope scope, int? createdAfter, int? createdBefore,
+      {bool broad = false}) {
     final enc = _queryEncoder;
     if (enc == null || !_semanticSearch || _vecByUid.isEmpty || !enc.ready) {
       return;
@@ -772,7 +777,8 @@ class WorkerRepo implements RelicRepo {
           createdAfter: createdAfter,
           createdBefore: createdBefore,
           factorsFor: _personalFactorsFor(s),
-          sem: sem);
+          sem: sem,
+          broad: broad);
       if (gen != _semGen || fused == null) return;
       _hybridUids = fused;
       _refreshWindow();

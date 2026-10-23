@@ -2955,6 +2955,175 @@ class RelicDb {
     return run(residual.map((t) => '"$t"*').join(' OR '));
   }
 
+  /// Candidate uids whose NAME (title, note or file name: the FTS `named`
+  /// column) holds every query term, as typed prefixes. Ordered by bm25 on
+  /// that column alone, which favors short names, so the item called exactly
+  /// what was typed comes first. This leg exists because a name is the one
+  /// thing a person reliably remembers, and the full-text pool can't be
+  /// trusted to hold it: on a broad prefix ("hyper") the 150 best whole-text
+  /// matches are long documents that repeat the word, and the item NAMED
+  /// "Hyperresearch github link" falls outside the pool.
+  List<String> nameCandidates(
+    String search,
+    Scope scope,
+    int limit, {
+    int? createdAfter,
+    int? createdBefore,
+  }) {
+    if (search.contains('"')) return const [];
+    final terms = _queryTerms(search);
+    if (terms.isEmpty) return const [];
+    final expr = terms.map((t) => 'named : "${t.replaceAll('"', '')}"*').join(' AND ');
+    final scopeAnd = 'AND r.held_by IS NULL'
+        "${scope == Scope.vault ? ' AND r.promoted = 1' : ''}";
+    final (dateConds, dateArgs) =
+        _dateConds(createdAfter, createdBefore, 'r.created_at');
+    final dateAnd = dateConds.isEmpty ? '' : 'AND ${dateConds.join(' AND ')}';
+    try {
+      return _db
+          .select(
+            'SELECT r.uid FROM relics_fts JOIN relics r ON r.uid = relics_fts.uid '
+            'WHERE relics_fts MATCH ? $scopeAnd $dateAnd '
+            'ORDER BY bm25(relics_fts, 0.0, 1.0, 0.0, 0.0, 0.0), r.created_at DESC LIMIT ?',
+            [expr, ...dateArgs, limit],
+          )
+          .map((r) => r['uid'] as String)
+          .toList();
+    } on SqliteException {
+      return const [];
+    }
+  }
+
+  /// How much of a name [query] accounts for, 0..1: the share of the name's
+  /// words that some query term starts, and 0 unless EVERY query term starts
+  /// some word of the name. "hyperresearch link" covers "Hyperresearch Link"
+  /// fully (1.0) and "Hyperresearch alternative search link" by half, which
+  /// is exactly the difference the full-text rank can't see: both hold both
+  /// words, and bm25 scores them within a percent of each other.
+  static double nameCoverage(String query, String? name) {
+    if (name == null) return 0;
+    final terms = _queryTerms(query);
+    if (terms.isEmpty) return 0;
+    final words = _foldDiacritics(name.toLowerCase())
+        .split(RegExp(r'[^\p{L}\p{N}]+', unicode: true))
+        .where((w) => w.isNotEmpty && !_stopwords.contains(w))
+        .toList();
+    if (words.isEmpty) return 0;
+    final folded = [for (final t in terms) _foldDiacritics(t)];
+    final hit = List.filled(words.length, false);
+    for (final t in folded) {
+      var any = false;
+      for (var i = 0; i < words.length; i++) {
+        if (words[i].startsWith(t)) {
+          hit[i] = true;
+          any = true;
+        }
+      }
+      if (!any) return 0;
+    }
+    return hit.where((h) => h).length / words.length;
+  }
+
+  /// Max fused-score gain for an item whose name the query fully accounts
+  /// for (see [nameCoverage]); a half-covered name gets half of it. Kept
+  /// outside [kPersonalBoostCap]: this is relevance, not habit. Calibrated
+  /// 2026-10 on a real 7k-item vault with an AI-titled cluster of 20
+  /// "Hyperresearch ... link" items: the item named exactly "Hyperresearch
+  /// Link" ranked 4th to 6th before it.
+  static const double kNameBoostMax = 0.6;
+
+  /// RRF weight of the [nameCandidates] leg.
+  static const double kNameWeight = 1.0;
+
+  /// Per-uid name factors for a candidate union. Only uids with a nonzero
+  /// coverage appear.
+  Map<String, double> nameFactors(String query, List<String> uids) {
+    if (uids.isEmpty || _queryTerms(query).isEmpty) return const {};
+    final out = <String, double>{};
+    for (var i = 0; i < uids.length; i += 500) {
+      final chunk = uids.sublist(i, math.min(i + 500, uids.length));
+      final ph = List.filled(chunk.length, '?').join(',');
+      for (final r in _db.select(
+          'SELECT uid, title FROM relics WHERE uid IN ($ph)', chunk)) {
+        final c = nameCoverage(query, r['title'] as String?);
+        if (c > 0) out[r['uid'] as String] = 1.0 + kNameBoostMax * c;
+      }
+    }
+    return out;
+  }
+
+  /// [ranked] with repeats of the same text dropped from its first [head]
+  /// entries: each text keeps its best-ranked copy, or its kept copy if one
+  /// of the repeats is kept. Two machines that share a clipboard (a remote
+  /// desktop session) both save every copy, and in one real vault that left
+  /// the same text twice in the top 8 for almost half of all searches. Items
+  /// with no text (an image not yet read, a bare file) never collapse.
+  List<String> collapseSameText(List<String> ranked, {int head = 300}) {
+    if (ranked.length < 2) return ranked;
+    final top = ranked.take(head).toList();
+    final ph = List.filled(top.length, '?').join(',');
+    final rows = _db.select(
+      "SELECT uid, kind, content_hash, promoted FROM relics "
+      "WHERE uid IN ($ph) AND content_hash IS NOT NULL "
+      "AND content IS NOT NULL AND content != ''",
+      top,
+    );
+    final byHash = <String, List<String>>{};
+    final promoted = <String>{};
+    for (final r in rows) {
+      final key = '${r['kind']}:${r['content_hash']}';
+      (byHash[key] ??= []).add(r['uid'] as String);
+      if (r['promoted'] == 1) promoted.add(r['uid'] as String);
+    }
+    // The hash samples long texts, so confirm a shared hash with the text.
+    final keep = <String, String>{}; // dropped uid -> the uid shown instead
+    for (final uids in byHash.values) {
+      if (uids.length < 2) continue;
+      final gph = List.filled(uids.length, '?').join(',');
+      final groups = <String, List<String>>{};
+      for (final r in _db.select(
+          'SELECT uid, content FROM relics WHERE uid IN ($gph)', uids)) {
+        (groups[r['content'] as String] ??= []).add(r['uid'] as String);
+      }
+      for (final same in groups.values) {
+        if (same.length < 2) continue;
+        same.sort((a, b) => top.indexOf(a).compareTo(top.indexOf(b)));
+        final shown = same.firstWhere(promoted.contains, orElse: () => same.first);
+        for (final u in same) {
+          keep[u] = shown;
+        }
+      }
+    }
+    if (keep.isEmpty) return ranked;
+    final seen = <String>{};
+    return [
+      for (final u in top)
+        if (seen.add(keep[u] ?? u)) keep[u] ?? u,
+      for (final u in ranked.skip(head))
+        if (!keep.containsKey(u)) u,
+    ];
+  }
+
+  /// Every uid the lexical view matches, in its relevance order. The tail a
+  /// broad query's fused head is followed by, so ranking the head never makes
+  /// a match unreachable.
+  List<String> matchingUids(
+    String search,
+    Scope scope, {
+    int? createdAfter,
+    int? createdBefore,
+  }) =>
+      _runQuery(
+        search,
+        scope,
+        'r.uid',
+        null,
+        null,
+        byRelevance: true,
+        createdAfter: createdAfter,
+        createdBefore: createdBefore,
+      ).map((r) => r['uid'] as String).toList();
+
   /// RRF weight of the tag-intent leg wherever the hybrid fusion runs. Equal
   /// to the lexical leg's: a term the user typed that names a tag is explicit
   /// intent, and it must survive the fts+trigram agreement boost that long
@@ -3219,6 +3388,9 @@ class RelicDb {
     // Fused at the desktop's weight for its own semantic leg. Already scope
     // and date filtered by the caller. Absent or empty: ranking unchanged.
     List<String>? sem,
+    // More lexical matches than the pool: every other lexical match follows
+    // the fused head, so ranking it never makes a match unreachable.
+    bool broad = false,
   }) {
     final s = search.trim();
     if (s.isEmpty) return null;
@@ -3231,7 +3403,10 @@ class RelicDb {
     final tagIntent = tagIntentCandidates(s, scope, 50,
         createdAfter: createdAfter, createdBefore: createdBefore);
     final semLeg = sem ?? const <String>[];
-    final union = <String>{...fts, ...tri, ...semLeg, ...tagIntent}.toList();
+    final named = nameCandidates(s, scope, 50,
+        createdAfter: createdAfter, createdBefore: createdBefore);
+    final union =
+        <String>{...fts, ...tri, ...semLeg, ...tagIntent, ...named}.toList();
     final recency = byRecency(union);
     // Lexical leg carries double weight so an exact/concise match stays on top;
     // trigram adds recall; tag-intent puts items that ARE the named type above
@@ -3252,13 +3427,29 @@ class RelicDb {
       factors.updateAll(
           (_, f) => f > kPersonalBoostCap ? kPersonalBoostCap : f);
     }
-    final ranked = rrfFuse(
-      [fts, tri, semLeg, tagIntent, recency],
-      weights: const [2.0, 1.0, 1.0, kTagIntentWeight, 0.5],
+    // The name factor rides above the personal cap: it is relevance.
+    final name = nameFactors(s, union);
+    if (name.isNotEmpty) {
+      factors = Map.of(factors);
+      name.forEach((u, f) => factors[u] = (factors[u] ?? 1.0) * f);
+    }
+    var ranked = rrfFuse(
+      [fts, tri, semLeg, tagIntent, recency, named],
+      weights: const [2.0, 1.0, 1.0, kTagIntentWeight, 0.5, kNameWeight],
       boostUids: scope == Scope.vault ? null : promotedUids(),
       boostFactor: kKeptBoostFactor,
       factors: factors,
     );
+    if (broad) {
+      final seen = ranked.toSet();
+      ranked = [
+        ...ranked,
+        for (final u in matchingUids(s, scope,
+            createdAfter: createdAfter, createdBefore: createdBefore))
+          if (!seen.contains(u)) u,
+      ];
+    }
+    ranked = collapseSameText(ranked);
     return ranked.isEmpty ? null : ranked;
   }
 
