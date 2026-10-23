@@ -1515,6 +1515,7 @@ class _PopupViewState extends State<PopupView> {
           onSelect: () => setState(() => _selected = i),
           onActivate: () => _copy(r),
           onEdit: widget.onExpand == null ? null : () => _expandAndEdit(r),
+          query: _searchCtl.text,
         );
       },
     );
@@ -1531,7 +1532,7 @@ class _PopupViewState extends State<PopupView> {
     _edit(r);
   }
 
-  /// Keep the arrow-selected mini row in view (fixed 30px rows → offset math)
+  /// Keep the arrow-selected mini row in view (fixed-height rows → offset math)
   /// and pull more history as the selection nears the end.
   void _scrollMiniToSelected() {
     if (!_scroll.hasClients) return;
@@ -3560,6 +3561,7 @@ class _PopupViewState extends State<PopupView> {
                                 uploadFraction: widget.repo.uploadFraction(r),
                                 dupDevices: grouped[i].dupDevices,
                                 provisionalTags: widget.repo.provisionalTags,
+                                query: _searchCtl.text,
                                 analyzing: widget.repo.analyzingUids.contains(
                                   r.uid,
                                 ),
