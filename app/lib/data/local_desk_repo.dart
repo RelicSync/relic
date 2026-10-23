@@ -2122,21 +2122,24 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     // leading one) skips it — the hybrid legs don't parse tag: filters, so
     // refining would silently drop the filter the lexical view applied.
     final s = search.trim();
-    // <3 chars: lexical already covers it; fuzzing adds noise + a round-trip.
-    // Broad queries (more lexical matches than the candidate pool) also skip
-    // the refine: replacing honest full paging with a pool-truncated fused
-    // list would make matches past the pool unreachable and shrink the count.
-    // Negated queries ("invoice -stripe") skip it too — the trigram/semantic
-    // legs don't understand NOT and would resurrect the excluded items.
+    // One character: lexical already covers it. Two characters still rank
+    // (the name leg and the personal factors are what make "gi" find the
+    // GitHub link you keep using); [_hybridRanked] skips the fuzzy and
+    // semantic legs below three. Negated queries ("invoice -stripe") skip the
+    // refine: the trigram/semantic legs don't understand NOT and would
+    // resurrect the excluded items.
     if (sort != SortMode.relevance ||
-        s.length < 3 ||
+        s.length < 2 ||
         RegExp(r'tag:\S+|(^|\s)(kind|is|has):\S+')
             .hasMatch(s.toLowerCase()) ||
-        RegExp(r'(^|\s)-\S').hasMatch(s) ||
-        _matchCount > _pool) {
+        RegExp(r'(^|\s)-\S').hasMatch(s)) {
       return;
     }
-    final ranked = await _hybridRanked(s);
+    // Broad queries (more lexical matches than the candidate pool) are the
+    // short prefixes people type to reach a thing they use all the time, so
+    // they rank too: the fused pool leads, and every other lexical match
+    // follows in lexical order, so nothing becomes unreachable.
+    final ranked = await _hybridRanked(s, broad: _matchCount > _pool);
     if (gen != _queryGen || ranked == null) return; // superseded or no-op
     _hybridUids = ranked;
     _refreshWindow();
@@ -2205,6 +2208,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   static const double _tagSpread = 0.06; // max distance below the best tag
   static const int _tagMaxFire = 2; // at most this many tags per query
   static const int _tagCap = 50; // uids per fired tag (recency-ordered)
+  static const int _nameCap = 50; // uids from the name leg
   static const double _tagWeight = 0.4; // RRF influence of the tag leg
   static const double _ftsWeight = 2.0; // RRF influence of the lexical leg
   static const double _recencyWeight = 0.5; // RRF influence of the recency leg
@@ -2255,6 +2259,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         'semFloor': floorsFor(_vectorModel).sem,
         'tagFloor': floorsFor(_vectorModel).tag,
         'tagSpread': _tagSpread,
+        'name': RelicDb.kNameWeight,
+        'nameBoost': 1.0,
         'rrfK': 60,
       };
 
@@ -2279,7 +2285,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   /// tail of weak keyword matches — and a uid found by SEVERAL legs sums their
   /// contributions (agreement boost). Works without sift: the semantic legs are
   /// simply empty. Returns the ranked uid list, or null if empty.
-  Future<List<String>?> _hybridRanked(String s) async {
+  Future<List<String>?> _hybridRanked(String s, {bool broad = false}) async {
     final db = _db;
     if (db == null) return null;
     // Snapshot the query context: a concurrent setQuery mutates these fields
@@ -2303,7 +2309,11 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         createdAfter: createdAfter, createdBefore: createdBefore);
     // The query embedding powers BOTH the semantic leg and tag expansion, so
     // it needs only sift (tag expansion works before any doc vector exists).
-    final qv = sift == null ? null : await sift.embedQuery(s);
+    // Below three characters a query embedding is noise, not meaning.
+    final qv = sift == null || s.length < 3 ? null : await sift.embedQuery(s);
+    // Items NAMED with every query term (see nameCandidates).
+    final named = db.nameCandidates(s, scope, _nameCap,
+        createdAfter: createdAfter, createdBefore: createdBefore);
     // FTS/trigram are scope- and date-filtered in SQL; the semantic legs are
     // not — restrict them here (vault BEFORE top-K, so a strong vault match
     // isn't truncated away by unpromoted neighbors). The stored-vector leg
@@ -2323,16 +2333,27 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     // candidate union newest-first as a low-weight fifth leg, so two
     // similarly-relevant items order recent-first without letting recency
     // outvote actual relevance.
-    final union = <String>{...fts, ...tri, ...sem, ...tagExp, ...tagIntent}
-        .toList();
+    final union =
+        <String>{...fts, ...tri, ...sem, ...tagExp, ...tagIntent, ...named}
+            .toList();
     final recency = db.byRecency(union);
     // Kept items win near-ties against clipboard noise via the score factor
     // (All scope only — in Vault scope everything is kept); the personal
     // factors (usage frecency, query-pick memory, summon-context prior)
     // climb in both scopes — a cornerstone is a cornerstone in the vault too.
     final t = searchTuning;
-    final ranked = RelicDb.rrfFuse(
-      [fts, tri, sem, tagExp, tagIntent, recency],
+    // Personal factors are capped (habit); the name factor rides on top of
+    // that cap because it is relevance (see RelicDb.kNameBoostMax).
+    final factors = <String, double>{
+      if (_personalRank)
+        ...db.rankFactors(union, query: s, app: _summonApp, now: _now),
+    };
+    db.nameFactors(s, union).forEach((u, f) {
+      final boosted = 1 + (f - 1) * t.value('nameBoost', 1.0);
+      factors[u] = (factors[u] ?? 1.0) * boosted;
+    });
+    var ranked = RelicDb.rrfFuse(
+      [fts, tri, sem, tagExp, tagIntent, recency, named],
       k: t.value('rrfK', 60).round(),
       weights: [
         t.value('fts', _ftsWeight),
@@ -2341,13 +2362,22 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         t.value('tag', _tagWeight),
         t.value('tagIntent', RelicDb.kTagIntentWeight),
         t.value('recency', _recencyWeight),
+        t.value('name', RelicDb.kNameWeight),
       ],
       boostUids: scope == Scope.vault ? null : db.promotedUids(),
       boostFactor: t.value('kept', RelicDb.kKeptBoostFactor),
-      factors: _personalRank
-          ? db.rankFactors(union, query: s, app: _summonApp, now: _now)
-          : null,
+      factors: factors,
     );
+    if (broad) {
+      final seen = ranked.toSet();
+      ranked = [
+        ...ranked,
+        for (final u in db.matchingUids(s, scope,
+            createdAfter: createdAfter, createdBefore: createdBefore))
+          if (!seen.contains(u)) u,
+      ];
+    }
+    ranked = db.collapseSameText(ranked);
     // Snippet trigger-boost: a snippet whose trigger label matches what the
     // user typed is pinned to the very top (no keyboard hook — pure ranking).
     // Injected even if no other leg surfaced it, so typing the trigger word is
@@ -2572,6 +2602,11 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
 
   @visibleForTesting
   String? get debugVectorModel => _vectorModel;
+
+  /// A test binary can't find the sidecar beside itself, so the search eval
+  /// hands it one to embed queries with.
+  @visibleForTesting
+  set debugSift(SiftSidecar? s) => _sift = s;
 
   @visibleForTesting
   CopyContext? debugCopyContextOf(String uid) => _db?.copyContextOf(uid);

@@ -431,7 +431,7 @@ class _EditDialogState extends State<EditDialog> {
       decoration: _modalDecoration(c),
       clipBehavior: Clip.antiAlias,
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        _dialogHeader(c, leading, r.displayTitle, widget.onCancel),
+        _dialogHeader(c, leading, r.safeTitle, widget.onCancel),
         Flexible(
           child: _expanded == _Expanded.none
               ? _collapsedBody(c)

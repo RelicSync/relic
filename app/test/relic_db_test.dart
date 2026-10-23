@@ -954,6 +954,87 @@ void main() {
       expect(db.lexicalHybridUids('   ', Scope.all), isNull);
     });
 
+    // The 2026-10 report: an item NAMED "Hyperresearch Link" in the vault,
+    // pasted many times, ranked 4th for "hyperresearch link" under a cluster
+    // of newer AI-titled links whose names also hold both words.
+    test('the item named exactly what was typed wins over longer names', () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      db.upsert(_mk('named',
+          content: 'https://hyperresearch.ai',
+          title: 'Hyperresearch Link',
+          tags: const ['url'],
+          promoted: true,
+          createdAt: 100)); // the oldest of them all
+      const others = [
+        'Hyperresearch flagged discussion link',
+        'Hyperresearch alternative research service links',
+        'Hyperresearch alternative search link',
+        'Hyperresearch guide link for market research',
+        'Hyperresearch link to restaurant competitor analysis',
+        'Hyperresearch guide link for parallel task API',
+      ];
+      for (var i = 0; i < others.length; i++) {
+        db.upsert(_mk('ai$i',
+            content: 'https://hyperresearch.ai/page/$i Hyperresearch link',
+            title: others[i],
+            tags: const ['url'],
+            createdAt: 200 + i));
+      }
+      expect(db.lexicalHybridUids('hyperresearch link', Scope.all)!.first,
+          'named');
+      // Typed as it is being typed, too.
+      expect(db.lexicalHybridUids('hyperresearch li', Scope.all)!.first,
+          'named');
+    });
+
+    test('nameCoverage needs every term and rewards a fully covered name', () {
+      expect(RelicDb.nameCoverage('hyperresearch link', 'Hyperresearch Link'),
+          1.0);
+      expect(
+          RelicDb.nameCoverage(
+              'hyperresearch link', 'Hyperresearch alternative search link'),
+          0.5);
+      expect(RelicDb.nameCoverage('hyper li', 'Hyperresearch Link'), 1.0,
+          reason: 'terms match as typed prefixes');
+      expect(RelicDb.nameCoverage('hyperresearch pricing', 'Hyperresearch Link'),
+          0.0,
+          reason: 'a term the name lacks means no name match');
+      expect(RelicDb.nameCoverage('link', null), 0.0);
+    });
+
+    test('a broad query ranks its head and keeps every match after it', () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      for (var i = 0; i < 200; i++) {
+        db.upsert(_mk('n$i',
+            content: 'notes about hyperparameters, run $i',
+            createdAt: 1000 + i));
+      }
+      db.upsert(_mk('gh',
+          content: 'https://github.com/jordan-gibbs/hyperresearch',
+          title: 'Hyperresearch github link',
+          promoted: true,
+          createdAt: 10));
+      final ranked = db.lexicalHybridUids('hyper', Scope.all, broad: true)!;
+      expect(ranked.first, 'gh', reason: 'the named item leads the prefix');
+      expect(ranked.length, db.countMatching('hyper', Scope.all),
+          reason: 'nothing past the pool goes missing');
+    });
+
+    test('the same text saved twice shows once, as its kept copy', () {
+      final db = RelicDb.memory();
+      addTearDown(db.dispose);
+      // Two machines sharing a clipboard both saved this copy.
+      db.upsert(_mk('mine', content: 'gh auth refresh -s workflow', createdAt: 100));
+      db.upsert(_mk('other',
+          content: 'gh auth refresh -s workflow', promoted: true, createdAt: 101));
+      db.upsert(_mk('else', content: 'gh auth status workflow', createdAt: 90));
+      final ranked = db.lexicalHybridUids('workflow', Scope.all)!;
+      expect(ranked.where((u) => u == 'mine' || u == 'other'), ['other']);
+      expect(ranked, contains('else'));
+    });
+
     test('rrfFuse rewards agreement across legs', () {
       // 'x' appears in both lists; 'y' only in one — 'x' should rank first.
       final fused = RelicDb.rrfFuse([
@@ -1246,7 +1327,8 @@ void main() {
       final db = RelicDb.memory();
       addTearDown(db.dispose);
       db.upsert(_mk('corner', content: 'meeting notes alpha', createdAt: 100));
-      db.upsert(_mk('fresh', content: 'meeting notes alpha', createdAt: 200));
+      // Not quite identical: identical text collapses to one result.
+      db.upsert(_mk('fresh', content: 'meeting notes alpha.', createdAt: 200));
 
       // Identical content: bm25 ties, so the untouched order hinges on FTS
       // tie order (unspecified) + the recency leg — assert only membership.
@@ -1312,7 +1394,8 @@ void main() {
       final db = RelicDb.memory();
       addTearDown(db.dispose);
       db.upsert(_mk('corner', content: 'meeting notes alpha', createdAt: 100));
-      db.upsert(_mk('fresh', content: 'meeting notes alpha', createdAt: 200));
+      // Not quite identical: identical text collapses to one result.
+      db.upsert(_mk('fresh', content: 'meeting notes alpha.', createdAt: 200));
 
       // Two picks of the older twin while searching "meeting".
       db.recordQueryPick('meeting', 'corner', 250);
