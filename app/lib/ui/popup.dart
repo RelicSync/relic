@@ -1585,7 +1585,7 @@ class _PopupViewState extends State<PopupView> {
           (rem.id, rem.remindAt),
       ];
       _setDialog(RemindDialog(
-        preview: r.displayTitle,
+        preview: r.safeTitle,
         pending: pending,
         onCancel: () => _setDialog(null),
         onClear: (id) {
@@ -1746,7 +1746,7 @@ class _PopupViewState extends State<PopupView> {
         ConfirmDialog(
           title: 'Delete from Vault?',
           message:
-              'This permanently removes “${r.displayTitle}” from your vault. This can’t be undone.',
+              'This permanently removes “${r.safeTitle}” from your vault. This can’t be undone.',
           confirmLabel: 'Delete',
           onCancel: () => _setDialog(null),
           onConfirm: () async {
@@ -2124,7 +2124,7 @@ class _PopupViewState extends State<PopupView> {
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 110),
               child: Text(
-                r.displayTitle,
+                r.safeTitle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: RelicTheme.mono(size: 10, color: c.tagText),
@@ -4140,9 +4140,7 @@ class _SyncIssuesSheetState extends State<_SyncIssuesSheet> {
                 itemBuilder: (_, i) {
                   final it = items[i];
                   final r = it.relic;
-                  final title = r.isSecret
-                      ? (r.title ?? 'Secret')
-                      : r.displayTitle;
+                  final title = r.safeTitle;
                   return Container(
                     padding: const EdgeInsets.symmetric(
                         horizontal: Insets.sm, vertical: Insets.md),

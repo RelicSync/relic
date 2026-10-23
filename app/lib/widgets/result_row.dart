@@ -1180,7 +1180,7 @@ class _MiniResultRowState extends State<MiniResultRow> {
               const SizedBox(width: 9),
               Expanded(
                 child: Text(
-                  r.displayTitle,
+                  r.isSecret ? '${r.safeTitle} · hidden' : r.displayTitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: RelicTheme.sans(

@@ -273,6 +273,15 @@ class Relic {
   /// through [cleanDisplayText] first so leading bullets, quote marks, and
   /// stray one-letter fragments don't headline the row. Display-only — the
   /// stored fields are never mutated.
+  /// [displayTitle] for any surface that doesn't mask secrets itself: an
+  /// untitled secret's display title falls back to its preview, which is the
+  /// secret.
+  String get safeTitle {
+    if (!isSecret) return displayTitle;
+    final t = title?.trim();
+    return t != null && t.isNotEmpty ? t : 'Secret';
+  }
+
   String get displayTitle {
     final t = title?.trim();
     if (t != null && t.isNotEmpty) return t;

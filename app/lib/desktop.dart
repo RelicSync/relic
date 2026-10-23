@@ -340,7 +340,7 @@ class _RealAppState extends State<RealApp>
         final note = rem.note?.trim();
         final n = actionableNotification(
           title: (note != null && note.isNotEmpty) ? note : 'Reminder',
-          body: r.displayTitle,
+          body: r.safeTitle,
           actionLabel: 'Copy it',
           onActivate: () async {
             await widget.repo.putOnClipboard(r);
