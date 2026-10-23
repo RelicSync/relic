@@ -14,6 +14,7 @@ import 'controls.dart';
 import 'file_icons.dart';
 import 'glyphs.dart';
 import 'relic_mark.dart';
+import 'row_text.dart';
 
 /// The result row (design §06/§07). Tapping the body selects the row, revealing
 /// the action cluster (delete · vault · open · download · ⋯ · copy); Edit,
@@ -85,6 +86,13 @@ class ResultRow extends StatefulWidget {
   /// slots with one-off words nobody will ever filter on.
   final Set<String> provisionalTags;
 
+  /// The search as typed, for marking the matched words in the content line.
+  final String query;
+
+  /// Tile (icon box / thumbnail) size: as tall as the title, content and
+  /// meta lines stacked beside it, so the row reads as one block.
+  static double tileFor(bool isMobile) => isMobile ? 60 : 52;
+
   const ResultRow({
     super.key,
     required this.relic,
@@ -109,6 +117,7 @@ class ResultRow extends StatefulWidget {
     this.onContextMenu,
     this.onSyncBadgeTap,
     this.provisionalTags = const {},
+    this.query = '',
   });
 
   /// Rows are a fixed height so selecting an item (which reveals the action
@@ -371,6 +380,8 @@ class _ResultRowState extends State<ResultRow> {
         : (r.kind == Kind.file || r.kind == Kind.other)
             ? true
             : r.tags.any(monoTags.contains);
+    final lines = rowLines(r);
+    final secondary = lines.secondary;
     final title = r.displayTitle;
     final titleStyle = mono
         ? RelicTheme.mono(size: _v(12.5, 14.5), color: titleColor, height: 1.4)
@@ -387,10 +398,34 @@ class _ResultRowState extends State<ResultRow> {
       children: [
         Text(
           title,
-          maxLines: 2,
+          // Two lines when the title is the only text; one when the content
+          // line follows it.
+          maxLines: secondary == null ? 2 : 1,
           overflow: TextOverflow.ellipsis,
           style: titleStyle,
         ),
+        if (secondary != null) ...[
+          const SizedBox(height: 1),
+          Text.rich(
+            highlightSpan(
+              secondary,
+              highlightTerms(widget.query),
+              lines.secondaryMono
+                  ? RelicTheme.mono(
+                      size: _v(11.5, 13.5),
+                      color: c.textSecondary,
+                      height: 1.3)
+                  : RelicTheme.sans(
+                      size: _v(12, 14),
+                      color: c.textSecondary,
+                      height: 1.3),
+              c.accent.withValues(alpha: 0.3),
+              title: title,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
         const SizedBox(height: 4),
         _meta(c, metaColor),
       ],
@@ -935,7 +970,7 @@ class _Tile extends StatelessWidget {
     if (r.isSecret) {
       tileBg = c.secretBg;
       tileBorder = c.secretBorder;
-      inner = Icon(LucideIcons.keyRound, size: m ? 23 : 19, color: c.secret);
+      inner = Icon(LucideIcons.keyRound, size: m ? 25 : 21, color: c.secret);
     } else if (selected) {
       tileBg = c.selectedTile;
       tileBorder = c.accent.withValues(alpha: 0.25);
@@ -947,8 +982,8 @@ class _Tile extends StatelessWidget {
     }
 
     return Container(
-      width: m ? 54 : 44,
-      height: m ? 54 : 44,
+      width: ResultRow.tileFor(m),
+      height: ResultRow.tileFor(m),
       decoration: BoxDecoration(
         color: tileBg,
         borderRadius: BorderRadius.circular(Radii.tile),
@@ -963,9 +998,9 @@ class _Tile extends StatelessWidget {
     switch (relic.kind) {
       case Kind.file:
         // Type-specific glyph (3D box, video reel, archive…) by extension.
-        return Icon(fileIconFor(relic.filename), size: m ? 23 : 19, color: color);
+        return Icon(fileIconFor(relic.filename), size: m ? 25 : 21, color: color);
       case Kind.other:
-        return Icon(LucideIcons.shapes, size: m ? 23 : 19, color: c.textFaintest);
+        return Icon(LucideIcons.shapes, size: m ? 25 : 21, color: c.textFaintest);
       default:
         // A note with attachments takes on their identity: one file → its
         // category icon; many → a paperclip. (A sole image is handled above by
@@ -975,7 +1010,7 @@ class _Tile extends StatelessWidget {
             relic.attachments.length == 1
                 ? fileIconFor(relic.attachments.first.name)
                 : LucideIcons.paperclip,
-            size: m ? 23 : 19,
+            size: m ? 25 : 21,
             color: color,
           );
         }
@@ -984,11 +1019,11 @@ class _Tile extends StatelessWidget {
         // order, so an incidental scan-anywhere entity ("localhost:8080" in a
         // note) can't relabel the whole clip.
         final ic = primaryTagIcon(relic.tags);
-        if (ic != null) return Icon(ic, size: m ? 22 : 18, color: color);
+        if (ic != null) return Icon(ic, size: m ? 24 : 20, color: color);
         // Plain copied text: a short squiggle glyph for note-like snippets,
         // straight paragraph lines for longer passages (≥250 chars).
         final len = (relic.content ?? relic.preview ?? '').length;
-        final sz = m ? 22.0 : 18.0;
+        final sz = m ? 24.0 : 20.0;
         return len < 250
             ? ShortTextGlyph(size: sz, color: color)
             : Icon(LucideIcons.alignLeft, size: sz, color: color);
@@ -1008,7 +1043,7 @@ class _PhotoThumb extends StatelessWidget {
   const _PhotoThumb({required this.c, this.imagePath, this.dim, this.radius});
   @override
   Widget build(BuildContext context) {
-    final size = dim ?? (RelicTheme.isMobileOf(context) ? 54.0 : 44.0);
+    final size = dim ?? ResultRow.tileFor(RelicTheme.isMobileOf(context));
     final rad = radius ?? Radii.tile;
     if (imagePath != null) {
       return Container(
@@ -1121,6 +1156,9 @@ class MiniResultRow extends StatefulWidget {
   /// Not yet synced (queued/uploading or blocked). Shows a tiny dot so the
   /// compact picker also reflects in-flight state.
   final bool syncing;
+
+  /// The search as typed, for marking the matched words in the content line.
+  final String query;
   const MiniResultRow({
     super.key,
     required this.relic,
@@ -1130,14 +1168,18 @@ class MiniResultRow extends StatefulWidget {
     required this.onActivate,
     this.onEdit,
     this.syncing = false,
+    this.query = '',
   });
 
   /// Row height (logical px) — the popup host uses this to size the window.
-  static const double height = 30;
+  /// Fits two lines (title, then the start of the content); a row with one
+  /// line centers it, so every row is the same height and scrolling stays a
+  /// multiply.
+  static const double height = 40;
 
   /// Max rows visible at once: the desktop shell caps the mini window to this
   /// height, and the list scrolls (with load-more) through everything beyond it.
-  static const int maxRows = 8;
+  static const int maxRows = 7;
 
   @override
   State<MiniResultRow> createState() => _MiniResultRowState();
@@ -1178,17 +1220,7 @@ class _MiniResultRowState extends State<MiniResultRow> {
             children: [
               _leading(c),
               const SizedBox(width: 9),
-              Expanded(
-                child: Text(
-                  r.isSecret ? '${r.safeTitle} · hidden' : r.displayTitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: RelicTheme.sans(
-                    size: 12.5,
-                    color: sel ? c.textOnSelected : c.text,
-                  ),
-                ),
-              ),
+              Expanded(child: _lines(c, sel)),
               if (widget.syncing) ...[
                 const SizedBox(width: 8),
                 Container(
@@ -1213,6 +1245,54 @@ class _MiniResultRowState extends State<MiniResultRow> {
           ),
         ),
       ),
+    );
+  }
+
+  /// The title, and under it the start of the content in a faint smaller
+  /// line. One line when there is no title (titling off, or not titled yet)
+  /// or the title already says it. A secret shows its name over dots.
+  Widget _lines(RelicColors c, bool sel) {
+    final r = widget.relic;
+    final l = rowLines(r);
+    final ink = sel ? c.textOnSelected : c.text;
+    final faint = sel ? c.textSecondary : c.textFaint;
+    final terms = highlightTerms(widget.query);
+    final wash = c.accent.withValues(alpha: 0.3);
+    TextStyle style(bool mono, bool second) => mono
+        ? RelicTheme.mono(
+            size: second ? 10.5 : 12, color: second ? faint : ink, height: 1.3)
+        : RelicTheme.sans(
+            size: second ? 11 : 12.5, color: second ? faint : ink, height: 1.3);
+    final secondary = r.isSecret ? '•••• •••• hidden' : l.secondary;
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text.rich(
+          // The primary line is the content itself when there's no title, so
+          // the marks go there.
+          secondary == null && !r.isSecret
+              ? highlightSpan(l.primary, terms, style(l.primaryMono, false), wash)
+              : TextSpan(text: l.primary, style: style(l.primaryMono, false)),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        if (secondary != null) ...[
+          const SizedBox(height: 1),
+          Text.rich(
+            r.isSecret
+                ? TextSpan(
+                    text: secondary,
+                    style: RelicTheme.mono(
+                        size: 10.5, color: c.secretBright, height: 1.3))
+                : highlightSpan(
+                    secondary, terms, style(l.secondaryMono, true), wash,
+                    title: l.primary),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ],
     );
   }
 
