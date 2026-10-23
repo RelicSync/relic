@@ -1293,6 +1293,146 @@ class RelicDb {
     }
   }
 
+  // --- Twins: one copy captured by two desktops ---
+  //
+  // Two desktops that share a clipboard (Parsec, a remote desktop session)
+  // both see the same copy, and each makes its own item for it before the
+  // other's arrives, so capture dedupe ([uidByContent]) never gets a chance.
+  // Sync then hands both to every device. These are twins: the same text,
+  // from different devices, created within [kTwinWindowSecs] of each other.
+  //
+  // Every device folds a set of twins the same way: the lowest uid wins, the
+  // others are deleted with a tombstone, and anything the user did to a loser
+  // (kept it, titled it, tagged it) is carried onto the winner. The choice
+  // reads only the items themselves, never which device is doing the
+  // folding, so every desktop picks the same winner and the tombstones all
+  // name the same losers. The Worker refuses a push to a tombstoned uid, so
+  // a loser cannot come back.
+
+  /// How far apart two captures of the same text can be and still count as
+  /// one copy seen twice. A shared clipboard lands in a second or two; the
+  /// slack covers clock drift between the machines.
+  static const int kTwinWindowSecs = 30;
+
+  /// Every set of twins, each sorted by uid so the winner comes first.
+  /// Text only (a file item's content is a path, which can name different
+  /// files on different machines), held rows left out, and both devices
+  /// must be named and differ: one device never makes two items for one
+  /// text, so a same-device pair is something the user made on purpose.
+  List<List<String>> twinGroups() {
+    final rs = _db.select(
+      '''SELECT a.uid AS a, b.uid AS b FROM relics a
+         JOIN relics b ON b.content_hash = a.content_hash AND b.uid > a.uid
+         WHERE a.kind = 'string' AND b.kind = 'string'
+           AND a.held_by IS NULL AND b.held_by IS NULL
+           AND a.content IS NOT NULL AND a.content != ''
+           AND b.content = a.content
+           AND a.device IS NOT NULL AND b.device IS NOT NULL
+           AND a.device != b.device
+           AND abs(a.created_at - b.created_at) <= ?''',
+      [kTwinWindowSecs],
+    );
+    if (rs.isEmpty) return const [];
+    // Union-find, so three desktops on one clipboard make one group.
+    final parent = <String, String>{};
+    String find(String u) {
+      var r = parent.putIfAbsent(u, () => u);
+      while (parent[r] != r) {
+        r = parent[r]!;
+      }
+      return r;
+    }
+
+    for (final row in rs) {
+      final a = find(row['a'] as String);
+      final b = find(row['b'] as String);
+      if (a == b) continue;
+      if (a.compareTo(b) < 0) {
+        parent[b] = a;
+      } else {
+        parent[a] = b;
+      }
+    }
+    final groups = <String, List<String>>{};
+    for (final u in parent.keys.toList()) {
+      groups.putIfAbsent(find(u), () => []).add(u);
+    }
+    return [for (final g in groups.values) g..sort()];
+  }
+
+  /// [winner] with what the user did to [losers] carried over, or null when
+  /// the losers add nothing. Kept wins over not kept; the winner's own title
+  /// and note stand, else the first loser's (by uid); user tags are joined.
+  /// Pure and order-blind past the uid sort, so every device lands on the
+  /// same row.
+  static Relic? mergeTwinState(Relic winner, List<Relic> losers) {
+    var promoted = winner.promoted;
+    var title = winner.title;
+    var note = winner.note;
+    final tags = [...winner.userTags];
+    final seen = {for (final t in tags) t.toLowerCase()};
+    for (final l in [...losers]..sort((a, b) => a.uid.compareTo(b.uid))) {
+      promoted = promoted || l.promoted;
+      if ((title ?? '').trim().isEmpty && (l.title ?? '').trim().isNotEmpty) {
+        title = l.title;
+      }
+      if ((note ?? '').trim().isEmpty && (l.note ?? '').trim().isNotEmpty) {
+        note = l.note;
+      }
+      for (final t in l.userTags) {
+        if (seen.add(t.toLowerCase())) tags.add(t);
+      }
+    }
+    if (promoted == winner.promoted &&
+        title == winner.title &&
+        note == winner.note &&
+        tags.length == winner.userTags.length) {
+      return null;
+    }
+    return winner.copyWith(
+      promoted: promoted,
+      title: title,
+      note: note,
+      userTags: tags,
+    );
+  }
+
+  /// Fold every set of twins into its winner (see the section note). The
+  /// winner is written first, so a crash between the two steps leaves a
+  /// pair the next pass folds again rather than a lost keep. With
+  /// [queueOps] the changed winner is queued to push and each loser to
+  /// delete, which is what takes the losers off every other device.
+  /// Returns the uids removed and the blob keys only they used.
+  ({List<String> removed, Set<String> orphanBlobKeys}) mergeTwins(
+    int now, {
+    bool queueOps = false,
+  }) {
+    final removed = <String>[];
+    final orphans = <String>{};
+    for (final group in twinGroups()) {
+      final rows = [
+        for (final u in group) getByUid(u),
+      ].whereType<Relic>().toList();
+      if (rows.length < 2) continue;
+      final winner = rows.first;
+      final losers = rows.sublist(1);
+      final merged = mergeTwinState(winner, losers);
+      if (merged != null) {
+        upsert(
+          merged.copyWith(updatedAt: math.max(now, winner.updatedAt + 1)),
+          queuePush: queueOps,
+        );
+      }
+      for (final l in losers) {
+        deleteAndQueue(l.uid, now, queueDelete: queueOps);
+        removed.add(l.uid);
+        final bk = l.blobKey;
+        if (bk != null && bk != winner.blobKey) orphans.add(bk);
+      }
+    }
+    return (removed: removed, orphanBlobKeys: orphans);
+  }
+
   /// Usage half-life: an untouched item's use_count halves every 30 days, so
   /// a cornerstone stays a cornerstone only while it keeps being reached for
   /// — heavy use last March can't outrank what's used weekly now.

@@ -346,6 +346,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   bool _flushing = false;
   bool _flushAgain = false; // a kick that arrived mid-flush; run once more
   bool _pulling = false;
+  bool _twinsFolded = false; // this run's first pull folded old twins
   /// The pull in progress, kept between cycles so a page that failed is
   /// asked for again where the walk left off. Null once a pull is over.
   PullWalk? _walk;
@@ -5924,6 +5925,11 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         }
         if (tmax - 1 > _tombCursor) _tombCursor = tmax - 1;
       }
+      // Twins after the relics and their tombstones, so the pass sees the
+      // vault as it now stands. The first pass of a run also folds the
+      // twins that came down before this fix existed.
+      if ((changed || !_twinsFolded) && _foldTwins(db)) changed = true;
+      _twinsFolded = true;
       // AI records last: they merge INTO relics, so pulling them after the
       // relics in the same cycle means a freshly-arrived item gets its title in
       // the same pass rather than a cycle later.
@@ -5980,6 +5986,26 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     for (final r in fresh) {
       db.clearSyncRejection(r.uid, 'push');
     }
+    return true;
+  }
+
+  /// Fold one copy that two desktops captured into a single item (see the
+  /// twins note in RelicDb). The losers' deletes are queued, so the next
+  /// flush takes them off every other device too. Returns whether anything
+  /// went.
+  bool _foldTwins(RelicDb db) {
+    final res = db.mergeTwins(_now, queueOps: syncEnabled);
+    if (res.removed.isEmpty) return false;
+    final gone = res.removed.toSet();
+    for (final uid in gone) {
+      _vec.remove(uid);
+      _enrichFails.remove(uid);
+    }
+    _demoUids.removeWhere(gone.contains);
+    _hybridUids?.removeWhere(gone.contains);
+    _deleteBlobFilesBulk(res.orphanBlobKeys);
+    appendSyncLog('folded ${gone.length} twin capture(s) from another desktop');
+    _kickSync();
     return true;
   }
 
