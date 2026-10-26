@@ -55,6 +55,12 @@ android {
             } else {
                 signingConfigs.getByName("debug")
             }
+            // Keep rules for libraries that R8 cannot trace (ONNX Runtime
+            // reaches its Java classes from native code by name).
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }
