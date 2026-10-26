@@ -11,6 +11,7 @@
 //     billing is inert (the worker already early-returns without the keys).
 //   - No RL_* limiters                       -> rateLimit() fails open (proceeds).
 //   - VERIFY_GATE unset                      -> the verify-to-sync gate is off.
+//   - SYNC_PLAN_GATE unset                   -> the free plan sync rule is off.
 // The result: a pure, account-less, zero-knowledge sync data plane. Enrolled
 // tokens carry tier "max", whose caps (250 GB storage, 500 MB/item) are
 // effectively unlimited for a personal vault; lifting them further is a one-line

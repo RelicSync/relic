@@ -40,6 +40,7 @@ Non-2xx responses carry `{ "error": "<code>", "message": "<human text>" }`.
 | 401 | `session_revoked` | token predates a device removal; sign in again |
 | 402 | `storage_quota` | tier storage quota exceeded (250 MB / 25 GB / 250 GB) |
 | 402 | `vault_cap` | free-tier promoted-relic cap reached |
+| 403 | `sync_paused` | free plan: this account's free week of sync is over and this is not the device that keeps syncing (see `POST /account/sync-device`) |
 | 404 | `not_found` | unknown uid / blob key / no keyparams yet |
 | 409 | `keyparams_exists` | `PUT /keyparams` without `?replace=1` when one exists |
 | 413 | `too_large` | relic/blob exceeds tier per-item size cap |
@@ -157,7 +158,8 @@ egress). Resolved within the token's account namespace only.
 ### `GET /account`
 → `200 { "tier": "free|pro|max", "storage_used": n, "storage_quota": n,
 "vault_count": n, "vault_cap": n|null, "history_count": n,
-"history_cap": n|null, "evicted_count": n, "devices_cap": n|null }` — for
+"history_cap": n|null, "evicted_count": n, "devices_cap": n|null,
+"sync_until": n|null, "sync_device": s|null, "sync_paused": bool }` — for
 client-side quota display. Never includes key material.
 
 The last four are the history ring. `history_count` is unpromoted relics still
@@ -166,6 +168,13 @@ ring), and `evicted_count` is how many older copies are held back and would
 come straight back on an upgrade (always `0` when there is no ring). Clients
 treat a missing field as `0` or `null`, so an older server never breaks a
 newer client.
+
+The last three are the free plan sync rule (below). `sync_until` is when the
+account's multi-device sync ends, `sync_device` is the device that keeps
+syncing after that, and `sync_paused` says whether the calling device is
+paused. The first two are `null` and `sync_paused` is `false` whenever the
+rule does not apply (paid tiers, or the rule is off on this server), which is
+how a client knows not to show a countdown.
 
 ### `DELETE /account`
 Full account deletion (R2 objects, D1 rows, Stripe cancel). Irreversible.
@@ -191,6 +200,31 @@ no `iat` and are grandfathered.
   the IdP call does not succeed the watermark is deliberately left unstamped and
   only the KV `rev:` guard applies, which needs the client to send
   `X-Relic-Device`.
+
+### Free plan sync rule — `POST /account/sync-device`
+Off unless the server sets `SYNC_PLAN_GATE=on`; self-hosted servers never do.
+A free account syncs every device for its first week (`created_at` + 7 days,
+or a later `accounts.sync_until`). After that one device keeps syncing, and
+every other device gets `403 sync_paused` on the whole data plane (`/relics`,
+`/relic/*`, `/tombstones`, `/waiting`, `/keyparams`, `/ai*`, `/blob*`) and on
+`GET /sync/socket`. Reads are included: with reads open, a second device would
+still receive everything, which is half of sync. Account, device, billing,
+share and pairing routes stay open, so a paused device can still pick itself,
+upgrade, or be removed. The 403 body adds `sync_until`, `sync_device` and the
+device list. Paid tiers are never paused.
+
+The kept device is the first one to sync after the week ends. That's usually
+the computer, which checks in all day. A request with no `X-Relic-Device`
+falls back to the most recently seen device. If the kept device is removed,
+the next device to sync takes its place. Free accounts with one device are
+never paused.
+
+- `POST /account/sync-device` `{ "device_id" }` picks the device that keeps
+  syncing → `200 { "ok": true, "sync_device" }`. `404` for an unknown or
+  removed device. A free account may switch once a week (`429
+  sync_switch_cooldown` with `retry_at`). The first pick after an automatic
+  one is always allowed, and picking the current device does nothing. Works
+  with the rule off too, so apps can pick ahead of launch.
 
 ### Download link — `/account/send-download-link`
 - `POST /account/send-download-link` (no body) — mails the desktop download
@@ -309,9 +343,10 @@ sends none of these headers and never answers 429.
 |---|---|---|---|
 | per-item size | 2 MB | 100 MB | 500 MB |
 | storage quota | 250 MB | 25 GB | 250 GB |
-| stream | prune unpromoted past 500 | unlimited | unlimited |
+| stream | prune unpromoted past 500 (100 for accounts created from 2026-10-20) | unlimited | unlimited |
 | vault | 100 promoted | unlimited | unlimited |
 | devices | 3 | 10 | unlimited |
+| devices that sync | all, for the first week; then 1 (when `SYNC_PLAN_GATE=on`) | all | all |
 
 ## R2 layout
 

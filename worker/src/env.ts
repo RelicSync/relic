@@ -79,6 +79,9 @@ export interface Env {
   // an unverified email; unset/"off" disables it. Reads/deletes stay open and
   // legacy device-token auth is grandfathered (see syncWriteGate in index.ts).
   VERIFY_GATE?: string; // var, "on" | "off"
+  // Free plan sync rule: "on" pauses sync on every device but one once a free
+  // account's first week is over (see src/syncplan.ts). Unset/"off" disables it.
+  SYNC_PLAN_GATE?: string; // var, "on" | "off"
 }
 
 // The minimal, idempotent envelope we put on the billing queue (and also build
