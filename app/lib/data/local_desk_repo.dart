@@ -36,6 +36,7 @@ import 'secure_key_store.dart';
 import 'sift.dart';
 import 'pull_walk.dart';
 import 'sync_jobs.dart';
+import 'sync_plan.dart';
 import 'sync_socket.dart';
 import 'supabase_auth.dart';
 
@@ -605,6 +606,34 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   /// banner; capture keeps working locally regardless. Lockstep with
   /// WorkerRepo.emailUnverified.
   final ValueNotifier<bool> emailUnverified = ValueNotifier(false);
+
+  /// The free plan's sync pause (403 sync_paused, data/sync_plan.dart): set
+  /// while the account syncs a different device. Capture and the local vault
+  /// keep working; queued changes wait and go up once this PC syncs again. The
+  /// shell watches [syncPaused] for its banner. Lockstep with WorkerRepo.
+  final SyncPauseGate _pause = SyncPauseGate();
+  ValueNotifier<SyncPause?> get syncPaused => _pause.paused;
+
+  /// Make this PC the one that keeps syncing (POST /account/sync-device). On
+  /// success the pause lifts and a sync runs straight away. Lockstep with
+  /// WorkerRepo.syncThisDevice.
+  Future<SyncPickResult> syncThisDevice() async {
+    final id = _deviceId;
+    if (_syncUrl == null || id == null || id.isEmpty) {
+      return const SyncPickResult(SyncPickOutcome.failed);
+    }
+    final r = await postSyncDevice(
+      url: Uri.parse(_u('/account/sync-device')),
+      headers: _h,
+      deviceId: id,
+    );
+    if (r.outcome == SyncPickOutcome.ok) {
+      _pause.clear();
+      notifyListeners();
+      unawaited(syncNow());
+    }
+    return r;
+  }
 
   /// True when [body] is the worker's `{"error":"email_unverified",...}` payload.
   /// Static + pure so the flag logic is unit-testable. Lockstep with WorkerRepo.
@@ -2692,6 +2721,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   SyncState get sync {
     if (_mk == null) return const SyncState(SyncKind.synced); // local-only
     final pending = _db?.pendingCount() ?? 0;
+    // Paused by the free plan: nothing is broken, and nothing will move until
+    // the person picks this PC or upgrades, so this outranks "pending".
+    if (_pause.holding) return SyncState(SyncKind.paused, pending: pending);
     if (pending > 0) return SyncState(SyncKind.pending, pending: pending);
     final rejected = _db?.rejectionCount() ?? 0;
     if (rejected > 0) return SyncState(SyncKind.quotaFull, pending: rejected);
@@ -5375,6 +5407,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     _uploadProgress.clear();
     _mk = null;
     _remoteAccount = null;
+    _pause.clear();
     _online = false;
     _clearFailureStreak();
     _supabaseMode = false;
@@ -5418,6 +5451,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _startTimer(); // re-arm the poll at the new cadence
         if (up) unawaited(_pullRemote()); // catch up on anything missed
       },
+      holding: () => _pause.holding,
     );
     _syncSocket!.start();
   }
@@ -5622,6 +5656,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
       _flushAgain = true;
       return;
     }
+    // Paused by the free plan: the queue waits. The pull that follows in the
+    // same cycle asks the server again and lifts the pause when it may sync.
+    if (_pause.holding) return;
     _flushing = true;
     var changed = false;
     var skipped = 0;
@@ -5636,6 +5673,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           stalled = true;
           break;
         }
+        if (_pause.holding) break; // this op was refused by the pause
         if (result.kind == _OutboundKind.skip) {
           // The server answered but wouldn't take THIS op right now — leave it
           // queued and keep draining, or one bad item head-of-line blocks the
@@ -5756,6 +5794,12 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         emailUnverified.value = false;
         return _sent;
       }
+      if (_pause.absorb(resp.statusCode, resp.body)) {
+        // Free plan sync pause. Leave this op queued; the drain stops.
+        _online = true;
+        notifyListeners();
+        return _skip;
+      }
       if (resp.statusCode == 403 && isEmailUnverifiedBody(resp.body)) {
         // Email not confirmed yet (VERIFY_GATE). Reachable, so keep draining;
         // leave this op queued to flush once they confirm. The banner explains.
@@ -5796,6 +5840,11 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         _online = true;
         return _sent;
       }
+      if (_pause.absorb(resp.statusCode, resp.body)) {
+        _online = true;
+        notifyListeners();
+        return _skip; // stays queued until this PC syncs again
+      }
       if (_permanentSyncStatus(resp.statusCode)) {
         return _rejected(resp.statusCode);
       }
@@ -5820,6 +5869,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   Future<void> _pullRemote() async {
     final db = _db;
     if (_pulling || _mk == null || db == null) return;
+    // Paused by the free plan and asked a moment ago: the answer will not have
+    // changed. A tap on "Sync now" asks anyway.
+    if (_pause.skipPull(force: _manualSync)) return;
     // First-ever pull of this bind: syncBusy is watching, so the chip has to
     // repaint on both edges. Later cycles skip the churn.
     final firstSync = _lastSyncAt == 0;
@@ -5868,8 +5920,21 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
             _refreshToken = null;
             sessionRevoked.value = true;
           }
+          // The free plan syncs another device. Reachable, not offline.
+          if (_pause.absorb(resp.statusCode, resp.body)) {
+            _online = true;
+            notifyListeners();
+            return;
+          }
           _online = false;
           return;
+        }
+        if (_pause.holding) {
+          // Picked elsewhere, or the account paid: this PC syncs again, and
+          // the changes queued while it was paused can go up now.
+          _pause.clear();
+          notifyListeners();
+          _kickSync();
         }
         final body = jsonDecode(resp.body) as Map<String, dynamic>;
         final items = (body['items'] as List).cast<Map<String, dynamic>>();
@@ -6942,6 +7007,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
           historyCap: (j['history_cap'] as num?)?.toInt(),
           evictedCount: (j['evicted_count'] as num?)?.toInt() ?? 0,
           devicesCap: (j['devices_cap'] as num?)?.toInt(),
+          syncUntil: (j['sync_until'] as num?)?.toInt(),
         );
       }
     } catch (_) {}

@@ -36,6 +36,11 @@ class AccountInfo {
 
   /// How many devices the plan allows. Null on Max and on a self-hosted server.
   final int? devicesCap;
+
+  /// Unix seconds the free week of sync on every device ends (the free plan
+  /// sync rule, data/sync_plan.dart). Null on a paid plan, a self-hosted
+  /// server, and any server with the rule switched off.
+  final int? syncUntil;
   const AccountInfo({
     required this.tier,
     required this.usedBytes,
@@ -46,6 +51,7 @@ class AccountInfo {
     this.historyCap,
     this.evictedCount = 0,
     this.devicesCap,
+    this.syncUntil,
   });
 
   /// True only when a ring is actually in force. A self-hosted server enrolls

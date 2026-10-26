@@ -11,7 +11,7 @@ import 'relic_mark.dart';
 
 enum Scope { all, vault }
 
-enum SyncKind { synced, pending, offline, quotaFull, historyFull }
+enum SyncKind { synced, pending, offline, quotaFull, historyFull, paused }
 
 class SyncState {
   final SyncKind kind;
@@ -257,6 +257,12 @@ class _SyncChip extends StatelessWidget {
           icon = LucideIcons.history;
           color = c.warningDim;
           label = '${sync.historyCount} / ${sync.historyCap}';
+        // The free plan syncs one device and this is not it. The banner above
+        // the list explains and offers the switch.
+        case SyncKind.paused:
+          icon = LucideIcons.circlePause;
+          color = c.warningDim;
+          label = 'Sync paused';
       }
       chip = Row(
         mainAxisSize: MainAxisSize.min,

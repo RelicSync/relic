@@ -30,6 +30,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:relic_app/data/local_desk_repo.dart';
+import 'package:relic_app/data/sync_plan.dart' show SyncPickOutcome;
 import 'package:relic_app/models/relic.dart';
 import 'package:relic_app/widgets/chrome.dart' show SyncKind;
 
@@ -54,6 +55,8 @@ void main() {
   var putDelay = Duration.zero; // hold each relic put this long
   var dropPuts = 0; // destroy the socket under the next N relic puts
   var failPulls = false; // answer /relics with 500
+  var paused = false; // the free plan syncs another device: 403 sync_paused
+  var picks = 0; // POST /account/sync-device calls
   var puts = <String>[]; // relic uids the server accepted, in order
 
   Future<void> json(HttpRequest req, Object body) async {
@@ -70,12 +73,33 @@ void main() {
     putDelay = Duration.zero;
     dropPuts = 0;
     failPulls = false;
+    paused = false;
+    picks = 0;
     puts = [];
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     url = 'http://127.0.0.1:${server.port}';
     unawaited(server.forEach((req) async {
       final path = req.uri.path;
       await req.drain<void>();
+      if (path == '/account/sync-device') {
+        picks++;
+        paused = false;
+        await json(req, {'ok': true, 'sync_device': 'this-pc'});
+        return;
+      }
+      if (paused && (path.startsWith('/relic') || path == '/tombstones')) {
+        req.response
+          ..statusCode = 403
+          ..headers.contentType = ContentType.json
+          ..write(jsonEncode({
+            'error': 'sync_paused',
+            'sync_until': 1000,
+            'sync_device': 'other',
+            'devices': const [],
+          }));
+        await req.response.close();
+        return;
+      }
       if (req.method == 'PUT' && path.startsWith('/relic/')) {
         if (dropPuts > 0) {
           dropPuts--;
@@ -204,5 +228,34 @@ void main() {
     // The server comes back: the next retry ends the streak by itself.
     failPulls = false;
     await until(() => repo.sync.kind == SyncKind.synced);
+  });
+
+  test('a paused PC says so, keeps its captures, and syncs once picked',
+      () async {
+    if (guarded) {
+      markTestSkipped('RELIC_DATA_DIR sandbox not set — skipping repo test');
+      return;
+    }
+    final repo = await bound();
+    repo.debugBindSync(url, mk, deviceId: 'this-pc');
+    paused = true;
+    await repo.syncNow();
+    expect(repo.syncPaused.value, isNotNull);
+    expect(repo.sync.kind, SyncKind.paused);
+
+    final text = 'kept ${DateTime.now().microsecondsSinceEpoch}';
+    repo.captureText(text);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(puts, isEmpty, reason: 'a paused PC must not push');
+    expect(repo.sync.kind, SyncKind.paused);
+    expect(repo.relicSync(rowWith(repo, text)), RelicSync.syncing,
+        reason: 'the op stays queued, not rejected');
+
+    final r = await repo.syncThisDevice();
+    expect(r.outcome, SyncPickOutcome.ok);
+    expect(picks, 1);
+    await until(() => puts.length == 1);
+    await until(() => repo.sync.kind == SyncKind.synced);
+    expect(repo.syncPaused.value, isNull);
   });
 }

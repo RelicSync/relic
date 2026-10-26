@@ -33,6 +33,7 @@ class SyncSocket {
     required this.headers,
     required this.onWake,
     this.onConnectedChanged,
+    this.holding,
   });
 
   /// Current sync base URL (e.g. `https://relic-worker...`). Null/empty → not
@@ -50,9 +51,15 @@ class SyncSocket {
   /// while the socket is live and tighten it again when the socket drops.
   final void Function(bool connected)? onConnectedChanged;
 
+  /// Optional: true while the server refuses this device on purpose (the free
+  /// plan's sync pause). Reconnects then wait [_heldBackoff] instead of
+  /// hammering a door that stays shut until the person acts.
+  final bool Function()? holding;
+
   static const _pingEvery = Duration(seconds: 30);
   static const _debounce = Duration(milliseconds: 250);
   static const _maxBackoff = Duration(seconds: 30);
+  static const _heldBackoff = Duration(minutes: 5);
 
   WebSocket? _ws;
   StreamSubscription<dynamic>? _sub;
@@ -134,6 +141,10 @@ class SyncSocket {
   void _scheduleReconnect() {
     if (!_running) return;
     _reconnectTimer?.cancel();
+    if (holding?.call() ?? false) {
+      _reconnectTimer = Timer(_heldBackoff, _connect);
+      return;
+    }
     _reconnectTimer = Timer(_backoff, _connect);
     final next = _backoff * 2;
     _backoff = next > _maxBackoff ? _maxBackoff : next;
