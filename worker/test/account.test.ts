@@ -257,6 +257,10 @@ describe("GET /account", () => {
       history_cap: TIERS.free.ring,
       evicted_count: 312,
       devices_cap: TIERS.free.devices,
+      // Free plan sync rule: gate off in the test env, so it reports nothing.
+      sync_until: null,
+      sync_device: null,
+      sync_paused: false,
     });
   });
 

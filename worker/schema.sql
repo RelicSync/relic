@@ -28,7 +28,14 @@ CREATE TABLE IF NOT EXISTS accounts (
     -- authenticate() then rejects any access token issued before it, which
     -- closes the hour an already-minted token would otherwise keep working.
     -- Written only when the IdP call succeeded. 0 = never revoked.
-    min_valid_iat INTEGER NOT NULL DEFAULT 0
+    min_valid_iat INTEGER NOT NULL DEFAULT 0,
+    -- Free plan sync rule (migration 0014, src/syncplan.ts). sync_until
+    -- overrides the sign-up week (NULL = created_at + 7 days); sync_device is
+    -- the one device that keeps syncing after it; sync_device_at is when the
+    -- user last picked it by hand (NULL = never, or picked automatically).
+    sync_until     INTEGER,
+    sync_device    TEXT,
+    sync_device_at INTEGER
 );
 
 -- A Supabase identity bound to a pre-existing account (vaults that predate

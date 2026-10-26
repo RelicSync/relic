@@ -77,6 +77,23 @@ export const UPGRADES: ColumnUpgrade[] = [
     column: "vault_email_at",
     add: "ALTER TABLE account_usage ADD COLUMN vault_email_at INTEGER",
   },
+  // worker/migrations/0014_sync_plan.sql. Self-host never turns the free plan
+  // sync rule on, but POST /account/sync-device reads these columns either way.
+  {
+    table: "accounts",
+    column: "sync_until",
+    add: "ALTER TABLE accounts ADD COLUMN sync_until INTEGER",
+  },
+  {
+    table: "accounts",
+    column: "sync_device",
+    add: "ALTER TABLE accounts ADD COLUMN sync_device TEXT",
+  },
+  {
+    table: "accounts",
+    column: "sync_device_at",
+    add: "ALTER TABLE accounts ADD COLUMN sync_device_at INTEGER",
+  },
 ];
 
 /// Apply every upgrade this database is missing. Returns the columns it added,

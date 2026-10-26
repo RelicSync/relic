@@ -44,6 +44,7 @@ import {
 import { sweepAbandonedMpus, sweepOrphanBlobs, sweepTombstones } from "./sweep";
 import { claimAi, listAi, putAi, releaseAi } from "./ai";
 import { pokeSync, SyncSocket } from "./notify";
+import { isSyncPaused, pickSyncDevice, readSyncPlan, syncPausedResponse } from "./syncplan";
 
 // Re-exported so Wrangler can bind the Durable Object class (it must be exported
 // from the Worker's main module).
@@ -535,6 +536,19 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
       if (limited) return limited;
     }
 
+    // Free plan sync rule (optional; off unless SYNC_PLAN_GATE=on). After an
+    // account's free week only one device syncs, so every other device is
+    // refused the whole data plane and the doorbell, reads included: with reads
+    // open the phone would still receive the computer's items, which is half of
+    // sync. Sits after the limiter so a paused client that keeps retrying is
+    // throttled before it costs a D1 read. See src/syncplan.ts.
+    if (isDataPlane(path) || path === "/sync/socket") {
+      const plan = await readSyncPlan(env, auth);
+      if (isSyncPaused(plan, auth.device)) {
+        return syncPausedResponse(plan, await listDevices(env, auth.account, auth.device));
+      }
+    }
+
     // --- live-sync doorbell: authed WebSocket, forwarded to the account's DO ---
     // The DO reads X-Relic-Device off this same request to skip echoing a write
     // back to its originator. Absent binding (self-host) -> 501, client polls.
@@ -827,10 +841,17 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
       return await sendDownloadLink(env, auth);
     }
 
+    // Pick the device that keeps syncing on the free plan (src/syncplan.ts).
+    if (path === "/account/sync-device" && req.method === "POST") {
+      const limited = await rateLimit(req, env.RL_DEVICE, "RL_DEVICE", auth.account);
+      return limited ?? await pickSyncDevice(req, env, auth);
+    }
+
     // --- account ---
     if (path === "/account" && req.method === "GET") {
       const caps = TIERS[auth.tier];
       const usage = await readUsage(env, auth.account);
+      const plan = await readSyncPlan(env, auth);
       const ring = caps.ring === null
         ? null
         : ringCap(auth.tier, await accountCreatedAt(env.DB, auth.account));
@@ -848,6 +869,13 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
         history_cap: ring,
         evicted_count: ring === null ? 0 : usage.evicted,
         devices_cap: caps.devices,
+        // Free plan sync rule. `sync_until` and `sync_device` are null when it
+        // does not apply (paid, gate off), which is how a client knows not to
+        // show a countdown. `sync_paused` is for the calling device and is
+        // false whenever the rule does not apply. Older clients ignore all three.
+        sync_until: plan.syncUntil,
+        sync_device: plan.syncDevice,
+        sync_paused: isSyncPaused(plan, auth.device),
       });
     }
     // Irreversible: cancels billing + wipes all R2/D1/KV state for the account.
