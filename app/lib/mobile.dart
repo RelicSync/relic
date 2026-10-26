@@ -27,6 +27,7 @@ import 'data/save_prefs.dart';
 import 'data/secure_key_store.dart';
 import 'data/share_dedup.dart';
 import 'data/supabase_auth.dart';
+import 'data/sync_plan.dart';
 import 'data/wifi_watch.dart';
 import 'data/worker_repo.dart';
 import 'onboarding/add_device.dart';
@@ -346,8 +347,12 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     if (identical(__repo, r)) return;
     __repo?.changes.removeListener(_onRepoChanged);
     __repo?.sessionRevoked.removeListener(_onRepoChanged);
+    __repo?.syncPaused.removeListener(_onRepoChanged);
     __repo = r;
     r?.changes.addListener(_onRepoChanged);
+    // Same reason as sessionRevoked below: the pull that finds the pause
+    // brings nothing back, so `changes` stays quiet.
+    r?.syncPaused.addListener(_onRepoChanged);
     // Watched separately from `changes`: a revoked session is discovered by a
     // pull that, by definition, brought nothing back, so `changes` never fires
     // and the banner would not appear until something else repainted.
@@ -380,6 +385,8 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
   /// second-vault notice, which stays quiet until a real number lands.
   final ValueNotifier<int?> _deviceCount = ValueNotifier(null);
   bool _emailBannerDismissed = false; // verify-to-sync banner, session-only
+  bool _syncWeekDismissed = false; // free-week countdown banner, session-only
+  bool _syncPickBusy = false; // "Sync this phone instead" in flight
   final SecureKeyStore _keyStore = SecureKeyStore.forPlatform();
   // The bottom sheet must open from a context *below* MaterialApp's Navigator;
   // this key gives us one (the State's own context is above it).
@@ -502,6 +509,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
     _linkSub?.cancel();
     __repo?.changes.removeListener(_onRepoChanged);
     __repo?.sessionRevoked.removeListener(_onRepoChanged);
+    __repo?.syncPaused.removeListener(_onRepoChanged);
     _deviceCount.dispose();
     _semModel?.dispose();
     super.dispose();
@@ -895,6 +903,91 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
               IconButton(
                 icon: Icon(LucideIcons.x, size: 16, color: c.textMuted),
                 onPressed: () => setState(() => _emailBannerDismissed = true),
+              ),
+            ],
+          ),
+        ),
+      );
+
+  /// The free plan's sync pause (403 sync_paused). The phone keeps what it
+  /// has and keeps saving; only sync is off. Store-safe builds (iPhone) state
+  /// the facts and offer the switch, with no upgrade button.
+  Widget _syncPausedBanner(RelicColors c, SyncPause paused) => Material(
+        color: c.surface,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 6, 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(LucideIcons.circlePause, color: c.accent, size: 18),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(paused.message,
+                        style: RelicTheme.sans(
+                            size: 12.5, color: c.text, height: 1.35)),
+                  ),
+                ],
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: _syncPickBusy
+                        ? null
+                        : () async {
+                            setState(() => _syncPickBusy = true);
+                            final r = await _repo?.syncThisDevice();
+                            if (!mounted) return;
+                            setState(() => _syncPickBusy = false);
+                            if (r != null) _toast(r.message());
+                          },
+                    child: Text(
+                        _syncPickBusy
+                            ? 'Switching…'
+                            : 'Sync this phone instead',
+                        style: RelicTheme.sans(
+                            size: 13,
+                            color: c.accentMuted,
+                            weight: FontWeight.w600)),
+                  ),
+                  if (!storeSafeBuild)
+                    TextButton(
+                      onPressed: () =>
+                          _openUpgradeGuidance(source: 'sync_paused'),
+                      child: Text('Get Pro',
+                          style: RelicTheme.sans(
+                              size: 13,
+                              color: c.accentMuted,
+                              weight: FontWeight.w600)),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+
+  /// The free week's countdown, in its last three days. Dismissible for the
+  /// session.
+  Widget _syncWeekBanner(RelicColors c, String line) => Material(
+        color: c.surface,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 6, 8),
+          child: Row(
+            children: [
+              Icon(LucideIcons.clock, color: c.accent, size: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text('$line After that, one device keeps syncing.',
+                    style: RelicTheme.sans(
+                        size: 12.5, color: c.text, height: 1.35)),
+              ),
+              IconButton(
+                icon: Icon(LucideIcons.x, size: 16, color: c.textMuted),
+                onPressed: () => setState(() => _syncWeekDismissed = true),
               ),
             ],
           ),
@@ -2597,10 +2690,23 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
       );
       // Stack banners above the list: signed-out (the session was revoked) and
       // the verify-to-sync notice (email not confirmed).
+      final paused = _repo!.syncPaused.value;
+      final until = _repo!.account?.syncUntil;
+      final weekLine = syncWeekLine(until);
       final banners = <Widget>[
         if (_repo!.sessionRevoked.value) _signedOutBanner(colors),
         if (_repo!.emailUnverified.value && !_emailBannerDismissed)
           _verifyBanner(colors),
+        // The free plan syncs one device. Not dismissible: sync stays off
+        // here until this phone is picked or the account pays.
+        if (paused != null)
+          _syncPausedBanner(colors, paused)
+        // The free week's last three days.
+        else if (weekLine != null &&
+            until != null &&
+            daysUntil(until) <= 3 &&
+            !_syncWeekDismissed)
+          _syncWeekBanner(colors, weekLine),
       ];
       body = banners.isEmpty
           ? popup

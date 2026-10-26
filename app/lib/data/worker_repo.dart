@@ -30,6 +30,7 @@ import 'relic_db.dart';
 import 'repo.dart';
 import 'supabase_auth.dart';
 import 'sync_jobs.dart';
+import 'sync_plan.dart';
 import 'sync_socket.dart';
 
 /// RelicRepo backed by the deployed Cloudflare Worker (docs/api.md), with
@@ -149,6 +150,34 @@ class WorkerRepo implements RelicRepo {
   /// banner; capture keeps working locally regardless. Lockstep with
   /// LocalDeskRepo.emailUnverified.
   final ValueNotifier<bool> emailUnverified = ValueNotifier(false);
+
+  /// The free plan's sync pause (403 sync_paused, data/sync_plan.dart): set
+  /// while the account syncs a different device. The cached vault stays
+  /// readable and captures queue up; they go out once this phone syncs again.
+  /// The shell watches [syncPaused] for its banner. Lockstep with
+  /// LocalDeskRepo.syncPaused.
+  final SyncPauseGate _pause = SyncPauseGate();
+  ValueNotifier<SyncPause?> get syncPaused => _pause.paused;
+
+  /// Make this phone the one that keeps syncing (POST /account/sync-device).
+  /// On success the pause lifts and a sync runs straight away. Lockstep with
+  /// LocalDeskRepo.syncThisDevice.
+  Future<SyncPickResult> syncThisDevice() async {
+    final id = deviceId;
+    if (id == null || id.isEmpty) {
+      return const SyncPickResult(SyncPickOutcome.failed);
+    }
+    final r = await postSyncDevice(
+      url: Uri.parse(_u('/account/sync-device')),
+      headers: _headers,
+      deviceId: id,
+    );
+    if (r.outcome == SyncPickOutcome.ok) {
+      _pause.clear();
+      unawaited(syncDelta());
+    }
+    return r;
+  }
 
   /// Set true when the account's session has been revoked: the worker answered
   /// 401 `session_revoked` (this token predates a device removal), or GoTrue
@@ -1428,6 +1457,7 @@ class WorkerRepo implements RelicRepo {
       baseUrl: () => baseUrl,
       headers: () => _headers,
       onWake: () => unawaited(syncDelta()),
+      holding: () => _pause.holding,
     );
     _syncSocket!.start();
   }
@@ -1481,6 +1511,12 @@ class WorkerRepo implements RelicRepo {
         _sync = const SyncState(SyncKind.offline);
         return;
       }
+    }
+    // Paused by the free plan and asked a moment ago: the answer will not have
+    // changed, so this pass is just the chip.
+    if (_pause.skipPull()) {
+      _sync = SyncState(SyncKind.paused, pending: _outbox.length);
+      return;
     }
     // Blobs first: a relic put that lands before its blob would show up on
     // another device as an item whose bytes 404.
@@ -1536,8 +1572,19 @@ class WorkerRepo implements RelicRepo {
             _refreshToken = null;
             sessionRevoked.value = true;
           }
+          // The free plan syncs another device. Reachable, not offline.
+          if (_pause.absorb(r.statusCode, r.body)) {
+            _sync = SyncState(SyncKind.paused, pending: _outbox.length);
+            return;
+          }
           _sync = const SyncState(SyncKind.offline);
           return;
+        }
+        if (_pause.holding) {
+          // Picked elsewhere, or the account paid: this phone syncs again.
+          // One more pass sends what queued up while it was paused.
+          _pause.clear();
+          _syncAgain = true;
         }
         final body = jsonDecode(r.body) as Map<String, dynamic>;
         final items = (body['items'] as List).cast<Map<String, dynamic>>();
@@ -1645,6 +1692,7 @@ class WorkerRepo implements RelicRepo {
           historyCap: (j['history_cap'] as num?)?.toInt(),
           evictedCount: (j['evicted_count'] as num?)?.toInt() ?? 0,
           devicesCap: (j['devices_cap'] as num?)?.toInt(),
+          syncUntil: (j['sync_until'] as num?)?.toInt(),
         );
       }
     } catch (_) {}
@@ -1995,6 +2043,7 @@ class WorkerRepo implements RelicRepo {
           historyCap: (a['historyCap'] as num?)?.toInt(),
           evictedCount: (a['evictedCount'] as num?)?.toInt() ?? 0,
           devicesCap: (a['devicesCap'] as num?)?.toInt(),
+          syncUntil: (a['syncUntil'] as num?)?.toInt(),
         );
       }
     } catch (_) {
@@ -2202,6 +2251,7 @@ class WorkerRepo implements RelicRepo {
             'historyCap': _account!.historyCap,
             'evictedCount': _account!.evictedCount,
             'devicesCap': _account!.devicesCap,
+            'syncUntil': _account!.syncUntil,
           },
       };
       await writeCacheFile(f.path, doc);
@@ -2221,6 +2271,7 @@ class WorkerRepo implements RelicRepo {
     _outbox.clear();
     _blobOutbox.clear();
     _account = null; // cached plan/storage belongs to the account being dropped
+    _pause.clear();
     _cursor = 0;
     _walk = null;
     _tombCursor = 0;
@@ -2287,7 +2338,8 @@ class WorkerRepo implements RelicRepo {
   /// Try to send every queued mutation. Stops at the first transient failure
   /// (keeps the rest queued); drops permanently-rejected ops.
   Future<void> _flushOutbox() async {
-    if (_outbox.isEmpty || _mk == null) return;
+    // Paused by the free plan: the queue waits for the next pull to lift it.
+    if (_outbox.isEmpty || _mk == null || _pause.holding) return;
     final pending = List<Map<String, dynamic>>.from(_outbox);
     var sent = false;
     for (final op in pending) {
@@ -2311,6 +2363,8 @@ class WorkerRepo implements RelicRepo {
           if (resp.statusCode == 200) emailUnverified.value = false;
           _outbox.remove(op);
           sent = true;
+        } else if (_pause.absorb(resp.statusCode, resp.body)) {
+          break; // free plan sync pause: the op stays queued
         } else if (resp.statusCode == 403 &&
             isEmailUnverifiedBody(resp.body)) {
           // Email not confirmed yet (VERIFY_GATE). Leave the op queued and stop;
@@ -2480,7 +2534,7 @@ class WorkerRepo implements RelicRepo {
   /// queued; drops keys that are permanently rejected or whose local file has
   /// gone (cache eviction — nothing left to send).
   Future<void> _flushBlobOutbox() async {
-    if (_blobOutbox.isEmpty || _mk == null) return;
+    if (_blobOutbox.isEmpty || _mk == null || _pause.holding) return;
     await _ensureBlobDir();
     var changed = false;
     for (final key in List<String>.from(_blobOutbox)) {

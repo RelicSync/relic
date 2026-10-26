@@ -39,6 +39,7 @@ import 'data/local_desk_repo.dart';
 import 'data/recovery.dart';
 import 'data/repo.dart' show ringNoticeBody, sizeCapNoticeBody;
 import 'data/self_update.dart';
+import 'data/sync_plan.dart';
 import 'data/supabase_auth.dart';
 import 'data/update_check.dart';
 import 'models/relic.dart';
@@ -229,6 +230,8 @@ class _RealAppState extends State<RealApp>
   final ValueNotifier<int?> _deviceCount = ValueNotifier(null);
   bool _showingKit = false; // recovery-kit screen up: don't let blur hide it
   bool _emailBannerDismissed = false; // verify-to-sync banner, session-only
+  bool _syncWeekDismissed = false; // free-week countdown banner, session-only
+  bool _syncPickBusy = false; // "Sync this PC instead" in flight
   DateTime? _shownAt; // when the popup was last summoned (guards blur-to-close)
 
   // Mini picker geometry. Captured once per summon so the window can re-hug the
@@ -2542,6 +2545,7 @@ class _RealAppState extends State<RealApp>
       listenable: Listenable.merge([
         widget.repo.emailUnverified,
         widget.repo.sessionRevoked,
+        widget.repo.syncPaused,
       ]),
       builder: (context, _) {
         final unverified = widget.repo.emailUnverified.value;
@@ -2551,6 +2555,19 @@ class _RealAppState extends State<RealApp>
         }
         if (unverified && !_emailBannerDismissed) {
           banners.add(_verifyBanner());
+        }
+        // The free plan syncs one device. Not dismissible: sync stays off on
+        // this PC until it is picked or the account pays.
+        final paused = widget.repo.syncPaused.value;
+        if (paused != null) {
+          banners.add(_syncPausedBanner(paused));
+        } else if (!_syncWeekDismissed) {
+          final line = syncWeekLine(widget.repo.account?.syncUntil);
+          // Only the last three days: earlier than that it is noise.
+          final until = widget.repo.account?.syncUntil;
+          if (line != null && until != null && daysUntil(until) <= 3) {
+            banners.add(_syncWeekBanner(line));
+          }
         }
         if (widget.repo.isDemo && !widget.repo.demoNudgeDismissed) {
           banners.add(_demoNudgeBanner());
@@ -2736,6 +2753,121 @@ class _RealAppState extends State<RealApp>
                 tooltip: 'Dismiss',
                 onTap: () => setState(() => _emailBannerDismissed = true),
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The free plan's sync pause (403 sync_paused). This PC keeps everything it
+  /// has and keeps capturing; only sync is off. Two ways out: make this PC the
+  /// one that syncs, or upgrade.
+  Widget _syncPausedBanner(SyncPause paused) {
+    final c = _useDark ? RelicColors.dark : RelicColors.light;
+    return _planBanner(
+      c,
+      icon: LucideIcons.circlePause,
+      text: paused.message,
+      actions: [
+        GhostButton(
+          label: _syncPickBusy
+              ? 'Switching…'
+              : Platform.isMacOS
+              ? 'Sync this Mac instead'
+              : 'Sync this PC instead',
+          onTap: _syncPickBusy
+              ? null
+              : () async {
+                  setState(() => _syncPickBusy = true);
+                  final r = await widget.repo.syncThisDevice();
+                  if (!mounted) return;
+                  setState(() => _syncPickBusy = false);
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(_snack(c, r.message()));
+                },
+        ),
+        if (!storeSafeBuild) ...[
+          const SizedBox(width: Insets.xs),
+          GhostButton(
+            label: 'Get Pro',
+            onTap: () => _ringUpgrade('sync_paused'),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// The free week's countdown, in its last three days. Dismissible for the
+  /// session; it comes back next launch while the week is still running.
+  Widget _syncWeekBanner(String line) {
+    final c = _useDark ? RelicColors.dark : RelicColors.light;
+    return _planBanner(
+      c,
+      icon: LucideIcons.clock,
+      text: '$line After that, one device keeps syncing.',
+      actions: [
+        if (!storeSafeBuild)
+          GhostButton(
+            label: 'Get Pro',
+            onTap: () => _ringUpgrade('sync_week'),
+          ),
+        const SizedBox(width: Insets.xs),
+        GhostIconButton(
+          icon: LucideIcons.x,
+          iconSize: 15,
+          tooltip: 'Dismiss',
+          onTap: () => setState(() => _syncWeekDismissed = true),
+        ),
+      ],
+    );
+  }
+
+  /// Banner chrome for the plan banners: the line on top, the actions right
+  /// aligned under it, since two buttons and a sentence do not fit one row of
+  /// the popup.
+  Widget _planBanner(
+    RelicColors c, {
+    required IconData icon,
+    required String text,
+    required List<Widget> actions,
+  }) {
+    return Material(
+      color: c.panel,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: c.border, width: 1)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            Insets.lg,
+            Insets.md,
+            Insets.sm,
+            Insets.sm,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(icon, color: c.accent, size: 17),
+                  const SizedBox(width: Insets.md),
+                  Expanded(
+                    child: Text(
+                      text,
+                      style: RelicTheme.sans(
+                        size: 12.5,
+                        color: c.text,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: Insets.xs),
+              Row(mainAxisAlignment: MainAxisAlignment.end, children: actions),
             ],
           ),
         ),
