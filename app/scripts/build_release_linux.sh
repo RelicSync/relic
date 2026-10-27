@@ -142,6 +142,20 @@ Uninstall: delete this folder, then
 Your vault lives in ~/.local/share/relic — delete that too if you mean it.
 EOF
 
+# Refuse to pack a bundle that cannot start. 1.0.60 to 1.0.64 shipped
+# lib/libonnxruntime.so pointing at a file that was not there, and relic_app
+# needed it, so the app died at launch on any machine without that library.
+# The build machine's own libraries hide this, so check the bundle itself:
+# no dangling symlinks, and every library the app and its plugins need either
+# in the bundle or a normal system package.
+echo "==> checking the bundle's libraries"
+dangling=$(find "$STAGE" -xtype l)
+[[ -z "$dangling" ]] || { echo "dangling symlinks in the bundle:" >&2; echo "$dangling" >&2; exit 1; }
+missing=$(for f in "$STAGE/relic_app" "$STAGE"/lib/*.so; do
+  LD_LIBRARY_PATH="$STAGE/lib" ldd "$f" 2>/dev/null | grep 'not found' | grep -v 'libjvm.so' | sed "s|^|$(basename "$f"): |"
+done)
+[[ -z "$missing" ]] || { echo "libraries the bundle needs but does not have:" >&2; echo "$missing" >&2; exit 1; }
+
 mkdir -p "$DIST"
 TARBALL="$DIST/relic-$VER-linux-x64.tar.gz"
 rm -f "$TARBALL"

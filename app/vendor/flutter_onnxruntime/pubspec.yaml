@@ -34,8 +34,6 @@ flutter:
         pluginClass: FlutterOnnxruntimePlugin
       ios:
         pluginClass: FlutterOnnxruntimePlugin
-      linux:
-        pluginClass: FlutterOnnxruntimePlugin
       web:
         pluginClass: FlutterOnnxruntimeWebPlugin
         fileName: web/flutter_onnxruntime_web_plugin.dart
