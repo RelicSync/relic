@@ -6,7 +6,6 @@ list(APPEND FLUTTER_PLUGIN_LIST
   clipboard_watcher
   desktop_webview_window
   file_saver
-  flutter_onnxruntime
   flutter_secure_storage_linux
   gtk
   hotkey_manager_linux

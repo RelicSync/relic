@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.64+82
+version: 1.0.65+83
 environment:
   sdk: ^3.12.2
 
@@ -85,13 +85,16 @@ dependencies:
   # Wi-Fi gate for the 330 MB model download (data/wifi_watch.dart).
   connectivity_plus: ^7.3.2
 # flutter_onnxruntime is served from app/vendor: the pub.dev copy, minus its
-# macOS platform. Only mobile.dart uses it (the phone's query encoder); the
-# desktop embeds through relic-sift. Its macOS Swift package requires macOS
-# 14, and Relic's Mac floor is 11, so the macOS build fails with the pub
-# copy. The vendored copy is byte-identical for the other platforms. To
-# upgrade: copy the new pub version over app/vendor/flutter_onnxruntime,
-# drop its macos/ folder and the macos: entry under flutter.plugin.platforms,
-# and bump the constraint above.
+# macOS and Linux platforms. Only mobile.dart uses it (the phone's query
+# encoder); the desktop embeds through relic-sift. Its macOS Swift package
+# requires macOS 14, and Relic's Mac floor is 11, so the macOS build fails
+# with the pub copy. On Linux the plugin linked relic_app against
+# libonnxruntime.so.1, which the bundle shipped only as a dangling symlink,
+# so 1.0.60 to 1.0.64 would not start on a machine without ONNX Runtime 1.22
+# installed. The vendored copy is byte-identical for the other platforms. To
+# upgrade: copy the new pub version over app/vendor/flutter_onnxruntime, drop
+# its macos/ and linux/ folders and those entries under
+# flutter.plugin.platforms, and bump the constraint above.
 dependency_overrides:
   flutter_onnxruntime:
     path: vendor/flutter_onnxruntime
