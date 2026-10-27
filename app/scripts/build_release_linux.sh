@@ -152,7 +152,7 @@ echo "==> checking the bundle's libraries"
 dangling=$(find "$STAGE" -xtype l)
 [[ -z "$dangling" ]] || { echo "dangling symlinks in the bundle:" >&2; echo "$dangling" >&2; exit 1; }
 missing=$(for f in "$STAGE/relic_app" "$STAGE"/lib/*.so; do
-  LD_LIBRARY_PATH="$STAGE/lib" ldd "$f" 2>/dev/null | grep 'not found' | grep -v 'libjvm.so' | sed "s|^|$(basename "$f"): |"
+  LD_LIBRARY_PATH="$STAGE/lib" ldd "$f" 2>/dev/null | grep 'not found' | grep -v 'libjvm.so' | sed "s|^|$(basename "$f"): |" || true
 done)
 [[ -z "$missing" ]] || { echo "libraries the bundle needs but does not have:" >&2; echo "$missing" >&2; exit 1; }
 
