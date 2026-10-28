@@ -544,7 +544,7 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
     // throttled before it costs a D1 read. See src/syncplan.ts.
     if (isDataPlane(path) || path === "/sync/socket") {
       const plan = await readSyncPlan(env, auth);
-      if (isSyncPaused(plan, auth.device)) {
+      if (isSyncPaused(plan, auth.device, req.headers.get("X-Relic-App-Version"))) {
         return syncPausedResponse(plan, await listDevices(env, auth.account, auth.device));
       }
     }
@@ -875,7 +875,7 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
         // false whenever the rule does not apply. Older clients ignore all three.
         sync_until: plan.syncUntil,
         sync_device: plan.syncDevice,
-        sync_paused: isSyncPaused(plan, auth.device),
+        sync_paused: isSyncPaused(plan, auth.device, req.headers.get("X-Relic-App-Version")),
       });
     }
     // Irreversible: cancels billing + wipes all R2/D1/KV state for the account.

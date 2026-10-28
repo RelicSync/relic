@@ -10,7 +10,13 @@
 // the device; an automatic pick leaves it NULL so the first real choice is free.
 //
 // Off by default so the server can ship before the apps that explain the 403.
-// Self-host never sets the flag. Plan: docs/free-plan-sync-week-2026-10.md
+// Self-host never sets the flag.
+//
+// Only apps that can explain a pause are ever paused: a device whose recorded
+// app version is older than SYNC_PAUSE_MIN_VERSION, or unknown (the web vault,
+// legacy clients, a request with no device id), keeps syncing. Old installs
+// rarely update, and an old app shows a bare "Offline" for a 403, so they are
+// left alone instead. When one updates, the rule reaches it on its own. Plan: docs/free-plan-sync-week-2026-10.md
 // (private repo).
 import type { Auth } from "./auth";
 import type { Env } from "./env";
@@ -19,6 +25,27 @@ import { type NudgeMail, sendNudgeMail } from "./stripe";
 
 export const SYNC_WEEK = 7 * 86400;
 export const SYNC_SWITCH_COOLDOWN = 7 * 86400;
+/** The first app release that explains sync_paused (banner, "Sync this device
+ *  instead"). Older apps are never paused. */
+export const SYNC_PAUSE_MIN_VERSION = "1.0.64";
+
+/** Numeric parts of "1.0.64" or "1.0.64+82". Null for anything else. */
+function versionParts(v: string | null | undefined): number[] | null {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:[+-].*)?$/.exec((v ?? "").trim());
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+/** True when an app at version `v` can explain a pause. Unknown or
+ *  unparseable versions cannot. */
+export function canExplainPause(v: string | null | undefined): boolean {
+  const have = versionParts(v);
+  const need = versionParts(SYNC_PAUSE_MIN_VERSION)!;
+  if (!have) return false;
+  for (let i = 0; i < 3; i++) {
+    if (have[i] !== need[i]) return have[i] > need[i];
+  }
+  return true;
+}
 
 export interface SyncPlan {
   /** Unix seconds free multi-device sync ends. Null = no limit (paid, flag
@@ -31,9 +58,11 @@ export interface SyncPlan {
   syncDeviceAt: number | null;
   /** Active (non-revoked) devices on the account. */
   devices: number;
+  /** Recorded app version per active device id (null = never reported). */
+  versions: Record<string, string | null>;
 }
 
-const NO_LIMIT: SyncPlan = { syncUntil: null, syncDevice: null, syncDeviceAt: null, devices: 0 };
+const NO_LIMIT: SyncPlan = { syncUntil: null, syncDevice: null, syncDeviceAt: null, devices: 0, versions: {} };
 
 export const syncPlanOn = (env: Env) => env.SYNC_PLAN_GATE === "on";
 
@@ -82,12 +111,20 @@ export async function readSyncPlan(env: Env, auth: Auth): Promise<SyncPlan> {
   }>();
   if (!row) return NO_LIMIT; // legacy token with no account row: grandfathered
 
+  // A free account has at most a handful of devices.
+  const devs = await env.DB.prepare(
+    "SELECT device_id, app_version FROM devices WHERE account_id = ?1 AND revoked_at IS NULL",
+  ).bind(auth.account).all<{ device_id: string; app_version: string | null }>();
+  const versions: Record<string, string | null> = {};
+  for (const d of devs.results ?? []) versions[d.device_id] = d.app_version;
+
   const until = row.sync_until ?? row.created_at + SYNC_WEEK;
   const plan: SyncPlan = {
     syncUntil: until,
     syncDevice: row.kept ? row.sync_device : null,
     syncDeviceAt: row.kept ? row.sync_device_at : null,
     devices: Number(row.n) || 0,
+    versions,
   };
 
   // Past the week with no live pick: settle one now and write it down, so the
@@ -115,12 +152,23 @@ export async function readSyncPlan(env: Env, auth: Auth): Promise<SyncPlan> {
   return plan;
 }
 
-/** True when this request's device may not sync under the plan. */
-export function isSyncPaused(plan: SyncPlan, device: string | undefined, now = Math.floor(Date.now() / 1000)): boolean {
+/** True when this request's device may not sync under the plan.
+ *  `appVersion` is the request's X-Relic-App-Version, which is fresher than the
+ *  recorded one when an app has just updated. */
+export function isSyncPaused(
+  plan: SyncPlan,
+  device: string | undefined,
+  appVersion?: string | null,
+  now = Math.floor(Date.now() / 1000),
+): boolean {
   if (plan.syncUntil === null || now < plan.syncUntil) return false;
   if (plan.devices <= 1) return false; // one device is the free plan
-  // A request that does not say which device it is cannot be the kept one.
-  return !device || device !== plan.syncDevice;
+  // A request that does not say which device it is can't be matched to a
+  // version, so it can't be shown why it stopped. Leave it syncing.
+  if (!device) return false;
+  if (device === plan.syncDevice) return false;
+  // Only apps that explain the pause are paused (see the top of this file).
+  return canExplainPause(appVersion || plan.versions[device]);
 }
 
 /** The 403 a paused device gets. Carries what the app needs to draw its
@@ -187,6 +235,7 @@ export async function pickSyncDevice(req: Request, env: Env, auth: Auth): Promis
 // ---- the end-of-week email (cron) -------------------------------------------
 
 const SYNC_EMAIL_BATCH = 50;
+const SYNC_EMAIL_SCAN = 1000;
 /// A device counts as in use if it synced within this long. Older devices are
 /// not paused in any way a person would notice, so they don't earn an email.
 const SYNC_EMAIL_ACTIVE = 14 * 86400;
@@ -202,22 +251,35 @@ export async function syncWeekSweep(env: Env): Promise<void> {
   // Checked before any query: self-host has no Resend key and the rule off.
   if (!syncPlanOn(env) || !env.RESEND_API_KEY) return;
   const now = Math.floor(Date.now() / 1000);
+  // Only accounts where a device is really paused: the kept device is settled
+  // (the first sync after the week does that) and another device in use runs
+  // an app that the rule pauses. An account whose other devices are all on old
+  // apps is not paused anywhere, so it gets nothing, and stays a candidate in
+  // case one of them updates. The SQL over-fetches so that those accounts
+  // can't fill the batch.
   const due = await env.DB.prepare(
-    `SELECT a.account_id, a.email
+    `SELECT a.account_id, a.email,
+            (SELECT group_concat(COALESCE(d.app_version, ''), '|') FROM devices d
+              WHERE d.account_id = a.account_id AND d.revoked_at IS NULL
+                AND d.last_seen_at > ?3 AND d.device_id <> a.sync_device) AS others
        FROM accounts a
       WHERE a.tier = 'free'
         AND a.email IS NOT NULL
         AND a.sync_email_at IS NULL
+        AND a.sync_device IS NOT NULL
         AND COALESCE(a.sync_until, a.created_at + ?1) <= ?2
         AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.account_id = a.account_id)
-        AND (SELECT COUNT(*) FROM devices d
-              WHERE d.account_id = a.account_id AND d.revoked_at IS NULL
-                AND d.last_seen_at > ?3) >= 2
+        AND EXISTS (SELECT 1 FROM devices d
+              WHERE d.account_id = a.account_id AND d.device_id = a.sync_device
+                AND d.revoked_at IS NULL)
       LIMIT ?4`,
-  ).bind(SYNC_WEEK, now, now - SYNC_EMAIL_ACTIVE, SYNC_EMAIL_BATCH)
-    .all<{ account_id: string; email: string }>();
+  ).bind(SYNC_WEEK, now, now - SYNC_EMAIL_ACTIVE, SYNC_EMAIL_SCAN)
+    .all<{ account_id: string; email: string; others: string | null }>();
 
-  for (const row of due.results ?? []) {
+  const paused = (due.results ?? [])
+    .filter((r) => (r.others ?? "").split("|").some(canExplainPause))
+    .slice(0, SYNC_EMAIL_BATCH);
+  for (const row of paused) {
     if (await sendNudgeMail(env, "sync_week_email", row.account_id, row.email, syncWeekMail())) {
       await env.DB.prepare("UPDATE accounts SET sync_email_at = ?2 WHERE account_id = ?1")
         .bind(row.account_id, now).run();

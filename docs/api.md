@@ -219,6 +219,12 @@ falls back to the most recently seen device. If the kept device is removed,
 the next device to sync takes its place. Free accounts with one device are
 never paused.
 
+Only apps that can explain a pause are paused. A device is paused only when
+its app is 1.0.64 or newer, going by the request's `X-Relic-App-Version` or
+else the version recorded for the device. Older apps, devices with no
+recorded version (the web vault) and requests with no `X-Relic-Device` keep
+syncing. When an old app updates, the rule reaches it on its own.
+
 - `POST /account/sync-device` `{ "device_id" }` picks the device that keeps
   syncing → `200 { "ok": true, "sync_device" }`. `404` for an unknown or
   removed device. A free account may switch once a week (`429
@@ -227,8 +233,8 @@ never paused.
   with the rule off too, so apps can pick ahead of launch.
 
 While the rule is on and a Resend key is set, the 6-hourly cron emails each
-free account once when its week ends and it still has two or more devices
-seen in the last 14 days: sync now runs on one device, how to pick it, and
+free account once when its week has ended, its kept device is settled, and
+another device seen in the last 14 days is really paused (on 1.0.64 or newer): sync now runs on one device, how to pick it, and
 what Pro costs. `accounts.sync_email_at` records the send.
 
 ### Download link — `/account/send-download-link`

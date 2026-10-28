@@ -4,7 +4,7 @@ import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src/index";
-import { SYNC_SWITCH_COOLDOWN, SYNC_WEEK, syncWeekSweep } from "../src/syncplan";
+import { canExplainPause, SYNC_SWITCH_COOLDOWN, SYNC_WEEK, syncWeekSweep } from "../src/syncplan";
 import { setupSchema, sha256Hex } from "./helpers";
 
 // deno-lint-ignore no-explicit-any
@@ -21,7 +21,9 @@ async function account(opts: {
   tier?: string;
   age?: number; // seconds since sign-up
   syncUntil?: number | null;
-  devices?: Array<[id: string, lastSeenAgo: number]>;
+  // App version defaults to the first release that explains a pause; null =
+  // never reported (web vault, legacy clients).
+  devices?: Array<[id: string, lastSeenAgo: number, appVersion?: string | null]>;
 } = {}) {
   const acct = `acct-sp-${++seq}`;
   const token = `tok-sp-${seq}`;
@@ -31,10 +33,10 @@ async function account(opts: {
   await E.DB.prepare(
     "INSERT INTO accounts (account_id, tier, created_at, sync_until) VALUES (?1,?2,?3,?4)",
   ).bind(acct, tier, now() - (opts.age ?? 8 * DAY), opts.syncUntil ?? null).run();
-  for (const [id, ago] of opts.devices ?? []) {
+  for (const [id, ago, ver] of opts.devices ?? []) {
     await E.DB.prepare(
-      "INSERT INTO devices (account_id, device_id, platform, last_seen_at) VALUES (?1,?2,'windows',?3)",
-    ).bind(acct, id, now() - ago).run();
+      "INSERT INTO devices (account_id, device_id, platform, last_seen_at, app_version) VALUES (?1,?2,'windows',?3,?4)",
+    ).bind(acct, id, now() - ago, ver === undefined ? "1.0.64" : ver).run();
   }
   return { acct, token };
 }
@@ -115,10 +117,42 @@ describe("free plan sync rule", () => {
     expect((await call(token, "GET", "/relics", { device: "pc" })).status).toBe(403);
   });
 
-  it("falls back to the most recently seen device for a request with no device id", async () => {
+  it("settles on the most recently seen device for a request with no device id, and lets it through", async () => {
     const { acct, token } = await account({ devices: [["pc", 10], ["phone", 3 * DAY]] });
-    expect((await call(token, "GET", "/relics")).status).toBe(403);
+    // No device id means no version to check, so it is never paused.
+    expect((await call(token, "GET", "/relics")).status).toBe(200);
     expect((await syncDevice(acct)).sync_device).toBe("pc");
+    expect((await call(token, "GET", "/relics", { device: "phone" })).status).toBe(403);
+  });
+
+  it("never pauses an app too old to explain it, or one with no version", async () => {
+    const { token } = await account({
+      devices: [["pc", 10], ["oldmac", 60, "1.0.60"], ["web", 60, null], ["odd", 60, "dev"]],
+    });
+    expect((await call(token, "GET", "/relics", { device: "pc" })).status).toBe(200); // kept
+    for (const dev of ["oldmac", "web", "odd"]) {
+      expect((await call(token, "GET", "/relics", { device: dev })).status, dev).toBe(200);
+      const a = await (await call(token, "GET", "/account", { device: dev })).json();
+      expect(a, dev).toMatchObject({ sync_paused: false });
+    }
+  });
+
+  it("pauses an old device once it updates, going by the version it sends", async () => {
+    const { token } = await account({ devices: [["pc", 10], ["phone", 60, "1.0.61"]] });
+    await call(token, "GET", "/relics", { device: "pc" }); // settle the pick
+    expect((await call(token, "GET", "/relics", { device: "phone" })).status).toBe(200);
+    const r = await call(token, "GET", "/relics", {
+      device: "phone",
+      headers: { "X-Relic-App-Version": "1.0.64" },
+    });
+    expect(r.status).toBe(403);
+  });
+
+  it("keeps an old kept device syncing and still pauses a new second device", async () => {
+    const { acct, token } = await account({ devices: [["oldpc", 10, "1.0.48"], ["phone", 60]] });
+    expect((await call(token, "GET", "/relics", { device: "oldpc" })).status).toBe(200);
+    expect((await syncDevice(acct)).sync_device).toBe("oldpc");
+    expect((await call(token, "GET", "/relics", { device: "phone" })).status).toBe(403);
   });
 
   it("covers writes, blobs and the doorbell as well as reads", async () => {
@@ -183,6 +217,17 @@ describe("free plan sync rule", () => {
       .bind(acct).run();
     expect((await call(token, "GET", "/relics", { device: "pc" })).status).toBe(200);
     expect((await syncDevice(acct)).sync_device).toBe("pc");
+  });
+});
+
+describe("canExplainPause", () => {
+  it("reads release versions and refuses anything it can't parse", () => {
+    for (const v of ["1.0.64", "1.0.64+82", "1.0.65", "1.0.100", "1.1.0", "2.0.0", " 1.0.64 "]) {
+      expect(canExplainPause(v), v).toBe(true);
+    }
+    for (const v of ["1.0.63", "1.0.9", "0.9.99", "1.0", "dev", "", null, undefined]) {
+      expect(canExplainPause(v), String(v)).toBe(false);
+    }
   });
 });
 
@@ -251,8 +296,10 @@ describe("end-of-week email (syncWeekSweep)", () => {
     ((await E.DB.prepare("SELECT sync_email_at FROM accounts WHERE account_id = ?1").bind(acct).first()) as {
       sync_email_at: number | null;
     }).sync_email_at;
-  async function withEmail(acct: string, email: string | null) {
-    await E.DB.prepare("UPDATE accounts SET email = ?2 WHERE account_id = ?1").bind(acct, email).run();
+  // Also settles the kept device, as the first sync after the week would.
+  async function withEmail(acct: string, email: string | null, kept = "pc") {
+    await E.DB.prepare("UPDATE accounts SET email = ?2, sync_device = ?3 WHERE account_id = ?1")
+      .bind(acct, email, kept).run();
   }
 
   it("mails a free account past its week that uses two devices, once", async () => {
@@ -278,6 +325,26 @@ describe("end-of-week email (syncWeekSweep)", () => {
     const noMail = await account({ devices: [["pc", 10], ["phone", 60]] });
     for (const a of [one, inWeek, graced, stale, paid]) await withEmail(a.acct, `${a.acct}@x.com`);
     await withEmail(noMail.acct, null);
+    await syncWeekSweep(KEYED);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("skips an account whose other devices are all on old apps, until one updates", async () => {
+    const { acct } = await account({ devices: [["pc", 10], ["oldmac", 60, "1.0.60"], ["web", 60, null]] });
+    await withEmail(acct, "old@x.com");
+    await syncWeekSweep(KEYED);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await stamp(acct)).toBeNull();
+
+    await E.DB.prepare("UPDATE devices SET app_version = '1.0.64+82' WHERE account_id = ?1 AND device_id = 'oldmac'")
+      .bind(acct).run();
+    await syncWeekSweep(KEYED);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits until the kept device is settled", async () => {
+    const { acct } = await account({ devices: [["pc", 10], ["phone", 60]] });
+    await E.DB.prepare("UPDATE accounts SET email = 'wait@x.com' WHERE account_id = ?1").bind(acct).run();
     await syncWeekSweep(KEYED);
     expect(fetchMock).not.toHaveBeenCalled();
   });
