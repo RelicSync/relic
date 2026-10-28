@@ -252,6 +252,8 @@ export async function pickSyncDevice(req: Request, env: Env, auth: Auth): Promis
     `SELECT a.sync_device, a.sync_device_at,
             (SELECT 1 FROM devices d WHERE d.account_id = a.account_id
                 AND d.device_id = ?2 AND d.revoked_at IS NULL) AS known,
+            (SELECT d.created_at FROM devices d WHERE d.account_id = a.account_id
+                AND d.device_id = ?2 AND d.revoked_at IS NULL) AS picked_made,
             (SELECT d.last_seen_at FROM devices d WHERE d.account_id = a.account_id
                 AND d.device_id = a.sync_device AND d.revoked_at IS NULL) AS kept_seen
        FROM accounts a WHERE a.account_id = ?1`,
@@ -259,6 +261,7 @@ export async function pickSyncDevice(req: Request, env: Env, auth: Auth): Promis
     sync_device: string | null;
     sync_device_at: number | null;
     known: number | null;
+    picked_made: number | null;
     kept_seen: number | null;
   }>();
   if (!row) return err(404, "not_found", "no account");
@@ -266,9 +269,12 @@ export async function pickSyncDevice(req: Request, env: Env, auth: Auth): Promis
   if (row.sync_device === id) return json({ ok: true, sync_device: id });
 
   const now = Math.floor(Date.now() / 1000);
-  // Moving off a device that is gone (removed, or not seen for a few days, like
-  // an old phone after a switch to a new one) is always allowed.
-  const keptQuiet = row.kept_seen === null || row.kept_seen < now - SYNC_KEPT_QUIET;
+  // Moving off a device that is gone is always allowed: removed, not seen for a
+  // few days, or last seen before the picked device was even added (a new or
+  // reinstalled phone replacing the kept one). Otherwise a fresh phone plus the
+  // weekly limit could leave nothing syncing for days.
+  const keptQuiet = row.kept_seen === null || row.kept_seen < now - SYNC_KEPT_QUIET ||
+    (row.picked_made !== null && row.kept_seen <= row.picked_made);
   if (
     auth.tier === "free" && !keptQuiet && row.sync_device_at !== null &&
     now - row.sync_device_at < SYNC_SWITCH_COOLDOWN

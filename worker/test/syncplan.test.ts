@@ -36,8 +36,8 @@ async function account(opts: {
   ).bind(acct, tier, now() - (opts.age ?? 8 * DAY), opts.syncUntil ?? null).run();
   for (const [id, ago, ver] of opts.devices ?? []) {
     await E.DB.prepare(
-      "INSERT INTO devices (account_id, device_id, platform, last_seen_at, app_version) VALUES (?1,?2,'windows',?3,?4)",
-    ).bind(acct, id, now() - ago, ver === undefined ? "1.0.64" : ver).run();
+      "INSERT INTO devices (account_id, device_id, platform, created_at, last_seen_at, app_version) VALUES (?1,?2,'windows',?5,?3,?4)",
+    ).bind(acct, id, now() - ago, ver === undefined ? "1.0.64" : ver, now() - (opts.age ?? 8 * DAY)).run(); // added at sign-up
   }
   return { acct, token };
 }
@@ -301,6 +301,30 @@ describe("switching away from a quiet device", () => {
     const r = await call(token, "POST", "/account/sync-device", { device: "newphone", body: { device_id: "newphone" } });
     expect(r.status).toBe(200);
     expect((await syncDevice(acct)).sync_device).toBe("newphone");
+  });
+});
+
+describe("switching to a new phone", () => {
+  it("is allowed at once when the kept phone was last seen before the new one was added", async () => {
+    const { acct, token } = await account({ devices: [["pc", 10], ["oldphone", DAY]] });
+    await E.DB.prepare("UPDATE accounts SET sync_device = 'oldphone', sync_device_at = ?2 WHERE account_id = ?1")
+      .bind(acct, now() - DAY).run();
+    // The reinstall registers a fresh id, added after the old phone went quiet.
+    await E.DB.prepare(
+      "INSERT INTO devices (account_id, device_id, platform, created_at, last_seen_at, app_version) VALUES (?1,'newphone','android',?2,?2,'1.0.64')",
+    ).bind(acct, now()).run();
+    expect((await call(token, "GET", "/relics", { device: "newphone" })).status).toBe(403);
+    const r = await call(token, "POST", "/account/sync-device", { device: "newphone", body: { device_id: "newphone" } });
+    expect(r.status).toBe(200);
+    expect((await call(token, "GET", "/relics", { device: "newphone" })).status).toBe(200);
+  });
+
+  it("still holds an existing device to the weekly limit", async () => {
+    const { acct, token } = await account({ devices: [["pc", 10], ["phone", 60]] });
+    await E.DB.prepare("UPDATE accounts SET sync_device = 'phone', sync_device_at = ?2 WHERE account_id = ?1")
+      .bind(acct, now() - DAY).run();
+    const r = await call(token, "POST", "/account/sync-device", { device: "pc", body: { device_id: "pc" } });
+    expect(r.status).toBe(429);
   });
 });
 
