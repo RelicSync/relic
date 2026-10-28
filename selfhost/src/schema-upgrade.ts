@@ -94,6 +94,13 @@ export const UPGRADES: ColumnUpgrade[] = [
     column: "sync_device_at",
     add: "ALTER TABLE accounts ADD COLUMN sync_device_at INTEGER",
   },
+  // worker/migrations/0015_sync_week_email.sql. Never written on self-host
+  // (no Resend key, rule off), added so the schemas stay the same shape.
+  {
+    table: "accounts",
+    column: "sync_email_at",
+    add: "ALTER TABLE accounts ADD COLUMN sync_email_at INTEGER",
+  },
 ];
 
 /// Apply every upgrade this database is missing. Returns the columns it added,

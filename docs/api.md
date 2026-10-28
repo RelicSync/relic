@@ -226,6 +226,11 @@ never paused.
   one is always allowed, and picking the current device does nothing. Works
   with the rule off too, so apps can pick ahead of launch.
 
+While the rule is on and a Resend key is set, the 6-hourly cron emails each
+free account once when its week ends and it still has two or more devices
+seen in the last 14 days: sync now runs on one device, how to pick it, and
+what Pro costs. `accounts.sync_email_at` records the send.
+
 ### Download link — `/account/send-download-link`
 - `POST /account/send-download-link` (no body) — mails the desktop download
   link to the signed-in identity's own address, for somebody who signed in on a

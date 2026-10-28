@@ -709,7 +709,7 @@ const NUDGE_EMAIL_BATCH = 50;
 /// again, which is what lets a fixed key heal the backlog by itself.
 const stampable = (ok: boolean, status: number): boolean => ok || status === 422;
 
-interface NudgeMail {
+export interface NudgeMail {
   subject: string;
   text: string;
   html: string;
@@ -717,7 +717,7 @@ interface NudgeMail {
 
 /// Posts one mail to Resend and reports whether the row may be stamped.
 /// Never throws: a nudge must not be able to fail the sweeps around it.
-async function sendNudgeMail(
+export async function sendNudgeMail(
   env: Env,
   evt: string,
   accountId: string,

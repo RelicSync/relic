@@ -15,6 +15,7 @@
 import type { Auth } from "./auth";
 import type { Env } from "./env";
 import { err, json } from "./http";
+import { type NudgeMail, sendNudgeMail } from "./stripe";
 
 export const SYNC_WEEK = 7 * 86400;
 export const SYNC_SWITCH_COOLDOWN = 7 * 86400;
@@ -181,4 +182,79 @@ export async function pickSyncDevice(req: Request, env: Env, auth: Auth): Promis
   ).bind(auth.account, id, now).run();
   forgetSyncPlan(auth.account);
   return json({ ok: true, sync_device: id });
+}
+
+// ---- the end-of-week email (cron) -------------------------------------------
+
+const SYNC_EMAIL_BATCH = 50;
+/// A device counts as in use if it synced within this long. Older devices are
+/// not paused in any way a person would notice, so they don't earn an email.
+const SYNC_EMAIL_ACTIVE = 14 * 86400;
+
+/// One email per free account, when its free week ends and it still uses two
+/// or more devices: sync now runs on one of them, how to pick which, and what
+/// Pro costs. Runs from the cron, only while the rule is on, and never on an
+/// account with a subscription. accounts.sync_email_at keeps it to one.
+///
+/// Accounts given extra time at launch have a later sync_until, so they get
+/// theirs when that runs out, not on switch day.
+export async function syncWeekSweep(env: Env): Promise<void> {
+  // Checked before any query: self-host has no Resend key and the rule off.
+  if (!syncPlanOn(env) || !env.RESEND_API_KEY) return;
+  const now = Math.floor(Date.now() / 1000);
+  const due = await env.DB.prepare(
+    `SELECT a.account_id, a.email
+       FROM accounts a
+      WHERE a.tier = 'free'
+        AND a.email IS NOT NULL
+        AND a.sync_email_at IS NULL
+        AND COALESCE(a.sync_until, a.created_at + ?1) <= ?2
+        AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.account_id = a.account_id)
+        AND (SELECT COUNT(*) FROM devices d
+              WHERE d.account_id = a.account_id AND d.revoked_at IS NULL
+                AND d.last_seen_at > ?3) >= 2
+      LIMIT ?4`,
+  ).bind(SYNC_WEEK, now, now - SYNC_EMAIL_ACTIVE, SYNC_EMAIL_BATCH)
+    .all<{ account_id: string; email: string }>();
+
+  for (const row of due.results ?? []) {
+    if (await sendNudgeMail(env, "sync_week_email", row.account_id, row.email, syncWeekMail())) {
+      await env.DB.prepare("UPDATE accounts SET sync_email_at = ?2 WHERE account_id = ?1")
+        .bind(row.account_id, now).run();
+    }
+  }
+}
+
+export function syncWeekMail(): NudgeMail {
+  const upgrade = "https://relic.space/upgrade?source=sync_week_email";
+  const help = "https://relic.space/help/how-sync-works";
+  return {
+    subject: "Relic now syncs one of your devices",
+    text:
+      "Your free week of sync on all your devices is over.\n\n" +
+      "The free plan syncs one device. Relic keeps syncing the first device " +
+      "that checked in after your week ended, and sync is paused on the " +
+      "others. Nothing is lost. Each device keeps everything it already has " +
+      "and keeps saving new things.\n\n" +
+      "To pick which device syncs, open Relic on it and choose \"Sync this " +
+      "device instead\". You can switch once a week.\n\n" +
+      "Pro syncs all your devices for $7 a month or $60 a year.\n\n" +
+      `${upgrade}\n\n` +
+      `More about how sync works: ${help}\n\n` +
+      "Reply to this email if anything is off.\n\n" +
+      "The Relic team",
+    html:
+      "<p>Your free week of sync on all your devices is over.</p>" +
+      "<p>The free plan syncs one device. Relic keeps syncing the first " +
+      "device that checked in after your week ended, and sync is paused on " +
+      "the others. Nothing is lost. Each device keeps everything it already " +
+      "has and keeps saving new things.</p>" +
+      "<p>To pick which device syncs, open Relic on it and choose \"Sync this " +
+      "device instead\". You can switch once a week.</p>" +
+      "<p>Pro syncs all your devices for $7 a month or $60 a year.</p>" +
+      `<p><a href="${upgrade}">Get Pro</a></p>` +
+      `<p><a href="${help}">More about how sync works</a></p>` +
+      "<p>Reply to this email if anything is off.</p>" +
+      "<p>The Relic team</p>",
+  };
 }
