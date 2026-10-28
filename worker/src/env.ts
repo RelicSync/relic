@@ -82,6 +82,10 @@ export interface Env {
   // Free plan sync rule: "on" pauses sync on every device but one once a free
   // account's first week is over (see src/syncplan.ts). Unset/"off" disables it.
   SYNC_PLAN_GATE?: string; // var, "on" | "off"
+  // Unix seconds the rule starts. Only accounts made at or after it, with no
+  // device registered before it, are under the rule; everyone older keeps
+  // syncing every device. Unset = the rule reaches nobody, even when on.
+  SYNC_PLAN_SINCE?: string; // secret
 }
 
 // The minimal, idempotent envelope we put on the billing queue (and also build

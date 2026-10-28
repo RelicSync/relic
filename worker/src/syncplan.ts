@@ -12,6 +12,11 @@
 // Off by default so the server can ship before the apps that explain the 403.
 // Self-host never sets the flag.
 //
+// Only accounts made since the rule started (env.SYNC_PLAN_SINCE) are under
+// it. An account counts as older when its row or any device it ever had
+// predates that, because rows are made lazily (auth.ts), so an older user
+// signing in for the first time in a while can get a brand new row.
+//
 // Only apps that can explain a pause are ever paused: a device whose recorded
 // app version is older than SYNC_PAUSE_MIN_VERSION, or unknown (the web vault,
 // legacy clients, a request with no device id), keeps syncing. Old installs
@@ -25,6 +30,8 @@ import { type NudgeMail, sendNudgeMail } from "./stripe";
 
 export const SYNC_WEEK = 7 * 86400;
 export const SYNC_SWITCH_COOLDOWN = 7 * 86400;
+/** A kept device not seen for this long can be switched away from at once. */
+export const SYNC_KEPT_QUIET = 3 * 86400;
 /** The first app release that explains sync_paused (banner, "Sync this device
  *  instead"). Older apps are never paused. */
 export const SYNC_PAUSE_MIN_VERSION = "1.0.64";
@@ -47,29 +54,62 @@ export function canExplainPause(v: string | null | undefined): boolean {
   return true;
 }
 
+/// A device counts for the rule only when its app can explain a pause and it
+/// was seen within this long. Every other device is invisible to the rule:
+/// never paused, never counted, never kept. That covers old apps, the web
+/// vault, and device ids left behind by a reinstall or a lost phone, so none of
+/// them can hold the one syncing slot.
+export const SYNC_ACTIVE = 14 * 86400;
+
+export interface PlanDevice {
+  id: string;
+  /** Recorded app version (null = never reported). */
+  version: string | null;
+  lastSeen: number;
+}
+
 export interface SyncPlan {
   /** Unix seconds free multi-device sync ends. Null = no limit (paid, flag
    *  off, or no account row). */
   syncUntil: number | null;
-  /** The device that keeps syncing once the week is over. Null until the
-   *  first time the rule applies, or when it is not in force. */
+  /** The device that keeps syncing once the week is over. Only ever a device
+   *  that counts. Null until the first time the rule applies, or when it is
+   *  not in force. */
   syncDevice: string | null;
   /** Unix seconds the user last picked the device by hand. Null = never. */
   syncDeviceAt: number | null;
   /** Active (non-revoked) devices on the account. */
-  devices: number;
-  /** Recorded app version per active device id (null = never reported). */
-  versions: Record<string, string | null>;
+  devices: PlanDevice[];
 }
 
-const NO_LIMIT: SyncPlan = { syncUntil: null, syncDevice: null, syncDeviceAt: null, devices: 0, versions: {} };
+const NO_LIMIT: SyncPlan = { syncUntil: null, syncDevice: null, syncDeviceAt: null, devices: [] };
 
 export const syncPlanOn = (env: Env) => env.SYNC_PLAN_GATE === "on";
 
+/** When the rule started, or null when env.SYNC_PLAN_SINCE is unset or junk
+ *  (then the rule reaches nobody). */
+export function syncPlanSince(env: Env): number | null {
+  const n = Number(env.SYNC_PLAN_SINCE);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}
+
+const counts = (d: PlanDevice | undefined, now: number): boolean =>
+  !!d && canExplainPause(d.version) && d.lastSeen > now - SYNC_ACTIVE;
+
+/** Whether the calling device counts. It is live by definition, so only its
+ *  version matters: the request's own X-Relic-App-Version or the recorded one,
+ *  whichever is new enough. Taking either means an app that just updated counts
+ *  at once, and a client can't dodge the rule by sending an old version. A
+ *  device id the account doesn't have never counts. */
+function callerCounts(plan: SyncPlan, device: string | undefined, appVersion: string | null | undefined): boolean {
+  const d = device ? plan.devices.find((x) => x.id === device) : undefined;
+  return !!d && (canExplainPause(appVersion) || canExplainPause(d.version));
+}
+
 // One D1 read per data-plane request would be a lot for a rule that changes a
 // few times in an account's life, so warm isolates keep the plan for a minute.
-// A pick through POST /account/sync-device clears this isolate's copy; another
-// isolate can be up to CACHE_S behind, which only delays a switch.
+// A pick, a new device and a removed device clear this isolate's copy; another
+// isolate can be up to CACHE_S behind, which only delays a change.
 const CACHE_S = 60;
 const cache = new Map<string, { at: number; plan: SyncPlan }>();
 
@@ -78,83 +118,94 @@ export function forgetSyncPlan(account: string) {
 }
 
 /** The account's sync plan. Paid tiers, a disabled gate and an account with no
- *  row all come back as "no limit". */
-export async function readSyncPlan(env: Env, auth: Auth): Promise<SyncPlan> {
-  if (!syncPlanOn(env) || auth.tier !== "free") return NO_LIMIT;
+ *  row all come back as "no limit". `appVersion` is the request's
+ *  X-Relic-App-Version. */
+export async function readSyncPlan(env: Env, auth: Auth, appVersion?: string | null): Promise<SyncPlan> {
+  const since = syncPlanSince(env);
+  if (!syncPlanOn(env) || since === null || auth.tier !== "free") return NO_LIMIT;
   const now = Math.floor(Date.now() / 1000);
   const hit = cache.get(auth.account);
   if (hit && hit.at > now - CACHE_S) return hit.plan;
 
   const row = await env.DB.prepare(
-    `SELECT a.created_at, a.sync_until, a.sync_device, a.sync_device_at,
-            (SELECT COUNT(*) FROM devices d
-              WHERE d.account_id = a.account_id AND d.revoked_at IS NULL) AS n,
-            (SELECT 1 FROM devices d
-              WHERE d.account_id = a.account_id AND d.device_id = a.sync_device
-                AND d.revoked_at IS NULL) AS kept,
-            (SELECT 1 FROM devices d
-              WHERE d.account_id = a.account_id AND d.device_id = ?2
-                AND d.revoked_at IS NULL) AS mine,
-            (SELECT d.device_id FROM devices d
-              WHERE d.account_id = a.account_id AND d.revoked_at IS NULL
-              ORDER BY d.last_seen_at DESC LIMIT 1) AS latest
-       FROM accounts a WHERE a.account_id = ?1`,
-  ).bind(auth.account, auth.device ?? null).first<{
+    "SELECT created_at, sync_until, sync_device, sync_device_at FROM accounts WHERE account_id = ?1",
+  ).bind(auth.account).first<{
     created_at: number;
     sync_until: number | null;
     sync_device: string | null;
     sync_device_at: number | null;
-    n: number;
-    kept: number | null;
-    mine: number | null;
-    latest: string | null;
   }>();
   if (!row) return NO_LIMIT; // legacy token with no account row: grandfathered
 
-  // A free account has at most a handful of devices.
+  // A free account has at most a handful of devices. Removed ones are read too,
+  // for the age check below.
   const devs = await env.DB.prepare(
-    "SELECT device_id, app_version FROM devices WHERE account_id = ?1 AND revoked_at IS NULL",
-  ).bind(auth.account).all<{ device_id: string; app_version: string | null }>();
-  const versions: Record<string, string | null> = {};
-  for (const d of devs.results ?? []) versions[d.device_id] = d.app_version;
+    "SELECT device_id, app_version, last_seen_at, created_at, revoked_at FROM devices WHERE account_id = ?1",
+  ).bind(auth.account).all<{
+    device_id: string;
+    app_version: string | null;
+    last_seen_at: number | null;
+    created_at: number | null;
+    revoked_at: number | null;
+  }>();
+  const all = devs.results ?? [];
+  // Made before the rule started: never under it. A missing date counts as old.
+  if (row.created_at < since || all.some((d) => !(Number(d.created_at) >= since))) {
+    cache.set(auth.account, { at: now, plan: NO_LIMIT });
+    return NO_LIMIT;
+  }
 
   const until = row.sync_until ?? row.created_at + SYNC_WEEK;
   const plan: SyncPlan = {
     syncUntil: until,
-    syncDevice: row.kept ? row.sync_device : null,
-    syncDeviceAt: row.kept ? row.sync_device_at : null,
-    devices: Number(row.n) || 0,
-    versions,
+    syncDevice: null,
+    syncDeviceAt: null,
+    devices: all.filter((d) => d.revoked_at === null).map((d) => ({
+      id: d.device_id,
+      version: d.app_version,
+      lastSeen: Number(d.last_seen_at) || 0,
+    })),
   };
+  const mine = callerCounts(plan, auth.device, appVersion);
+  const kept = row.sync_device;
+  if (kept && (counts(plan.devices.find((d) => d.id === kept), now) || (kept === auth.device && mine))) {
+    plan.syncDevice = kept;
+    plan.syncDeviceAt = row.sync_device_at;
+  }
 
-  // Past the week with no live pick: settle one now and write it down, so the
-  // choice never drifts after this. The first device to sync after the week
-  // keeps syncing. That is usually the computer, which checks in all day while
-  // a phone only does when it is opened. "Most recently seen" cannot be used
-  // here: touchDevice() stamps the calling device just before this runs, so it
-  // would name the caller anyway, only less predictably. A request with no
-  // device id falls back to the most recently seen device. The user can change
-  // the pick once for free. The WHERE keeps a concurrent pick from being
-  // overwritten; the re-read takes whichever pick won.
-  const pick = row.mine ? auth.device! : row.latest;
-  if (now >= until && plan.syncDevice === null && pick) {
-    await env.DB.prepare(
-      `UPDATE accounts SET sync_device = ?2, sync_device_at = NULL
-        WHERE account_id = ?1 AND (sync_device IS NULL OR sync_device = ?3)`,
-    ).bind(auth.account, pick, row.sync_device).run();
-    const won = await env.DB.prepare("SELECT sync_device FROM accounts WHERE account_id = ?1")
-      .bind(auth.account).first<{ sync_device: string | null }>();
-    plan.syncDevice = won?.sync_device ?? pick;
-    plan.syncDeviceAt = null;
+  // Past the week with no kept device that counts: settle one now and write it
+  // down, so the choice doesn't drift. The first counting device to sync after
+  // the week keeps syncing. That is usually the computer, which checks in all
+  // day while a phone only does when it is opened. A caller that doesn't count
+  // (old app, web vault, no device id) hands the slot to the most recently seen
+  // device that does. A kept device that stopped counting (removed, gone quiet
+  // for SYNC_ACTIVE, or never new enough) is replaced the same way, so a lost
+  // phone can't leave the only real device paused. An automatic pick leaves
+  // sync_device_at NULL, so the user's next pick is free. The WHERE keeps a
+  // concurrent pick from being overwritten; the re-read takes whichever won.
+  if (now >= until && plan.syncDevice === null) {
+    const pick = mine
+      ? auth.device!
+      : plan.devices.filter((d) => counts(d, now)).sort((a, b) => b.lastSeen - a.lastSeen)[0]?.id;
+    if (pick) {
+      await env.DB.prepare(
+        `UPDATE accounts SET sync_device = ?2, sync_device_at = NULL
+          WHERE account_id = ?1 AND (sync_device IS NULL OR sync_device = ?3)`,
+      ).bind(auth.account, pick, kept).run();
+      const won = await env.DB.prepare("SELECT sync_device, sync_device_at FROM accounts WHERE account_id = ?1")
+        .bind(auth.account).first<{ sync_device: string | null; sync_device_at: number | null }>();
+      plan.syncDevice = won?.sync_device ?? pick;
+      plan.syncDeviceAt = won?.sync_device === pick ? null : (won?.sync_device_at ?? null);
+    }
   }
 
   cache.set(auth.account, { at: now, plan });
   return plan;
 }
 
-/** True when this request's device may not sync under the plan.
- *  `appVersion` is the request's X-Relic-App-Version, which is fresher than the
- *  recorded one when an app has just updated. */
+/** True when this request's device may not sync under the plan. Only a device
+ *  that counts is ever paused (see SYNC_ACTIVE and callerCounts), and only when
+ *  a different device that counts holds the slot. */
 export function isSyncPaused(
   plan: SyncPlan,
   device: string | undefined,
@@ -162,13 +213,11 @@ export function isSyncPaused(
   now = Math.floor(Date.now() / 1000),
 ): boolean {
   if (plan.syncUntil === null || now < plan.syncUntil) return false;
-  if (plan.devices <= 1) return false; // one device is the free plan
-  // A request that does not say which device it is can't be matched to a
+  // A request that doesn't say which device it is can't be matched to a
   // version, so it can't be shown why it stopped. Leave it syncing.
-  if (!device) return false;
-  if (device === plan.syncDevice) return false;
-  // Only apps that explain the pause are paused (see the top of this file).
-  return canExplainPause(appVersion || plan.versions[device]);
+  if (!device || !callerCounts(plan, device, appVersion)) return false;
+  if (!plan.syncDevice || device === plan.syncDevice) return false;
+  return true;
 }
 
 /** The 403 a paused device gets. Carries what the app needs to draw its
@@ -202,19 +251,28 @@ export async function pickSyncDevice(req: Request, env: Env, auth: Auth): Promis
   const row = await env.DB.prepare(
     `SELECT a.sync_device, a.sync_device_at,
             (SELECT 1 FROM devices d WHERE d.account_id = a.account_id
-                AND d.device_id = ?2 AND d.revoked_at IS NULL) AS known
+                AND d.device_id = ?2 AND d.revoked_at IS NULL) AS known,
+            (SELECT d.last_seen_at FROM devices d WHERE d.account_id = a.account_id
+                AND d.device_id = a.sync_device AND d.revoked_at IS NULL) AS kept_seen
        FROM accounts a WHERE a.account_id = ?1`,
   ).bind(auth.account, id).first<{
     sync_device: string | null;
     sync_device_at: number | null;
     known: number | null;
+    kept_seen: number | null;
   }>();
   if (!row) return err(404, "not_found", "no account");
   if (!row.known) return err(404, "not_found", "unknown or removed device");
   if (row.sync_device === id) return json({ ok: true, sync_device: id });
 
   const now = Math.floor(Date.now() / 1000);
-  if (auth.tier === "free" && row.sync_device_at !== null && now - row.sync_device_at < SYNC_SWITCH_COOLDOWN) {
+  // Moving off a device that is gone (removed, or not seen for a few days, like
+  // an old phone after a switch to a new one) is always allowed.
+  const keptQuiet = row.kept_seen === null || row.kept_seen < now - SYNC_KEPT_QUIET;
+  if (
+    auth.tier === "free" && !keptQuiet && row.sync_device_at !== null &&
+    now - row.sync_device_at < SYNC_SWITCH_COOLDOWN
+  ) {
     const retryAt = row.sync_device_at + SYNC_SWITCH_COOLDOWN;
     return json(
       {
@@ -236,9 +294,6 @@ export async function pickSyncDevice(req: Request, env: Env, auth: Auth): Promis
 
 const SYNC_EMAIL_BATCH = 50;
 const SYNC_EMAIL_SCAN = 1000;
-/// A device counts as in use if it synced within this long. Older devices are
-/// not paused in any way a person would notice, so they don't earn an email.
-const SYNC_EMAIL_ACTIVE = 14 * 86400;
 
 /// One email per free account, when its free week ends and it still uses two
 /// or more devices: sync now runs on one of them, how to pick which, and what
@@ -249,35 +304,49 @@ const SYNC_EMAIL_ACTIVE = 14 * 86400;
 /// theirs when that runs out, not on switch day.
 export async function syncWeekSweep(env: Env): Promise<void> {
   // Checked before any query: self-host has no Resend key and the rule off.
-  if (!syncPlanOn(env) || !env.RESEND_API_KEY) return;
+  const since = syncPlanSince(env);
+  if (!syncPlanOn(env) || since === null || !env.RESEND_API_KEY) return;
   const now = Math.floor(Date.now() / 1000);
   // Only accounts where a device is really paused: the kept device is settled
-  // (the first sync after the week does that) and another device in use runs
-  // an app that the rule pauses. An account whose other devices are all on old
-  // apps is not paused anywhere, so it gets nothing, and stays a candidate in
-  // case one of them updates. The SQL over-fetches so that those accounts
-  // can't fill the batch.
+  // and counts, and another device that counts (new enough app, seen within
+  // SYNC_ACTIVE) is in use. The SQL narrows to accounts with a kept device and
+  // some other recent device that reported a version; the version check itself
+  // runs here. Accounts it drops stay unstamped, so they are looked at again,
+  // in case an old app updates. random() keeps them from filling the scan
+  // window every run. No subscription check: an account that paid and lapsed
+  // is free again and is paused like any other.
   const due = await env.DB.prepare(
     `SELECT a.account_id, a.email,
-            (SELECT group_concat(COALESCE(d.app_version, ''), '|') FROM devices d
+            (SELECT d.app_version FROM devices d
+              WHERE d.account_id = a.account_id AND d.device_id = a.sync_device) AS kept,
+            (SELECT group_concat(d.app_version, '|') FROM devices d
               WHERE d.account_id = a.account_id AND d.revoked_at IS NULL
-                AND d.last_seen_at > ?3 AND d.device_id <> a.sync_device) AS others
+                AND d.last_seen_at > ?3 AND d.device_id <> a.sync_device
+                AND d.app_version IS NOT NULL) AS others
        FROM accounts a
       WHERE a.tier = 'free'
         AND a.email IS NOT NULL
         AND a.sync_email_at IS NULL
         AND a.sync_device IS NOT NULL
         AND COALESCE(a.sync_until, a.created_at + ?1) <= ?2
-        AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.account_id = a.account_id)
+        AND a.created_at >= ?5
+        AND NOT EXISTS (SELECT 1 FROM devices d
+              WHERE d.account_id = a.account_id
+                AND (d.created_at IS NULL OR d.created_at < ?5))
         AND EXISTS (SELECT 1 FROM devices d
               WHERE d.account_id = a.account_id AND d.device_id = a.sync_device
-                AND d.revoked_at IS NULL)
+                AND d.revoked_at IS NULL AND d.last_seen_at > ?3)
+        AND EXISTS (SELECT 1 FROM devices d
+              WHERE d.account_id = a.account_id AND d.revoked_at IS NULL
+                AND d.last_seen_at > ?3 AND d.device_id <> a.sync_device
+                AND d.app_version IS NOT NULL)
+      ORDER BY random()
       LIMIT ?4`,
-  ).bind(SYNC_WEEK, now, now - SYNC_EMAIL_ACTIVE, SYNC_EMAIL_SCAN)
-    .all<{ account_id: string; email: string; others: string | null }>();
+  ).bind(SYNC_WEEK, now, now - SYNC_ACTIVE, SYNC_EMAIL_SCAN, since)
+    .all<{ account_id: string; email: string; kept: string | null; others: string | null }>();
 
   const paused = (due.results ?? [])
-    .filter((r) => (r.others ?? "").split("|").some(canExplainPause))
+    .filter((r) => canExplainPause(r.kept) && (r.others ?? "").split("|").some(canExplainPause))
     .slice(0, SYNC_EMAIL_BATCH);
   for (const row of paused) {
     if (await sendNudgeMail(env, "sync_week_email", row.account_id, row.email, syncWeekMail())) {
@@ -298,8 +367,8 @@ export function syncWeekMail(): NudgeMail {
       "that checked in after your week ended, and sync is paused on the " +
       "others. Nothing is lost. Each device keeps everything it already has " +
       "and keeps saving new things.\n\n" +
-      "To pick which device syncs, open Relic on it and choose \"Sync this " +
-      "device instead\". You can switch once a week.\n\n" +
+      "To pick which device syncs, open Relic on it and choose \"Sync this PC " +
+      "instead\" (or this Mac, or this phone). You can switch once a week.\n\n" +
       "Pro syncs all your devices for $7 a month or $60 a year.\n\n" +
       `${upgrade}\n\n` +
       `More about how sync works: ${help}\n\n` +
@@ -311,8 +380,8 @@ export function syncWeekMail(): NudgeMail {
       "device that checked in after your week ended, and sync is paused on " +
       "the others. Nothing is lost. Each device keeps everything it already " +
       "has and keeps saving new things.</p>" +
-      "<p>To pick which device syncs, open Relic on it and choose \"Sync this " +
-      "device instead\". You can switch once a week.</p>" +
+      "<p>To pick which device syncs, open Relic on it and choose \"Sync this PC " +
+      "instead\" (or this Mac, or this phone). You can switch once a week.</p>" +
       "<p>Pro syncs all your devices for $7 a month or $60 a year.</p>" +
       `<p><a href="${upgrade}">Get Pro</a></p>` +
       `<p><a href="${help}">More about how sync works</a></p>` +

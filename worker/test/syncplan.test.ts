@@ -9,7 +9,8 @@ import { setupSchema, sha256Hex } from "./helpers";
 
 // deno-lint-ignore no-explicit-any
 const E = env as any;
-const ON = { ...E, SYNC_PLAN_GATE: "on" };
+// The rule started a year ago, so every account a test makes is under it.
+const ON = { ...E, SYNC_PLAN_GATE: "on", SYNC_PLAN_SINCE: String(Math.floor(Date.now() / 1000) - 365 * 86400) };
 const now = () => Math.floor(Date.now() / 1000);
 const DAY = 86400;
 
@@ -148,11 +149,83 @@ describe("free plan sync rule", () => {
     expect(r.status).toBe(403);
   });
 
-  it("keeps an old kept device syncing and still pauses a new second device", async () => {
+  it("never gives the slot to an old app, so an old PC and a new phone both sync", async () => {
     const { acct, token } = await account({ devices: [["oldpc", 10, "1.0.48"], ["phone", 60]] });
     expect((await call(token, "GET", "/relics", { device: "oldpc" })).status).toBe(200);
-    expect((await syncDevice(acct)).sync_device).toBe("oldpc");
+    expect((await syncDevice(acct)).sync_device).toBe("phone");
+    expect((await call(token, "GET", "/relics", { device: "phone" })).status).toBe(200);
+  });
+
+  it("never lets the web vault take the slot from the only app", async () => {
+    const { acct, token } = await account({ devices: [["web", 10, null], ["phone", 3 * DAY]] });
+    expect((await call(token, "GET", "/relics", { device: "web" })).status).toBe(200);
+    expect((await syncDevice(acct)).sync_device).toBe("phone");
+    expect((await call(token, "GET", "/relics", { device: "phone" })).status).toBe(200);
+  });
+
+  it("replaces a kept device that has gone quiet, so a reinstalled phone syncs", async () => {
+    const { acct, token } = await account({ devices: [["oldid", 40 * DAY], ["newid", 60]] });
+    await E.DB.prepare("UPDATE accounts SET sync_device = 'oldid', sync_device_at = ?2 WHERE account_id = ?1")
+      .bind(acct, now() - 40 * DAY).run();
+    expect((await call(token, "GET", "/relics", { device: "newid" })).status).toBe(200);
+    expect(await syncDevice(acct)).toEqual({ sync_device: "newid", sync_device_at: null });
+  });
+
+  it("can't be dodged by sending an old version header", async () => {
+    const { token } = await account({ devices: [["pc", 10], ["phone", 60]] });
+    await call(token, "GET", "/relics", { device: "pc" }); // settle the pick
+    const r = await call(token, "GET", "/relics", { device: "phone", headers: { "X-Relic-App-Version": "1.0.0" } });
+    expect(r.status).toBe(403);
+  });
+
+  it("reaches nobody when SYNC_PLAN_SINCE is unset", async () => {
+    const { token } = await account({ devices: [["pc", 10], ["phone", 60]] });
+    const env = { ...ON, SYNC_PLAN_SINCE: undefined };
+    await call(token, "GET", "/relics", { device: "pc", env });
+    expect((await call(token, "GET", "/relics", { device: "phone", env })).status).toBe(200);
+    const a = await (await call(token, "GET", "/account", { device: "phone", env })).json();
+    expect(a).toMatchObject({ sync_until: null, sync_paused: false });
+  });
+
+  it("leaves accounts from before the rule started alone, even with a new row", async () => {
+    const since = now() - 2 * DAY;
+    const env = { ...ON, SYNC_PLAN_SINCE: String(since) };
+    const older = await account({ age: 30 * DAY, devices: [["pc", 10], ["phone", 60]] });
+    // A row made lazily after the start, for a user whose device predates it.
+    const lazy = await account({ age: 10 * DAY, devices: [["pc", 10], ["phone", 60]] });
+    await E.DB.prepare("UPDATE accounts SET created_at = ?2 WHERE account_id = ?1").bind(lazy.acct, now() - DAY).run();
+    await E.DB.prepare("UPDATE accounts SET sync_until = ?2 WHERE account_id = ?1").bind(lazy.acct, now() - 60).run();
+    await E.DB.prepare("UPDATE devices SET created_at = ?2 WHERE account_id = ?1 AND device_id = 'pc'")
+      .bind(lazy.acct, since - DAY).run();
+    for (const { token } of [older, lazy]) {
+      await call(token, "GET", "/relics", { device: "pc", env });
+      expect((await call(token, "GET", "/relics", { device: "phone", env })).status).toBe(200);
+    }
+  });
+
+  it("keeps /keyparams open on a paused device, so it can sign back in", async () => {
+    const { token } = await account({ devices: [["pc", 10], ["phone", 60]] });
+    await call(token, "GET", "/relics", { device: "pc" }); // settle the pick
     expect((await call(token, "GET", "/relics", { device: "phone" })).status).toBe(403);
+    expect((await call(token, "GET", "/keyparams", { device: "phone" })).status).not.toBe(403);
+  });
+
+  it("checks D1 before refusing, so a pick made elsewhere lands at once", async () => {
+    const { acct, token } = await account({ devices: [["pc", 10], ["phone", 60]] });
+    await call(token, "GET", "/relics", { device: "pc" }); // settle the pick, cache it
+    // Another isolate handled "Sync this phone instead".
+    await E.DB.prepare("UPDATE accounts SET sync_device = 'phone', sync_device_at = ?2 WHERE account_id = ?1")
+      .bind(acct, now()).run();
+    expect((await call(token, "GET", "/relics", { device: "phone" })).status).toBe(200);
+  });
+
+  it("frees the slot at once when the kept device is removed", async () => {
+    const { token } = await account({ devices: [["pc", 10], ["phone", 60]] });
+    await call(token, "GET", "/relics", { device: "pc" }); // settle the pick
+    expect((await call(token, "GET", "/relics", { device: "phone" })).status).toBe(403);
+    const del = await call(token, "DELETE", "/account/devices/pc", { device: "phone" });
+    expect(del.status).toBeLessThan(300);
+    expect((await call(token, "GET", "/relics", { device: "phone" })).status).toBe(200);
   });
 
   it("covers writes, blobs and the doorbell as well as reads", async () => {
@@ -217,6 +290,17 @@ describe("free plan sync rule", () => {
       .bind(acct).run();
     expect((await call(token, "GET", "/relics", { device: "pc" })).status).toBe(200);
     expect((await syncDevice(acct)).sync_device).toBe("pc");
+  });
+});
+
+describe("switching away from a quiet device", () => {
+  it("skips the weekly limit when the kept device hasn't been seen for days", async () => {
+    const { acct, token } = await account({ devices: [["oldphone", 4 * DAY], ["newphone", 60]] });
+    await E.DB.prepare("UPDATE accounts SET sync_device = 'oldphone', sync_device_at = ?2 WHERE account_id = ?1")
+      .bind(acct, now() - DAY).run();
+    const r = await call(token, "POST", "/account/sync-device", { device: "newphone", body: { device_id: "newphone" } });
+    expect(r.status).toBe(200);
+    expect((await syncDevice(acct)).sync_device).toBe("newphone");
   });
 });
 
@@ -340,6 +424,33 @@ describe("end-of-week email (syncWeekSweep)", () => {
       .bind(acct).run();
     await syncWeekSweep(KEYED);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("mails an account that paid and lapsed back to free", async () => {
+    const { acct } = await account({ devices: [["pc", 10], ["phone", 60]] });
+    await withEmail(acct, "lapsed@x.com");
+    await E.DB.prepare("INSERT INTO subscriptions (account_id) VALUES (?1)").bind(acct).run();
+    await syncWeekSweep(KEYED);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("isn't held up by one-device accounts", async () => {
+    for (let i = 0; i < 5; i++) {
+      const lone = await account({ devices: [["pc", 10]] });
+      await withEmail(lone.acct, `lone${i}@x.com`);
+    }
+    const { acct } = await account({ devices: [["pc", 10], ["phone", 60]] });
+    await withEmail(acct, "two@x.com");
+    await syncWeekSweep(KEYED);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(await stamp(acct)).toBeGreaterThan(0);
+  });
+
+  it("skips accounts from before the rule started", async () => {
+    const { acct } = await account({ age: 30 * DAY, devices: [["pc", 10], ["phone", 60]] });
+    await withEmail(acct, "early@x.com");
+    await syncWeekSweep({ ...KEYED, SYNC_PLAN_SINCE: String(now() - 2 * DAY) });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("waits until the kept device is settled", async () => {

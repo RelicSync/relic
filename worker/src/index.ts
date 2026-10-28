@@ -44,7 +44,7 @@ import {
 import { sweepAbandonedMpus, sweepOrphanBlobs, sweepTombstones } from "./sweep";
 import { claimAi, listAi, putAi, releaseAi } from "./ai";
 import { pokeSync, SyncSocket } from "./notify";
-import { isSyncPaused, pickSyncDevice, readSyncPlan, syncPausedResponse, syncWeekSweep } from "./syncplan";
+import { forgetSyncPlan, isSyncPaused, pickSyncDevice, readSyncPlan, syncPausedResponse, syncWeekSweep } from "./syncplan";
 
 // Re-exported so Wrangler can bind the Durable Object class (it must be exported
 // from the Worker's main module).
@@ -542,10 +542,21 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
     // open the phone would still receive the computer's items, which is half of
     // sync. Sits after the limiter so a paused client that keeps retrying is
     // throttled before it costs a D1 read. See src/syncplan.ts.
-    if (isDataPlane(path) || path === "/sync/socket") {
-      const plan = await readSyncPlan(env, auth);
-      if (isSyncPaused(plan, auth.device, req.headers.get("X-Relic-App-Version"))) {
-        return syncPausedResponse(plan, await listDevices(env, auth.account, auth.device));
+    // /keyparams stays open: sign-in reads it to find the vault, and a paused
+    // device has to be able to sign back in.
+    if ((isDataPlane(path) && path !== "/keyparams") || path === "/sync/socket") {
+      const appVer = req.headers.get("X-Relic-App-Version");
+      let plan = await readSyncPlan(env, auth, appVer);
+      if (isSyncPaused(plan, auth.device, appVer)) {
+        // This isolate's copy can be up to a minute old, for example just after
+        // "Sync this device instead" landed on another isolate. Check D1 before
+        // refusing. Paused clients only retry every few minutes, so this read
+        // is rare.
+        forgetSyncPlan(auth.account);
+        plan = await readSyncPlan(env, auth, appVer);
+        if (isSyncPaused(plan, auth.device, appVer)) {
+          return syncPausedResponse(plan, await listDevices(env, auth.account, auth.device));
+        }
       }
     }
 
@@ -764,6 +775,7 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
            last_seen_at = excluded.last_seen_at, revoked_at = NULL,
            app_version = COALESCE(excluded.app_version, app_version)`,
       ).bind(auth.account, b.device_id, b.label ?? null, b.platform ?? null, now, appVer).run();
+      forgetSyncPlan(auth.account); // a new device or version changes who syncs
       // Re-registering heals a prior hard-revoke (a legitimate re-pair).
       if (env.PAIR) await env.PAIR.delete(revKey(auth.account, b.device_id));
       return json({ ok: true });
@@ -812,6 +824,7 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
       await env.DB.prepare(
         "UPDATE devices SET revoked_at = ?3 WHERE account_id = ?1 AND device_id = ?2",
       ).bind(auth.account, devMatch[1], removedAt).run();
+      forgetSyncPlan(auth.account); // removing the kept device frees the slot now
       if (revoked === "ok") {
         // MAX() so two removals racing can never walk the watermark backwards.
         // A plain UPDATE, deliberately never an upsert: an upsert would create
@@ -851,7 +864,7 @@ async function route(req: Request, env: Env, ctx?: ExecutionContext): Promise<Re
     if (path === "/account" && req.method === "GET") {
       const caps = TIERS[auth.tier];
       const usage = await readUsage(env, auth.account);
-      const plan = await readSyncPlan(env, auth);
+      const plan = await readSyncPlan(env, auth, req.headers.get("X-Relic-App-Version"));
       const ring = caps.ring === null
         ? null
         : ringCap(auth.tier, await accountCreatedAt(env.DB, auth.account));
