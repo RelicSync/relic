@@ -33,8 +33,9 @@ your own, stores ciphertext and a small set of plaintext envelope fields.
 
 - **A compromised or hostile server** yields ciphertext, plus metadata: item
   ids, timestamps, byte sizes, which items you marked as kept, device count,
-  tier, and (on the hosted service) your account email. It does not yield any
-  content. The full plaintext field list is in
+  each device's label, platform and app version, tier, and (on the hosted
+  service) your account email. On desktop the device label defaults to the
+  computer's hostname until you rename it. It does not yield any content. The full plaintext field list is in
   [`docs/wire-format.md`](./docs/wire-format.md), stated field by field with the
   reason the server needs each one.
 - **A stolen backup or a subpoena** produces the same thing: sealed bytes. There
@@ -81,6 +82,12 @@ your own, stores ciphertext and a small set of plaintext envelope fields.
 These are not negotiable at runtime and are not configurable in the client. The
 format version gates any future change. Full specification:
 [`docs/crypto.md`](./docs/crypto.md).
+
+## Audit status
+
+Relic has not had an independent security audit. The code, the pinned
+parameters above and the test vectors below are public so anyone can check
+them.
 
 ## Verify it yourself
 
