@@ -1,10 +1,10 @@
 // The free plan sync rule (src/syncplan.ts): one device keeps syncing once a
 // free account's first week is over; the rest get 403 sync_paused.
 import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src/index";
-import { SYNC_SWITCH_COOLDOWN, SYNC_WEEK } from "../src/syncplan";
+import { SYNC_SWITCH_COOLDOWN, SYNC_WEEK, syncWeekSweep } from "../src/syncplan";
 import { setupSchema, sha256Hex } from "./helpers";
 
 // deno-lint-ignore no-explicit-any
@@ -235,5 +235,67 @@ describe("POST /account/sync-device", () => {
     const r = await call(token, "POST", "/account/sync-device", { body: { device_id: "phone" }, env: E });
     expect(r.status).toBe(200);
     expect((await syncDevice(acct)).sync_device).toBe("phone");
+  });
+});
+
+describe("end-of-week email (syncWeekSweep)", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const KEYED = { ...ON, RESEND_API_KEY: "re_test" };
+  const stamp = async (acct: string) =>
+    ((await E.DB.prepare("SELECT sync_email_at FROM accounts WHERE account_id = ?1").bind(acct).first()) as {
+      sync_email_at: number | null;
+    }).sync_email_at;
+  async function withEmail(acct: string, email: string | null) {
+    await E.DB.prepare("UPDATE accounts SET email = ?2 WHERE account_id = ?1").bind(acct, email).run();
+  }
+
+  it("mails a free account past its week that uses two devices, once", async () => {
+    const { acct } = await account({ devices: [["pc", 10], ["phone", 3 * DAY]] });
+    await withEmail(acct, "two@x.com");
+    await syncWeekSweep(KEYED);
+    await syncWeekSweep(KEYED);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.to).toBe("two@x.com");
+    expect(sent.subject).toBe("Relic now syncs one of your devices");
+    expect(sent.text).toContain("https://relic.space/upgrade?source=sync_week_email");
+    expect(sent.text).not.toContain("—"); // no em dash
+    expect(await stamp(acct)).toBeGreaterThan(0);
+  });
+
+  it("skips everyone the rule does not reach", async () => {
+    const one = await account({ devices: [["pc", 10]] });
+    const inWeek = await account({ age: 2 * DAY, devices: [["pc", 10], ["phone", 60]] });
+    const graced = await account({ syncUntil: now() + 20 * DAY, devices: [["pc", 10], ["phone", 60]] });
+    const stale = await account({ devices: [["pc", 10], ["old", 30 * DAY]] });
+    const paid = await account({ tier: "pro", devices: [["pc", 10], ["phone", 60]] });
+    const noMail = await account({ devices: [["pc", 10], ["phone", 60]] });
+    for (const a of [one, inWeek, graced, stale, paid]) await withEmail(a.acct, `${a.acct}@x.com`);
+    await withEmail(noMail.acct, null);
+    await syncWeekSweep(KEYED);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing with the rule off or no Resend key", async () => {
+    const { acct } = await account({ devices: [["pc", 10], ["phone", 60]] });
+    await withEmail(acct, "off@x.com");
+    await syncWeekSweep({ ...E, RESEND_API_KEY: "re_test" });
+    await syncWeekSweep(ON);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await stamp(acct)).toBeNull();
+  });
+
+  it("tries again next tick when Resend refuses the key", async () => {
+    fetchMock.mockImplementation(async () => new Response("no", { status: 401 }));
+    const { acct } = await account({ devices: [["pc", 10], ["phone", 60]] });
+    await withEmail(acct, "retry@x.com");
+    await syncWeekSweep(KEYED);
+    expect(await stamp(acct)).toBeNull();
   });
 });

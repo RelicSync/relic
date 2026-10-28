@@ -44,7 +44,7 @@ import {
 import { sweepAbandonedMpus, sweepOrphanBlobs, sweepTombstones } from "./sweep";
 import { claimAi, listAi, putAi, releaseAi } from "./ai";
 import { pokeSync, SyncSocket } from "./notify";
-import { isSyncPaused, pickSyncDevice, readSyncPlan, syncPausedResponse } from "./syncplan";
+import { isSyncPaused, pickSyncDevice, readSyncPlan, syncPausedResponse, syncWeekSweep } from "./syncplan";
 
 // Re-exported so Wrangler can bind the Durable Object class (it must be exported
 // from the Worker's main module).
@@ -926,6 +926,11 @@ export default {
       await vaultCapSweep(env);
     } catch (e) {
       console.error(JSON.stringify({ evt: "vault_email_error", err: String(e) }));
+    }
+    try {
+      await syncWeekSweep(env);
+    } catch (e) {
+      console.error(JSON.stringify({ evt: "sync_week_email_error", err: String(e) }));
     }
     await reconcile(env);
     await sweepShares(env);

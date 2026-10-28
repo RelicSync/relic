@@ -11,7 +11,8 @@ const DDL = [
      account_id TEXT PRIMARY KEY, email TEXT,
      tier TEXT NOT NULL DEFAULT 'free', created_at INTEGER NOT NULL DEFAULT (unixepoch()),
      min_valid_iat INTEGER NOT NULL DEFAULT 0,
-     sync_until INTEGER, sync_device TEXT, sync_device_at INTEGER)`,
+     sync_until INTEGER, sync_device TEXT, sync_device_at INTEGER,
+     sync_email_at INTEGER)`,
   `CREATE TABLE IF NOT EXISTS subscriptions (
      account_id TEXT PRIMARY KEY, stripe_customer_id TEXT, stripe_subscription_id TEXT,
      tier TEXT NOT NULL DEFAULT 'free', status TEXT NOT NULL DEFAULT 'none',

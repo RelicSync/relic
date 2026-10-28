@@ -35,7 +35,10 @@ CREATE TABLE IF NOT EXISTS accounts (
     -- user last picked it by hand (NULL = never, or picked automatically).
     sync_until     INTEGER,
     sync_device    TEXT,
-    sync_device_at INTEGER
+    sync_device_at INTEGER,
+    -- When the one end-of-free-week email went out (migration 0015). NULL =
+    -- never.
+    sync_email_at  INTEGER
 );
 
 -- A Supabase identity bound to a pre-existing account (vaults that predate
