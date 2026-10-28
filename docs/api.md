@@ -203,11 +203,14 @@ no `iat` and are grandfathered.
 
 ### Free plan sync rule — `POST /account/sync-device`
 Off unless the server sets `SYNC_PLAN_GATE=on`; self-hosted servers never do.
+It also needs `SYNC_PLAN_SINCE` (unix seconds): only accounts made at or after
+it, with no device registered before it, are under the rule. Older accounts
+keep syncing every device. Unset, the rule reaches nobody.
 A free account syncs every device for its first week (`created_at` + 7 days,
 or a later `accounts.sync_until`). After that one device keeps syncing, and
 every other device gets `403 sync_paused` on the whole data plane (`/relics`,
-`/relic/*`, `/tombstones`, `/waiting`, `/keyparams`, `/ai*`, `/blob*`) and on
-`GET /sync/socket`. Reads are included: with reads open, a second device would
+`/relic/*`, `/tombstones`, `/waiting`, `/ai*`, `/blob*`) and on
+`GET /sync/socket`. `/keyparams` stays open so a paused device can sign back in. Reads are included: with reads open, a second device would
 still receive everything, which is half of sync. Account, device, billing,
 share and pairing routes stay open, so a paused device can still pick itself,
 upgrade, or be removed. The 403 body adds `sync_until`, `sync_device` and the
@@ -219,16 +222,26 @@ falls back to the most recently seen device. If the kept device is removed,
 the next device to sync takes its place. Free accounts with one device are
 never paused.
 
+Only apps that can explain a pause count. A device counts when its app is
+1.0.64 or newer (the request's `X-Relic-App-Version` or the recorded version,
+whichever is new enough) and it was seen in the last 14 days. Devices that
+don't count (old apps, the web vault, ids left by a reinstall) are never
+paused and never hold the syncing slot, and requests with no
+`X-Relic-Device` are never paused. When an old app updates, the rule reaches
+it on its own. A kept device that stops counting is replaced by the next
+device that does.
+
 - `POST /account/sync-device` `{ "device_id" }` picks the device that keeps
   syncing → `200 { "ok": true, "sync_device" }`. `404` for an unknown or
   removed device. A free account may switch once a week (`429
-  sync_switch_cooldown` with `retry_at`). The first pick after an automatic
+  sync_switch_cooldown` with `retry_at`), unless the kept device hasn't been
+  seen for 3 days. The first pick after an automatic
   one is always allowed, and picking the current device does nothing. Works
   with the rule off too, so apps can pick ahead of launch.
 
 While the rule is on and a Resend key is set, the 6-hourly cron emails each
-free account once when its week ends and it still has two or more devices
-seen in the last 14 days: sync now runs on one device, how to pick it, and
+free account once when its week has ended, its kept device is settled, and
+another device seen in the last 14 days is really paused (on 1.0.64 or newer): sync now runs on one device, how to pick it, and
 what Pro costs. `accounts.sync_email_at` records the send.
 
 ### Download link — `/account/send-download-link`

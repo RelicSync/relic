@@ -1131,6 +1131,11 @@ class WorkerRepo implements RelicRepo {
   int get mergeOfferCount => 0;
   @override
   SyncState get sync => _sync;
+
+  /// Changes made on this phone that the server doesn't have yet. Signing out
+  /// deletes them, so the sign-out dialog warns when this isn't 0. A queued
+  /// file with no queued item still counts as one.
+  int get unsentCount => _outbox.isNotEmpty ? _outbox.length : (_blobOutbox.isNotEmpty ? 1 : 0);
   @override
   AccountInfo? get account => _account;
   @override

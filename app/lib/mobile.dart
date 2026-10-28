@@ -1173,7 +1173,7 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
           title: Text('Disconnect?',
               style: RelicTheme.headline(size: 17, color: colors.text)),
           content: Text(
-            'This clears your saved connection. You will need to sign in and enter your vault passphrase (or recovery kit) to reconnect. Your relics stay safe on the server.',
+            _disconnectBody(_repo?.unsentCount ?? 0),
             style: RelicTheme.sans(size: 13.5, color: colors.textSecondary, height: 1.5),
           ),
           actions: [
@@ -1193,6 +1193,19 @@ class _MobileAppState extends State<MobileApp> with WidgetsBindingObserver {
       ),
     );
     if (ok == true) await _disconnect();
+  }
+
+  /// Signing out deletes changes this phone hasn't sent (offline, or sync
+  /// paused on the free plan), so the dialog says so when there are any.
+  static String _disconnectBody(int unsent) {
+    const reconnect = 'You will need to sign in and enter your vault passphrase (or recovery kit) to reconnect.';
+    if (unsent == 0) {
+      return 'This clears your saved connection. $reconnect Your relics stay safe on the server.';
+    }
+    final what = unsent == 1 ? "One change on this phone hasn't" : "$unsent changes on this phone haven't";
+    final it = unsent == 1 ? 'it' : 'them';
+    return '$what synced yet, and disconnecting deletes $it. To keep $it, let this phone sync first: '
+        'get online, or tap Sync this phone instead if sync is paused here. $reconnect';
   }
 
   Future<void> _disconnect() async {
