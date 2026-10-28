@@ -4,9 +4,10 @@
 
 ### Copy it once. Keep it forever.
 
-**An end-to-end-encrypted, cross-platform vault for everything you copy.**
-Every string, screenshot, and file you copy is captured, kept, and searchable
-forever. On your devices, sealed before it leaves them.
+**Relic is an open-source clipboard manager for Windows, macOS, Linux, Android
+and iPhone.** It keeps everything you copy (text, screenshots and files), makes
+it searchable, and encrypts it on your device before it syncs. The sync server
+only ever stores data it cannot read, and you can run that server yourself.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](./LICENSE)
 [![Crypto: Apache-2.0](https://img.shields.io/badge/crypto-Apache--2.0-blue)](./crypto/LICENSE)
@@ -20,29 +21,49 @@ https://github.com/user-attachments/assets/de173215-3d6e-495c-981f-de611491831c
 
 ## What it is
 
+- **Open source.** The apps, the sync server, the on-device AI and the CLI are
+  AGPL-3.0, and the encryption package is Apache-2.0. All of it builds from this
+  repository with no secret of ours. One exception: QR pairing on Android uses
+  Google ML Kit (see [`SECURITY.md`](./SECURITY.md)).
 - **Local-first.** Your whole vault lives on your device in plain SQLite with a
-  full-text index. Search is instant and works offline. A fresh install never
-  touches the network until you connect it to something.
-- **End-to-end encrypted.** Content is sealed on your device with
-  XChaCha20-Poly1305 under a master key wrapped by your passphrase via Argon2id
-  (64 MiB, pinned parameters). A server only ever holds ciphertext.
-- **On-device AI.** Classification, OCR, image tagging, titling, and semantic
-  search run locally in a Rust sidecar. Nothing is sent anywhere to be
-  understood.
-- **Sync is optional.** Turn it on and pick who holds the encrypted pipe:
+  full-text index. Search is instant and works offline. Nothing you copy leaves
+  the device until you turn on sync.
+- **End-to-end encrypted.** Everything is encrypted on your device before it
+  syncs, with a key that comes from your passphrase. A server only ever holds
+  ciphertext. The ciphers and parameters are in [`SECURITY.md`](./SECURITY.md).
+- **On-device AI.** Reading text in screenshots, tagging images, naming items
+  and search by meaning all run on your device. Nothing is sent off the device
+  for this.
+- **Sync is optional.** Turn it on and pick where it syncs:
   [Relic Cloud](https://relic.space) or a server you run yourself. Both run the
   same code in this repo, and neither can read anything.
+
+## How it compares
+
+| | Relic | Ditto | Maccy | CopyQ | Windows clipboard history |
+|---|---|---|---|---|---|
+| Platforms | Windows, macOS, Linux, Android, iPhone | Windows | macOS | Windows, macOS, Linux | Windows |
+| Open source | Yes (AGPL-3.0) | Yes | Yes | Yes | No |
+| Keeps history after a restart | Yes | Yes | Yes | Yes | Only pinned items |
+| Syncs between devices | Yes, end-to-end encrypted | Between Windows PCs on your network, encrypted | No | Through a shared folder you set up | Yes, through your Microsoft account |
+| Phones | Android and iPhone apps | No | No | No | Android, through the SwiftKey keyboard (text only) |
+| Sync without a vendor's server | Yes, run your own server | Yes, direct between PCs | No sync | Yes, your own folder | No |
+
+If you only use one computer and never need sync, Ditto, Maccy and CopyQ are
+good free options. Relic is for people who want the same history on every
+device without trusting a server with it. Longer, sourced comparisons:
+[relic.space/best-clipboard-managers](https://relic.space/best-clipboard-managers).
 
 ## Install
 
 | Platform | How |
 |---|---|
-| **Windows** | `winget install --id Relic.Relic` — or the [signed installer](https://github.com/RelicSync/relic/releases/latest), or Scoop (below) |
+| **Windows** | `winget install --id Relic.Relic`, the [signed installer](https://github.com/RelicSync/relic/releases/latest), or Scoop (below) |
 | **macOS** | `brew install --cask RelicSync/relic/relic`, or the [signed download](https://relic.space/download/macos) (Apple Silicon) |
-| **Linux** | [tarball](https://relic.space/download/linux) or [AppImage](https://relic.space/download/linux/appimage) (x86_64) — built for X11, see [`docs/linux.md`](./docs/linux.md) |
+| **Linux** | [tarball](https://relic.space/download/linux) or [AppImage](https://relic.space/download/linux/appimage) (x86_64), built for X11, see [`docs/linux.md`](./docs/linux.md) |
 | **Android** | [Google Play](https://play.google.com/store/apps/details?id=relic.space.app) |
 | **iPhone** | [App Store](https://apps.apple.com/us/app/relic-clipboard-vault/id6800556025) |
-| **From source** | [`BUILD.md`](./BUILD.md) — every component builds from a clean checkout with no secret of ours |
+| **From source** | [`BUILD.md`](./BUILD.md): every component builds from a clean checkout with no secret of ours |
 
 This repo is also a Scoop bucket:
 
@@ -51,9 +72,8 @@ scoop bucket add relic https://github.com/RelicSync/relic
 scoop install relic
 ```
 
-The app is local-only until you connect it. Sync, when you want it, is free on
-the free tier, $7/mo or $60/yr for Pro, and $12/mo or $96/yr for Max. Running
-your own server is free forever.
+The app is local-only until you connect it. The app and self-hosting are free.
+Relic Cloud sync has free and paid plans: [relic.space/#pricing](https://relic.space/#pricing).
 
 ## Run your own server
 
@@ -96,8 +116,8 @@ decrypt.
 There is a second, independent implementation in the same folder:
 [`crypto/js/`](./crypto/js) is the TypeScript that the hosted web vault ships to
 every browser, published here so what runs in your browser is readable in the
-open. (It is verified byte-compatible against the Dart implementation in the
-web vault's own build, not by a harness in this repository — see its README.)
+open. (It is checked byte for byte against the Dart code in the web vault's build.
+This repository has no test for it. See its README.)
 The contract they both implement is
 [`docs/crypto.md`](./docs/crypto.md) and
 [`docs/wire-format.md`](./docs/wire-format.md).
@@ -126,7 +146,7 @@ flowchart LR
   app -- "sealed bytes only" --> cloud
   app -- "sealed bytes only" --> own
 
-  cloud -.- note["Server sees: ciphertext,<br/>ids, timestamps, sizes.<br/>Never content."]
+  cloud -.- note["Server sees: ciphertext,<br/>ids, timestamps, sizes,<br/>kept flags, device names.<br/>Never content."]
   own -.- note
 ```
 
@@ -144,9 +164,12 @@ worker/         Cloudflare Worker sync server (this is what Relic Cloud runs)
 selfhost/       the same worker on plain Node + SQLite + local disk
 relic-core/     Rust core types, deterministic classification, FTS reference
 relic-cli/      agent-facing CLI over the local vault, plus its embedded skill
+relic-voice/    on-device dictation (Windows Voice)
 crypto/         Apache-2.0 client crypto: Dart package + the JS implementation
 docs/           SPEC.md and the contract docs (crypto, wire format, API)
 Cargo.toml      Rust workspace (core, sift, cli)
+bucket/         Scoop manifest
+scripts/        build and release helpers
 codemagic.yaml  macOS/iOS cloud build lane (no secrets in-tree)
 ```
 
@@ -162,7 +185,39 @@ things you copied weeks ago.
 ## Security
 
 Disclosure process, the threat model, and what the encryption does and does not
-protect: [`SECURITY.md`](./SECURITY.md).
+protect: [`SECURITY.md`](./SECURITY.md). Relic has not had an independent
+security audit yet. The code, the pinned parameters and the test vectors are all
+here for anyone to check.
+
+## FAQ
+
+**Is Relic safe?** Relic encrypts every item on your device before it syncs, so
+the server holds only ciphertext. It cannot protect you from malware already
+running on your device, and a weak passphrase weakens it. The full threat model
+is in [`SECURITY.md`](./SECURITY.md), and a plain-language version is at
+[relic.space/is-relic-safe](https://relic.space/is-relic-safe).
+
+**Can Relic read what I copy?** No. The server sees item ids, timestamps, sizes,
+which items you marked as kept, each device's name, platform and app version,
+your plan and (on Relic Cloud) your account email. On a computer the device name
+is the computer's name unless you rename it. The server never sees what you
+copied. See [`SECURITY.md`](./SECURITY.md) and
+[`docs/wire-format.md`](./docs/wire-format.md).
+
+**Does the app send telemetry?** No analytics or crash-reporting SDKs are linked
+into the client. The app checks for updates and downloads its AI models on
+first run; neither request carries anything you copied.
+
+**Is Relic free?** The app is free, and self-hosting the sync server is free
+forever. Relic Cloud sync has free and paid plans.
+
+**Does it work on Wayland?** Relic is built for X11. On Wayland the global
+hotkey does not work, because the compositor does not give apps one. Details in
+[`docs/linux.md`](./docs/linux.md).
+
+**Does it run on Intel Macs?** Not yet. The Mac build is Apple Silicon only.
+
+**Can I import my Ditto or Maccy history?** Not yet. Relic has no importer.
 
 ## Contributing
 
@@ -176,8 +231,8 @@ from the code: [`TRADEMARK.md`](./TRADEMARK.md).
 the core. You are free to run, study, modify, and self-host all of it. The
 AGPL's network copyleft means anyone who offers a modified version of this
 server as a service has to share their changes under the same license. It is the
-same license Bitwarden and Standard Notes use, for the same reason: it keeps the
-project genuinely open while keeping the hosted business sustainable.
+same license Bitwarden and Standard Notes use, for the same reason. It keeps the
+code open and lets the hosted service pay for itself.
 
 The `crypto/` package is [Apache-2.0](./crypto/LICENSE) instead, deliberately.
 Verification code should be as easy to read, reuse, and reimplement as possible,
