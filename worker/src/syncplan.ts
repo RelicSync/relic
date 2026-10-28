@@ -274,7 +274,7 @@ export async function pickSyncDevice(req: Request, env: Env, auth: Auth): Promis
   // reinstalled phone replacing the kept one). Otherwise a fresh phone plus the
   // weekly limit could leave nothing syncing for days.
   const keptQuiet = row.kept_seen === null || row.kept_seen < now - SYNC_KEPT_QUIET ||
-    (row.picked_made !== null && row.kept_seen <= row.picked_made);
+    (row.picked_made !== null && row.kept_seen < row.picked_made);
   if (
     auth.tier === "free" && !keptQuiet && row.sync_device_at !== null &&
     now - row.sync_device_at < SYNC_SWITCH_COOLDOWN
