@@ -132,6 +132,19 @@ class RelicDb {
     db.execute(
       'CREATE INDEX IF NOT EXISTS idx_relics_photo ON relics(kind, have_blob) WHERE blob_key IS NOT NULL;',
     );
+    // Covers [localAggregate] and [liveCount], which the popup reads on every
+    // build. Without it both walk the whole table, content and all: 160 ms
+    // cold at 6,800 items.
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_relics_tally ON relics(byte_size, promoted, held_by);',
+    );
+    // The enrich worker asks [countNeedingEnrich] and [needingEnrich] every
+    // six seconds for as long as the app runs, nearly always to hear "none".
+    // This makes that a lookup instead of two whole-table scans.
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_relics_enrich ON relics(enrich_level, created_at DESC) '
+      'WHERE held_by IS NULL;',
+    );
     // Standalone FTS index (we keep it in sync manually on every write). The
     // Porter stemmer matches word-forms (handwritten ~ handwriting), which is
     // especially useful for the machine `tags` column. Columns: `named` is
@@ -2507,6 +2520,32 @@ class RelicDb {
     return rs.first['n'] as int;
   }
 
+  /// [countTag] for many tags in ONE pass over the table. The popup's
+  /// collection chips ask for sixteen at once, and sixteen separate scans cost
+  /// ~80 ms at 6,800 items on every launch and every delete. Tags with no
+  /// items are left out.
+  Map<String, int> countTags(Iterable<String> tags, {bool vaultOnly = false}) {
+    final list = tags.toList();
+    if (list.isEmpty) return const {};
+    final scope =
+        vaultOnly ? 'promoted = 1 AND held_by IS NULL' : 'held_by IS NULL';
+    final args = <Object>[];
+    final cols = <String>[];
+    for (var i = 0; i < list.length; i++) {
+      final like = _tagLike(list[i]);
+      args..add(like)..add(like);
+      cols.add("COALESCE(SUM(lower(tags) LIKE ? ESCAPE '\\' "
+          "OR lower(user_tags) LIKE ? ESCAPE '\\'), 0) AS c$i");
+    }
+    final row = _db
+        .select('SELECT ${cols.join(', ')} FROM relics WHERE $scope', args)
+        .first;
+    return {
+      for (var i = 0; i < list.length; i++)
+        if ((row['c$i'] as int) > 0) list[i]: row['c$i'] as int,
+    };
+  }
+
   /// Uids of relics carrying [tag] (exact JSON-array match, case-insensitive),
   /// most-recent first, capped at [limit]. Used by query-side tag expansion to
   /// feed the RRF fusion.
@@ -3855,6 +3894,19 @@ class RelicDb {
       )
       .map(_toRelic)
       .toList();
+
+  /// `allRows().length` without loading a row.
+  int liveCount() =>
+      _db.select('SELECT COUNT(*) AS n FROM relics WHERE held_by IS NULL')
+          .first['n'] as int;
+
+  /// Whether any row [allRows] would return was saved by a device other than
+  /// [label]. A null device counts as another device, as it does in Dart.
+  bool anyFromOtherDevice(String label) => _db.select(
+        'SELECT 1 FROM relics WHERE held_by IS NULL AND device IS NOT ? '
+        'LIMIT 1',
+        [label],
+      ).isNotEmpty;
 
   /// (uid, blobKey) for photos whose bytes aren't local yet — for eager
   /// thumbnail prefetch. Bounded by [limit].

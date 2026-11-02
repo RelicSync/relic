@@ -559,6 +559,11 @@ class WorkerRepo implements RelicRepo {
 
   @override
   List<Relic> get all => List.unmodifiable(_items);
+  @override
+  int get itemCount => _items.length;
+  @override
+  bool anyFromOtherDevice(String label) =>
+      _items.any((r) => r.device != label);
 
   /// Whether a text item with exactly this body is already here, which is
   /// what [captureText] will bump rather than store again.
@@ -3115,13 +3120,12 @@ class WorkerRepo implements RelicRepo {
   @override
   Map<String, int> tagCounts(Iterable<String> tags, {bool vaultOnly = false}) {
     final db = _index;
+    if (db != null) return db.countTags(tags, vaultOnly: vaultOnly);
     final counts = <String, int>{};
     for (final t in tags) {
-      final n = db != null
-          ? db.countTag(t, vaultOnly: vaultOnly)
-          : _items
-              .where((r) => (!vaultOnly || r.promoted) && r.allTags.contains(t))
-              .length;
+      final n = _items
+          .where((r) => (!vaultOnly || r.promoted) && r.allTags.contains(t))
+          .length;
       if (n > 0) counts[t] = n;
     }
     return counts;

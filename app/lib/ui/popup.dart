@@ -709,7 +709,7 @@ class _PopupViewState extends State<PopupView> {
     final repo = widget.repo;
     if (repo.keepHintShown || !repo.coachMarksSeen) return false;
     if ((repo.account?.vaultCount ?? 1) != 0) return false;
-    if (repo.all.length < 20) return false;
+    if (repo.itemCount < 20) return false;
     repo.markKeepHintShown();
     _toasts.show(ToastMsg(
       'Nothing kept yet. Select a row and click the gem to keep it forever.',
@@ -736,7 +736,7 @@ class _PopupViewState extends State<PopupView> {
       coachSeen: repo.coachMarksSeen,
       connected: repo.account != null,
       deviceCount: widget.deviceCount?.value,
-      itemCount: repo.all.length,
+      itemCount: repo.itemCount,
       shown: repo.addPhoneNudgeShown,
     )) {
       return;
@@ -765,7 +765,7 @@ class _PopupViewState extends State<PopupView> {
   bool get _allSavedHere {
     final label = widget.thisDeviceLabel;
     if (label == null) return false;
-    return widget.repo.all.every((r) => r.device == label);
+    return !widget.repo.anyFromOtherDevice(label);
   }
 
   void _dismissSecondVaultNotice() {
@@ -785,7 +785,7 @@ class _PopupViewState extends State<PopupView> {
     return showSyncNudge(
       connected: widget.repo.account != null,
       deviceCount: count,
-      itemCount: widget.repo.all.length,
+      itemCount: widget.repo.itemCount,
       snoozedUntil: widget.repo.syncNudgeSnoozedUntil,
       now: DateTime.now().millisecondsSinceEpoch ~/ 1000,
       desktop: !mobile,
@@ -3422,7 +3422,7 @@ class _PopupViewState extends State<PopupView> {
                       connected: widget.repo.account != null,
                       deviceCount: count,
                       anyFromOtherDevice: !_allSavedHere,
-                      itemCount: widget.repo.all.length,
+                      itemCount: widget.repo.itemCount,
                       dismissed: widget.repo.secondVaultNoticeDismissed,
                     )
                         ? _secondVaultNotice(c)

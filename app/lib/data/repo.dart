@@ -282,6 +282,15 @@ class WaitingCopy {
 abstract class RelicRepo {
   Future<void> load();
   List<Relic> get all;
+
+  /// `all.length`, without building the list. Read on every popup build, so
+  /// it must stay cheap: on the desktop [all] is a whole-table load, and at
+  /// 6,800 items that froze the window for half a second per frame.
+  int get itemCount;
+
+  /// Whether any item was saved by a device other than [label]. Same reason
+  /// as [itemCount]: never answer it by walking [all].
+  bool anyFromOtherDevice(String label);
   SyncState get sync;
   AccountInfo? get account;
 
@@ -755,6 +764,11 @@ class MemoryRepo implements RelicRepo {
       throw UnsupportedError('sharing not available on this repo');
   @override
   List<Relic> get all => List.unmodifiable(_items);
+  @override
+  int get itemCount => _items.length;
+  @override
+  bool anyFromOtherDevice(String label) =>
+      _items.any((r) => r.device != label);
   @override
   List<Relic> get visible => _qw.visible;
   @override
