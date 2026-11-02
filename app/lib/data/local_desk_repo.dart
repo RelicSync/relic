@@ -2118,6 +2118,11 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   @override
   List<Relic> get all => _db?.allRows() ?? const [];
   @override
+  int get itemCount => _db?.liveCount() ?? 0;
+  @override
+  bool anyFromOtherDevice(String label) =>
+      _db?.anyFromOtherDevice(label) ?? false;
+  @override
   List<Relic> get visible => List.unmodifiable(_window);
   @override
   int get matchCount => _matchCount;
@@ -2803,7 +2808,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   // --- demo / first-run ---
 
   /// True when there are no relics yet (used to gate the first-run welcome).
-  bool get isEmpty => _db?.allRows().isEmpty ?? true;
+  bool get isEmpty => (_db?.liveCount() ?? 0) == 0;
 
   /// uids of demo samples, so we can drop them if the user later signs in (they
   /// must never sync into a real account). In-memory: covers the demo -> connect
@@ -3717,14 +3722,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
   /// are actually present (count > 0) are returned. Drives the collections strip.
   @override
   Map<String, int> tagCounts(Iterable<String> tags, {bool vaultOnly = false}) {
-    final db = _db;
-    if (db == null) return const {};
-    final out = <String, int>{};
-    for (final t in tags) {
-      final n = db.countTag(t, vaultOnly: vaultOnly);
-      if (n > 0) out[t] = n;
-    }
-    return out;
+    return _db?.countTags(tags, vaultOnly: vaultOnly) ?? const {};
   }
 
   @override

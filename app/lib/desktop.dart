@@ -31,6 +31,7 @@ import 'platform/store_safe.dart';
 import 'platform/tray_support.dart';
 import 'platform/src/linux/clipboard_watch_linux.dart';
 import 'platform/src/linux/hotkeys_linux.dart' as lin_hk;
+import 'platform/src/windows/hotkeys_win.dart';
 import 'data/api.dart';
 import 'data/desktop_links.dart';
 import 'data/device_directory.dart';
@@ -802,6 +803,18 @@ class _RealAppState extends State<RealApp>
           failed.add(key);
           debugPrint('hotkey register failed for ${b.display}: $r');
         }
+        return;
+      }
+      // The Windows plugin reports success even when another app owns the
+      // chord, so ask Windows first (platform/src/windows/hotkeys_win.dart).
+      if (winChordTaken(
+          ctrl: b.ctrl,
+          alt: b.alt,
+          shift: b.shift,
+          meta: b.win,
+          usbUsage: b.usbUsage)) {
+        failed.add(key);
+        debugPrint('hotkey ${b.display} is taken by another app');
         return;
       }
       try {
