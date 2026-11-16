@@ -1266,7 +1266,9 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
 
   // --- on-device ML (sift) ---
   SiftSidecar? _sift;
-  bool _mlEnrich = true;
+  // Opt-in by default so a fresh install does not download ~750 MB+ of ML
+  // models in the background without the user turning it on.
+  bool _mlEnrich = false;
   // Generated titles + topic tags, for photos AND text. ON by default since
   // the t3 titler (2026-10): a title written from where a copy came from is
   // the strongest search signal we have (title-only search finds the item at
@@ -1503,6 +1505,8 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
     _savePrefs();
     notifyListeners();
     if (on) {
+      _downloadFails = 0;
+      _downloadRetryAt = DateTime.fromMillisecondsSinceEpoch(0);
       _startEnrichWorker();
       _enrichCycle(); // kick immediately
     } else {
@@ -1778,7 +1782,7 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
         // ('mini_picker' was retired: which picker opens is decided by what
         // summoned it, not by a preference. Old files keep the key; it is
         // ignored and drops out on the next save.)
-        _mlEnrich = j['ml_enrich'] as bool? ?? true;
+        _mlEnrich = j['ml_enrich'] as bool? ?? false;
         _describeItems = j['rich_captions'] as bool? ?? true;
         _describeEverything = j['describe_everything'] as bool? ?? true;
         _describeAllOn = j['describe_all_on'] as bool? ?? false;
@@ -6164,6 +6168,12 @@ class LocalDeskRepo extends ChangeNotifier implements RelicRepo, BillingRepo {
                   ? DateTime.fromMillisecondsSinceEpoch(0)
                   : DateTime.now().add(Duration(
                       minutes: (1 << (_downloadFails - 1).clamp(0, 6)).clamp(1, 60)));
+              if (ok) {
+                unawaited(
+                  sift.warmUp().then((_) => _noteVectorModel(sift.embedModel)),
+                );
+                if (_tagVec.isEmpty) unawaited(_loadTagVectors());
+              }
               notifyListeners();
             }),
           );

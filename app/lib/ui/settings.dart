@@ -3379,7 +3379,10 @@ class _SettingsViewState extends State<SettingsView>
         'Engine not found. Bundle ${SiftSidecar.binaryName}',
         c.textFaintest,
       ),
-      SiftStatus.off => ('Off', c.textMuted),
+      SiftStatus.off => (
+        'Off · turn on to download local ML models (~750 MB, one-time)',
+        c.textMuted,
+      ),
       SiftStatus.downloading => (
         'Downloading models (~750 MB, one-time)…',
         c.accentMuted,
